@@ -430,9 +430,12 @@ function xrPumpTick() {
   scheduleXrPump();
 }
 
+const _domeEye = new THREE.Vector3();
 export function updateBakedDome(now = performance.now()) {
   if (!dome) return;
-  dome.position.set(camera.position.x, 0, camera.position.z);
+  // the eye's WORLD position — in XR camera.position is rig-local, which left the dome centred near the world origin
+  camera.getWorldPosition(_domeEye);
+  dome.position.set(_domeEye.x, 0, _domeEye.z);
 
   const presenting = Boolean(renderer.xr?.isPresenting);
   if (presenting) scheduleXrPump();        // renders happen between XR frames

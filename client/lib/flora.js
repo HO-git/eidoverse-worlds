@@ -339,6 +339,7 @@ const VLOD_ON = CONFIG.params.get('grassvlod') === 'on';
 const BLADE_LOD_OUT = VLOD_ON ? 45 : Infinity;   // m — tile swaps to coarse past this
 const BLADE_LOD_IN = VLOD_ON ? 38 : Infinity;    // m — and back only inside this
 const _tv = new THREE.Vector3();
+const _eye = new THREE.Vector3();   // the camera in WORLD space (see applyTiles)
 
 /** The uniform-vs-attribute fork for the identity instanceMatrix, read off
  *  the live backend (WebGPU: device.limits.maxUniformBufferBindingSize —
@@ -507,8 +508,12 @@ function tileField(f, bladeLod = false) {
   f.tiles = tiles;
   let eff = 1;
   const applyTiles = () => {
+    // WORLD position: in XR the camera is a child of the rig (xr.js rig.add(camera)) and three decomposes the head pose
+    // into the camera's LOCAL transform, so camera.position is rig-relative — every tiled meadow budgeted from the
+    // wrong point in VR (2026-09-24 audit). On the desktop the camera has no parent and this is the same number.
+    camera.getWorldPosition(_eye);
     for (const t of tiles) {
-      const d = _tv.copy(t.boundingSphere.center).distanceTo(camera.position);
+      const d = _tv.copy(t.boundingSphere.center).distanceTo(_eye);
       // §22f: the CPU count is a BUDGET evaluated at the tile's NEAREST
       // point (keep(dNearest) ≥ keep(d) for every instance in it), and the
       // shader dither shapes the VISIBLE density per instance at the exact

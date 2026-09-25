@@ -121,8 +121,8 @@ stub.camera.position.set(0, 0, 0);
   spawnAt('light', 70, false);   // far, but the sequencer has no variant — its "already light" refusal answers the original
   await settle();
   check('three placements realized', res().real === 3, JSON.stringify(res()));
-  check('near (5m) asked FULL — a plain ktx2 fetch', loadsOf('near')[0]?.tier === 'full' && loadsOf('near')[0]?.url === `${lib('near')}?ktx2=3`, loadsOf('near')[0]?.url);
-  check('far (70m) asked LOD — the recipe rides the ktx2 negotiation on the wire', loadsOf('far')[0]?.tier === 'lod' && loadsOf('far')[0]?.url === `${lib('far')}?ktx2=3&lod=${enc}`, loadsOf('far')[0]?.url);
+  check('near (5m) asked FULL — a plain ktx2 fetch', loadsOf('near')[0]?.tier === 'full' && loadsOf('near')[0]?.url === `${lib('near')}?ktx2=4`, loadsOf('near')[0]?.url);
+  check('far (70m) asked LOD — the recipe rides the ktx2 negotiation on the wire', loadsOf('far')[0]?.tier === 'lod' && loadsOf('far')[0]?.url === `${lib('far')}?ktx2=4&lod=${enc}`, loadsOf('far')[0]?.url);
   check('far wears the served lod: asked lod, served lod', obj('far')?.userData.tierAsked === 'lod' && obj('far')?.userData.tier === 'lod');
   check('light asked lod, was answered the original, wears FULL honestly', obj('light')?.userData.tierAsked === 'lod' && obj('light')?.userData.tier === 'full');
   check('EW.residency(): lod 1 (served) / lodAsked 2 (asked) — the gap is the sequencer\'s honest fall-through', res().lod === 1 && res().lodAsked === 2, JSON.stringify(res()));
@@ -186,7 +186,7 @@ stub.camera.position.set(0, 0, 0);
   spawnAt('norecipe', 70);
   await settle();
   const n = loadsOf('norecipe')[0];
-  check('no recipe published: ktx2 negotiates, lod does not — a plain ktx2 fetch, asked full', n?.tier === 'full' && n?.url === `${lib('norecipe')}?ktx2=3`, n?.url);
+  check('no recipe published: ktx2 negotiates, lod does not — a plain ktx2 fetch, asked full', n?.tier === 'full' && n?.url === `${lib('norecipe')}?ktx2=4`, n?.url);
   stub.server.recipe = REC;
 }
 

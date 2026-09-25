@@ -37,7 +37,7 @@
 //
 // DOM-free and side-effect-free: unit-tested in tools/store-variants-test.ts.
 
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 
 /** The variant suffix. `<hash>.glb` + this = the KTX2 shadow's file name. */
@@ -98,10 +98,17 @@ export const hasStamp = (content: string, recipe: string) =>
 // exact tool versions. Named nodes, materials, and bounds are asserted
 // unchanged after the reduce — a failed assert is a typed verdict too, not
 // a half-valid object.
-export const LOD_GEN = 1;           // the REDUCER's generation: bump when weld/simplify semantics or the tool change
+// the REDUCER's generation: bump when weld/simplify semantics, the gates, or the tool change. 2 = the Permissive retry
+// (optimize.ts reduce: one Permissive pass when UV seams lock the regular one), the GPU gate (a LOD is refused if its
+// textures cost MORE GPU memory than the original's — it replaced the byte gate), and the texel cap honoured on
+// ktx-create hosts (gen-1 LODs built there were 2048² under a texel1024 name).
+export const LOD_GEN = 2;
 export const LOD_RATIO = 0.25;      // meshopt-simplify target ratio
 export const LOD_ERROR = 0.01;      // meshopt-simplify error bound
-export const LOD_MIN_VERTS = 12_000;   // under this, there is nothing worth reducing
+// under this, there is nothing worth reducing. Was 12,000; owner, 09-24: "we can totally build LODs even for simple
+// objects … I WANT to have worlds with thousands of objects" — a 7k-vert desk × 1,000 is 7M verts. Below ~1k a LOD
+// saves less than its own fetch; the "ineffective" gate still refuses what cannot reduce.
+export const LOD_MIN_VERTS = 1_000;
 
 /** The recipe string DERIVES from every parameter a variant or a verdict
  *  depends on — the reducer generation, ratio, error, the texel budget, and
@@ -124,7 +131,7 @@ export function lodRecipeFor({ gen = LOD_GEN, ratio = LOD_RATIO, error = LOD_ERR
   if (!Number.isInteger(texel) || !Number.isInteger(minVerts) || !Number.isInteger(gen)) throw new Error("lod gen/texel/minVerts must be integers");
   return `lod${gen}-r${frac(ratio, "ratio")}e${frac(error, "error")}-texel${texel}-min${minVerts}`;
 }
-export const LOD_RECIPE = lodRecipeFor();   // "lod1-r25e01-texel1024-min12000"
+export const LOD_RECIPE = lodRecipeFor();   // "lod2-r25e01-texel1024-min1000"
 
 // ---- standing verdicts -------------------------------------------------------
 // A flagged fetch that falls through is provisional — the doctrine that keeps
@@ -133,19 +140,27 @@ export const LOD_RECIPE = lodRecipeFor();   // "lod1-r25e01-texel1024-min12000"
 // the floor, for as long as the content and the recipe are what they are —
 // and BOTH are in the URL (a store hash, the recipe). Such a verdict may be
 // final: the original is THE answer for this tier, cacheable like the plain
-// ktx2 answer. Two classes are not, because they depend on something the
+// ktx2 answer. Three classes are not, because they depend on something the
 // URL does not carry: "reduction ineffective" and a preservation failure
-// depend on the reducer (a better meshoptimizer may succeed tomorrow), so
+// depend on the reducer (a better meshoptimizer may succeed tomorrow), and
+// the GPU gate ("not lighter on the GPU") on the encoder and the host, so
 // they stay provisional until LOD_GEN is bumped for that tool. Anything
 // unclassified stays provisional — the safe default.
-export type LodVerdictKind = "structural" | "light" | "ineffective" | "preservation";
+// "gpu" is the GPU gate's refusal (optimize.ts: the LOD's textures would cost MORE GPU memory than the original's):
+// it depends on the encoder and on whether the texel cap could be honoured on this host (sharp presence on a
+// ktx-create box) — neither is in the URL — so it is non-final, like "ineffective".
+export type LodVerdictKind = "structural" | "light" | "ineffective" | "preservation" | "gpu";
 /** Which class of typed refusal a lod `.failed` marker records (the
- *  reducer's phrases, optimize.ts) — or null for anything else. */
+ *  reducer's phrases, optimize.ts) — or null for anything else. The ONE
+ *  reader of that grammar: the route (serve time) and classifyVariant (the
+ *  catalog's card) both call it, so the wire and the card cannot disagree. */
 export function lodVerdictKind(content: string): LodVerdictKind | null {
   if (/\bunsupported: (skinned\/avatar asset|morph targets|animated object)/i.test(content)) return "structural";
   if (/\balready light \(\d+ verts < \d+\)/i.test(content)) return "light";
-  if (/\breduction ineffective \(\d+ -> \d+ verts\)/i.test(content)) return "ineffective";
+  // ", permissive too": the reducer tried the Permissive retry as well (optimize.ts reduce)
+  if (/\breduction ineffective \(\d+ -> \d+ verts(, permissive too)?\)/i.test(content)) return "ineffective";
   if (/\bpreservation failed:/i.test(content)) return "preservation";
+  if (/\bnot lighter on the GPU \(textures /i.test(content)) return "gpu";
   return null;
 }
 /** Does this marker make the original the FINAL answer under `recipe`? A
@@ -234,4 +249,118 @@ export function storeShadowsMissing(
     ktx2: !exists(k) && !(exists(kFailed) && verdictStands(read(kFailed))),
     lod: !exists(l) && !(exists(lFailed) && verdictStands(read(lFailed), LOD_RECIPE)),
   };
+}
+
+// ---- status, for people (owner, 09-24: "nothing could silently fail getting LODs") ----------------------------------
+// storeShadowsMissing answers the SWEEP's question (is there work left?). This answers a PERSON's: what does each
+// optimization look like for this asset, and why. Every `.failed` marker already carries a typed verdict — the only
+// thing missing was a way to read it. States:
+//   built        the variant exists (serving)
+//   not-needed   the pass declined for a correct reason: too light to reduce, nothing to convert
+//   unsupported  refused by contract (bodies, animated, morphs — LOD v1, PR #142/#156)
+//   refused      the pass ran and its result failed a gate (not smaller, ineffective, preservation, heavier on the
+//                GPU) — reason attached
+//   stale        a size verdict from an older recipe, or a variant/verdict older than the (library) model it judges:
+//                the sweep will re-measure it
+//   deferred     this host could not afford the pass (upload.ts `.deferred`)
+//   pending      nothing on disk yet: the sweep has not reached it
+export type VariantState = "built" | "not-needed" | "unsupported" | "refused" | "stale" | "deferred" | "pending";
+export type VariantStatus = { state: VariantState; reason: string | null };
+
+/** Classify one variant from what is on disk beside it. `recipe` is the one its size verdicts are stamped with. */
+// the CLI's line: "[optimize] <pass>: <verdict> (<ms>ms) — <tail>" — keep the verdict, drop the log dressing
+// the verdict is the LAST "[optimize]" line (the pump logs the same one): a warning printed before it (the no-sharp resize
+// note, a gltf-transform logger line) must not become the card's reason
+const verdictLine = (raw: string): string => { const ls = raw.split("\n"); return [...ls].reverse().find((l) => /^\[optimize\]/.test(l)) ?? ls[0]; };
+const failedReason = (raw: string): string => verdictLine(raw).replace(/^\[optimize\]\s*(?:lod:\s*)?/, "").replace(/\s*\(\d+ms\).*$/, "")
+  .replace(/,\s*\d+ms\)/, ")").replace(/\s+—\s+.*$/, "").replace(/\s*recipe=\S+/, "").trim() || "refused (no reason recorded)";
+
+/** How classifyVariant reads one pass. `lod`: the marker is read through lodVerdictKind — the route's own reader of the
+ *  reducer's grammar, so the card and the x-eidoverse-lod header name the same verdict. `source`: the MUTABLE file the
+ *  pass judges (a library model); a variant or a marker NOT newer than it is `stale`, the rule the sweep and the pump
+ *  use (upload.ts: strictly newer) and the route serves by (an older one answers provisional). Store originals are
+ *  content-addressed, so they pass no source. `mtime` is injectable for tests. */
+export type ClassifyOpts = { lod?: boolean; source?: string | null; mtime?: (p: string) => number | null };
+const diskMtime = (p: string): number | null => { try { return statSync(p).mtimeMs; } catch { return null; } };
+
+export function classifyVariant(path: string, exists: (p: string) => boolean, read: (p: string) => string, recipe?: string,
+  opts: ClassifyOpts = {}): VariantStatus {
+  const mtime = opts.mtime ?? diskMtime;
+  const srcAt = opts.source ? mtime(opts.source) : null;
+  // an unreadable mtime on either side is not proof of freshness — but with no source there is nothing to be older than
+  const fresh = (p: string) => srcAt === null || (mtime(p) ?? -Infinity) > srcAt;
+  const failed = `${path}.failed`;
+  const failedNow = exists(failed);
+  if (exists(path)) {
+    if (!fresh(path)) return { state: "stale", reason: "the model changed after this variant was built; the sweep rebuilds it" };
+    // A CURRENT-recipe verdict beside a variant can only be a forced rebuild that was refused (the pump never runs over
+    // one that stands, and ↻ clears it first): the old bytes still serve, and "built" would hide the refusal.
+    // An older recipe's verdict beside a variant is just history — a later build succeeded.
+    if (failedNow && recipe !== undefined) {
+      const raw = read(failed);
+      if (verdictStands(raw, recipe) && fresh(failed)) return { state: "refused", reason: `rebuild refused (${failedReason(raw)}); the earlier variant still serves` };
+    }
+    return { state: "built", reason: null };
+  }
+  if (failedNow) {
+    const raw = read(failed);
+    const reason = failedReason(raw);
+    if (recipe !== undefined && !verdictStands(raw, recipe)) return { state: "stale", reason };
+    if (!fresh(failed)) return { state: "stale", reason: `the model changed after this verdict: ${reason}` };
+    if (opts.lod) {
+      switch (lodVerdictKind(raw)) {
+        case "structural": return { state: "unsupported", reason: reason.replace(/^unsupported:\s*/i, "") };
+        case "light": return { state: "not-needed", reason };
+        default: return { state: "refused", reason };   // ineffective / preservation / gpu, and anything unclassified
+      }
+    }
+    if (/no convertible|nothing to/i.test(raw)) return { state: "not-needed", reason };
+    if (/unsupported:/i.test(raw)) return { state: "unsupported", reason: reason.replace(/^unsupported:\s*/i, "") };
+    return { state: "refused", reason };
+  }
+  if (exists(`${path}.deferred`)) return { state: "deferred", reason: read(`${path}.deferred`).trim().slice(0, 200) || null };
+  return { state: "pending", reason: null };
+}
+
+/** Every optimization's status for one store/library original. `source` is the mutable file the passes judge (the
+ *  LIBRARY model — the one the sweep builds from and compares against); omit it for a content-addressed store upload. */
+export function variantStatus(
+  original: string,
+  minDir: string,
+  { exists = existsSync, read = (p: string) => { try { return readFileSync(p, "utf8"); } catch { return ""; } },
+    simplifyOf = lodSimplifyOf, source = null, mtime }: {
+    exists?: (p: string) => boolean; read?: (p: string) => string; simplifyOf?: (p: string) => string | null;
+    source?: string | null; mtime?: (p: string) => number | null;
+  } = {},
+): { min: VariantStatus; ktx2: VariantStatus; lod: VariantStatus } {
+  const lodPath = lodVariantPath(original);
+  let lod = classifyVariant(lodPath, exists, read, LOD_RECIPE, { lod: true, source, mtime });
+  // a Permissive LOD collapsed across UV/normal seams (optimize.ts): it serves, but it may read darker or faceted —
+  // say so in the hover rather than let it pass as an ordinary build
+  if (lod.state === "built" && simplifyOf(lodPath) === "permissive") lod = { state: "built", reason: "permissive: collapsed across UV seams" };
+  return {
+    min: classifyVariant(join(minDir, basename(original)), exists, read),
+    ktx2: classifyVariant(ktx2VariantPath(original), exists, read, KTX2_RECIPE, { source, mtime }),
+    lod,
+  };
+}
+
+const simplifyCache = new Map<string, { key: string; v: string | null }>();
+/** asset.extras.simplify of a LOD variant, read from the GLB's JSON chunk only (the catalog asks per card); cached on
+ *  (size, mtime). null = absent or unreadable. */
+export function lodSimplifyOf(path: string): string | null {
+  try {
+    const st = statSync(path), key = `${st.size}:${st.mtimeMs}`, hit = simplifyCache.get(path);
+    if (hit?.key === key) return hit.v;
+    const fd = openSync(path, "r");
+    try {
+      const head = Buffer.alloc(20); readSync(fd, head, 0, 20, 0);
+      let v: string | null = null;
+      if (head.readUInt32LE(0) === 0x46546c67 && head.readUInt32LE(16) === 0x4e4f534a) {   // 'glTF', chunk 0 = 'JSON'
+        const len = head.readUInt32LE(12), json = Buffer.alloc(len); readSync(fd, json, 0, len, 20);
+        const x = JSON.parse(json.toString("utf8"))?.asset?.extras?.simplify; v = typeof x === "string" ? x : null;
+      }
+      simplifyCache.set(path, { key, v }); return v;
+    } finally { closeSync(fd); }
+  } catch { return null; }
 }

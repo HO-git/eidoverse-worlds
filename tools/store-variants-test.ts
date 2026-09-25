@@ -53,7 +53,7 @@ import { PNG } from "pngjs";
 import { isStoreOriginal, isKtx2Variant, isServingArtifact, ktx2VariantPath, storeShadowsMissing, KTX2_SUFFIX,
   capTexels, verdictStands, recipeStamp, KTX2_TEXEL_CAP,
   LOD_RECIPE, LOD_GEN, LOD_MIN_VERTS, lodRecipeFor, lodVariantPath, isLodVariant, lodVerdictKind, lodVerdictFinal, hasStamp } from "../server/store-variants.ts";
-import { findKtx2Encoder, isKtx2Container } from "../server/optimize.ts";
+import { findKtx2Encoder, isKtx2Container, lodGpuRefusal } from "../server/optimize.ts";
 import { KTX2_KEY, KTX2_QUERY, wantsKtx2, withKtx2, keyFromVersion, negotiate } from "../shared/ktx2.js";
 
 let failures = 0;
@@ -135,7 +135,7 @@ console.log("\nthe store's KTX2 shadow (store-variants.ts, shared/ktx2.js):\n");
   check("LOD_RECIPE derives from (gen, ratio, error, texel, floor)",
     LOD_RECIPE === lodRecipeFor() && LOD_RECIPE === `lod${LOD_GEN}-r25e01-texel${KTX2_TEXEL_CAP}-min${LOD_MIN_VERTS}`, LOD_RECIPE);
   check("a lower floor is a NEW recipe — a new URL and a new filename, nothing pinned under the old",
-    lodRecipeFor({ minVerts: 6000 }) !== LOD_RECIPE && lodVariantPath("store/x.glb", lodRecipeFor({ minVerts: 6000 })) !== lodVariantPath("store/x.glb"));
+    lodRecipeFor({ minVerts: LOD_MIN_VERTS / 2 }) !== LOD_RECIPE && lodVariantPath("store/x.glb", lodRecipeFor({ minVerts: LOD_MIN_VERTS / 2 })) !== lodVariantPath("store/x.glb"));
   check("…and so is a reducer generation bump, a ratio, an error bound, a texel budget",
     new Set([LOD_RECIPE, lodRecipeFor({ gen: LOD_GEN + 1 }), lodRecipeFor({ ratio: 0.5 }), lodRecipeFor({ error: 0.02 }), lodRecipeFor({ texel: 2048 })]).size === 5);
   check("the recipe is URL- and filename-safe, within the client's bound, and isLodVariant recognizes it",
@@ -145,6 +145,8 @@ console.log("\nthe store's KTX2 shadow (store-variants.ts, shared/ktx2.js):\n");
     && lodRecipeFor({ ratio: 0.5 }) !== lodRecipeFor({ ratio: 0.05 }) && lodRecipeFor({ ratio: 0.5 }).includes("-r5e"), lodRecipeFor({ error: 0.014 }));
   check("a parameter the string cannot carry faithfully is refused, not mangled",
     [() => lodRecipeFor({ ratio: 1 }), () => lodRecipeFor({ error: 0 }), () => lodRecipeFor({ error: 1e-7 }), () => lodRecipeFor({ minVerts: 12000.5 })].every((f) => { try { f(); return false; } catch { return true; } }));
+  check("LOD_GEN 2, floor 1,000: the Permissive retry, the GPU gate and the texel cap on ktx-create hosts changed what a gen-1 name built",
+    LOD_GEN === 2 && LOD_MIN_VERTS === 1_000 && LOD_RECIPE.startsWith("lod2-") && LOD_RECIPE.endsWith("-min1000"), LOD_RECIPE);
 
   // standing verdicts: which typed refusals make the original the FINAL answer under the running recipe
   {
@@ -158,13 +160,22 @@ console.log("\nthe store's KTX2 shadow (store-variants.ts, shared/ktx2.js):\n");
     check("'already light' is a FLOOR verdict — and the floor is in the recipe", lodVerdictKind(light) === "light");
     check("'reduction ineffective' and a preservation failure depend on the REDUCER",
       lodVerdictKind(line("reduction ineffective (14000 -> 9000 verts)")) === "ineffective" && lodVerdictKind(line("preservation failed: bounds moved on axis 1")) === "preservation");
+    check("…and so does the Permissive retry's phrase (', permissive too') — the same kind, never 'unknown'",
+      lodVerdictKind(line("reduction ineffective (20280 -> 13728 verts, permissive too)")) === "ineffective");
+    check("the GPU gate's refusal is its own kind, 'gpu' (optimize.ts: not lighter on the GPU)",
+      lodVerdictKind(`[optimize] lod: not lighter on the GPU (textures 1.33 -> 5.33 MB, 912ms) ${stamp} — original stays the only representation`) === "gpu");
     check("anything else is unclassified: a ktx2 size verdict, a deferral note, an exit code, nothing",
       [`[optimize] not smaller (1 -> 2, 3ms) ${recipeStamp()}`, "estimated 900MB > budget 512MB", "exit 1", ""].every((c) => lodVerdictKind(c) === null));
     check("FINAL: a structural or floor verdict stamped with the running recipe", lodVerdictFinal(line("unsupported: skinned/avatar asset (skins)")) && lodVerdictFinal(light));
     check("NOT final: ineffective / preservation — a better reducer may succeed under the same content",
       !lodVerdictFinal(line("reduction ineffective (14000 -> 9000 verts)")) && !lodVerdictFinal(line("preservation failed: material assignments changed")));
+    const gpuLine = lodGpuRefusal(1.33, 5.33, 912);   // the CLI's own line (optimize.ts --lod GPU gate)
+    check("the CLI's GPU-gate refusal carries the running recipe's stamp and reads as kind 'gpu'",
+      gpuLine.includes(stamp) && lodVerdictKind(gpuLine) === "gpu" && !lodVerdictFinal(gpuLine), gpuLine);
+    check("NOT final: the GPU gate's refusal, stamped — it depends on the encoder and the host, not on the URL",
+      !lodVerdictFinal(`[optimize] lod: not lighter on the GPU (textures 1.33 -> 5.33 MB, 912ms) ${stamp} — original stays the only representation`));
     check("NOT final: a floor verdict without the stamp (an older CLI), under another floor, or judged against another generation",
-      !lodVerdictFinal(light.replace(stamp, "")) && !lodVerdictFinal(light.replace(stamp, recipeStamp(lodRecipeFor({ minVerts: 6000 })))) && !lodVerdictFinal(light, lodRecipeFor({ gen: 2 })));
+      !lodVerdictFinal(light.replace(stamp, "")) && !lodVerdictFinal(light.replace(stamp, recipeStamp(lodRecipeFor({ minVerts: LOD_MIN_VERTS * 6 })))) && !lodVerdictFinal(light, lodRecipeFor({ gen: LOD_GEN + 1 })));
     check("NOT final: unclassified, however stamped", !lodVerdictFinal(`exit 1 ${stamp}`) && !lodVerdictFinal(stamp) && !lodVerdictFinal(""));
     check("NOT final: a stamp that EXTENDS the running recipe's (min120000 for min12000) — the pull-window case, a newer CLI's verdict in the older server's filename",
       !lodVerdictFinal(light.replace(stamp, recipeStamp(`${LOD_RECIPE}0`))) && !lodVerdictFinal(light, `${LOD_RECIPE}0`) && !lodVerdictFinal(light, LOD_RECIPE.slice(0, -1)));
@@ -179,13 +190,14 @@ console.log("\nthe store's KTX2 shadow (store-variants.ts, shared/ktx2.js):\n");
   }
 
   // the negotiation key is a generation, shared by both sides
-  check("the current key is 3 (1 and rollout-key 2 retired — their flagged answers had been pinned immutable)", KTX2_KEY === "3" && KTX2_QUERY === "ktx2=3");
-  check("the current key negotiates", wantsKtx2(new URLSearchParams("ktx2=3")));
-  check("the just-retired rollout key does NOT — it is an unflagged fetch now", !wantsKtx2(new URLSearchParams("ktx2=2")));
+  check("the current key is 4 (1 and 2 retired — flagged answers pinned immutable; 3 retired — built variants pinned immutable, now rebuildable in place)", KTX2_KEY === "4" && KTX2_QUERY === "ktx2=4");
+  check("the current key negotiates", wantsKtx2(new URLSearchParams("ktx2=4")));
+  check("the just-retired key (3) does NOT — it is an unflagged fetch now", !wantsKtx2(new URLSearchParams("ktx2=3")));
+  check("…nor the rollout key (2)", !wantsKtx2(new URLSearchParams("ktx2=2")));
   check("the original retired key does not negotiate either", !wantsKtx2(new URLSearchParams("ktx2=1")));
   check("no key does not", !wantsKtx2(new URLSearchParams("v=123")));
-  check("withKtx2 appends with ? on a bare path", withKtx2("store/x.glb") === "store/x.glb?ktx2=3");
-  check("…and with & when ?v= is already there (avatar URLs)", withKtx2("eidoverse/assets/vrms/a.vrm?v=9") === "eidoverse/assets/vrms/a.vrm?v=9&ktx2=3");
+  check("withKtx2 appends with ? on a bare path", withKtx2("store/x.glb") === "store/x.glb?ktx2=4");
+  check("…and with & when ?v= is already there (avatar URLs)", withKtx2("eidoverse/assets/vrms/a.vrm?v=9") === "eidoverse/assets/vrms/a.vrm?v=9&ktx2=4");
 
   // The browser's half: the key it uses is the one the RUNNING sequencer
   // published on /version — never one read off a served file.
@@ -524,21 +536,26 @@ console.log("\n  the real sequencer — an upload becomes a served variant:");
     else {
       // The pump runs store-min then --ktx2, serially, off the request path.
       // Until the variant lands, the flagged answer is whatever the unflagged
-      // one is, marked provisional; once it lands, the variant, immutable.
+      // one is, marked provisional; once it lands, the variant, short-lived + revalidating (rebuildable in place).
       const early = await S.get(negotiate(`store/${hash}.glb`, S.key));
       const earlyIsVariant = isKtx2Glb(early.bytes);
       check("a flagged fetch is answered either way, and its caching says which", early.status === 200
-        && (earlyIsVariant ? early.cc.includes("immutable") : early.cc === "no-cache"), `variant=${earlyIsVariant} cc=${early.cc}`);
+        && (earlyIsVariant ? early.cc.includes("max-age=60") && !early.cc.includes("immutable") : early.cc === "no-cache"), `variant=${earlyIsVariant} cc=${early.cc}`);
       const landed = await until(() => existsSync(ktx2VariantPath(join(STORE, `${hash}.glb`))), 30_000);
       check("the queue built the KTX2 shadow beside the original", landed, ktx2VariantPath(join(STORE, `${hash}.glb`)));
+      if (landed) {   // every image this encoder writes carries the transfer mark — the purge tells fixed from old by it
+        const { parseGlb } = await import("../server/glbparse.ts"); const { KTX2_TF_MARK } = await import("../server/optimize.ts");
+        const ims = (parseGlb(new Uint8Array(readFileSync(ktx2VariantPath(join(STORE, `${hash}.glb`))))).json.images ?? []).filter((i: any) => i.mimeType === "image/ktx2");
+        check(`…and every KTX2 image in it carries the transfer mark (${ims.length} image(s))`, ims.length > 0 && ims.every((i: any) => i.extras?.[KTX2_TF_MARK]), ims.map((i: any) => i.extras));
+      }
       // the parent logs a beat after the child's rename lands the file — poll
       const logged = await until(() => /\[ktx2\] .*→ .*\.ktx2\.glb/.test(S.log()), 5_000);
       check("…and it says so in the sequencer's log", logged, S.log().split("\n").filter((l) => l.includes("ktx2")).join(" | "));
       const flagged = await S.get(negotiate(`store/${hash}.glb`, S.key));
-      check("flagged (current key) → the variant, really KTX2, immutable", flagged.status === 200 && isKtx2Glb(flagged.bytes) && flagged.cc.includes("immutable"),
+      check("flagged (current key) → the variant, really KTX2, short-lived + revalidating", flagged.status === 200 && isKtx2Glb(flagged.bytes) && flagged.cc.includes("max-age=60") && !flagged.cc.includes("immutable"),
         `cc=${flagged.cc} ktx2=${isKtx2Glb(flagged.bytes)}`);
-      const retired = await S.get(`store/${hash}.glb?ktx2=2`);
-      check("the just-retired key (=2) is an unflagged fetch: not the variant, immutable like the address", retired.status === 200 && !isKtx2Glb(retired.bytes) && retired.cc.includes("immutable"),
+      const retired = await S.get(`store/${hash}.glb?ktx2=3`);
+      check("the just-retired key (=3) is an unflagged fetch: not the variant, immutable like the address", retired.status === 200 && !isKtx2Glb(retired.bytes) && retired.cc.includes("immutable"),
         `cc=${retired.cc} ktx2=${isKtx2Glb(retired.bytes)}`);
       const bare = await S.get(`store/${hash}.glb`);
       check("unflagged → not the variant, immutable", bare.status === 200 && !isKtx2Glb(bare.bytes) && bare.cc.includes("immutable"), bare.cc);
@@ -668,9 +685,9 @@ console.log("\n  the swap a browser makes when the variant lands:");
     const swapped = await S.get(negotiate(`store/${hash}.glb`, S.key), { "if-none-match": before.etag });
     check("the variant landed: the same If-None-Match now gets a 200 with the VARIANT — the swap", swapped.status === 200 && same(swapped.bytes, variant),
       `${swapped.status} file=${whichFile(swapped.bytes)}`);
-    check("…immutable from here on, under a new ETag", swapped.cc.includes("immutable") && swapped.etag !== before.etag, `cc=${swapped.cc}`);
+    check("…short-lived + revalidating from here on (a rebuild can land under it), under a new ETag", swapped.cc.includes("max-age=60") && !swapped.cc.includes("immutable") && swapped.etag !== before.etag, `cc=${swapped.cc}`);
     const settled = await S.get(negotiate(`store/${hash}.glb`, S.key), { "if-none-match": swapped.etag });
-    check("…and revalidating the variant is a 304 that says immutable", settled.status === 304 && settled.cc.includes("immutable"), `${settled.status} ${settled.cc}`);
+    check("…and revalidating the variant is a 304 carrying the same short-lived policy", settled.status === 304 && settled.cc.includes("max-age=60") && !settled.cc.includes("immutable"), `${settled.status} ${settled.cc}`);
     const bare = await S.get(`store/${hash}.glb`);
     check("the unflagged answer never moved: the original, immutable — the address IS content-addressed", same(bare.bytes, glb) && bare.cc.includes("immutable"), bare.cc);
   }
@@ -712,7 +729,7 @@ console.log("\n  the canary — a pull lands under a running sequencer:");
       check("…but /version still publishes the key the process RUNS with", version === KTX2_KEY, `published ${version}`);
       // the new client: keyed from /version
       const good = await S.get(negotiate(`store/${hash}.glb`, version));
-      check("a client keyed from /version asks with the running key → the variant, immutable: correct", good.status === 200 && same(good.bytes, variant) && good.cc.includes("immutable"), `file=${whichFile(good.bytes)} cc=${good.cc}`);
+      check("a client keyed from /version asks with the running key → the variant, short-lived + revalidating: correct", good.status === 200 && same(good.bytes, variant) && good.cc.includes("max-age=60") && !good.cc.includes("immutable"), `file=${whichFile(good.bytes)} cc=${good.cc}`);
       // the old client: keyed off the served file — the incident
       const bad = await S.get(negotiate(`store/${hash}.glb`, NEXT));
       check("a client keyed off the served file asks ?ktx2=99 → the server does not know it: unflagged, NOT the variant, immutable — this is the poison, and it would have been pinned under the NEXT generation before it ever ran",

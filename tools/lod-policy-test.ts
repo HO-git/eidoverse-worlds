@@ -19,6 +19,7 @@
 
 import { MODEL_QUALITY, LOD_FRACTION, LOD_HYST, PRESSURE_EDGE, PRESSURE_AT,
   makeModelQuality, chooseTier, tierOf, askFor } from "../client/lib/lod_policy.js";
+import { LOD_RECIPE } from "../server/store-variants.ts";
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail?: string) => {
@@ -28,7 +29,7 @@ const check = (label: string, ok: boolean, detail?: string) => {
 console.log("\nlod_policy — the tier chooser:\n");
 
 const R = 100;                       // a residency radius; edge = 45m at LOD_FRACTION 0.45
-const REC = "lod1-r25e01-texel1024";
+const REC = LOD_RECIPE;   // the REAL recipe (store-variants.ts derives it) — a literal here went stale when #205 did
 const edge = R * LOD_FRACTION;
 
 // ---- the gate: no recipe, no tier — ever

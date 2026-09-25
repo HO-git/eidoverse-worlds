@@ -163,6 +163,8 @@ const glyphStage = () => ev(async () => {
 const gs = await glyphStage();
 console.log(`  · glyph stage: ${JSON.stringify(gs)}`);   // printed on green too, so a red has something to compare to
 check('the visor glyph became visible on its own (XR hook registered)', gs.xrbtn && gs.display !== 'none', JSON.stringify(gs));
+check('a headset machine installed the dual warm (xrwarm.js: both variants at load; in-session compiles land where frames draw)',
+  await ev(() => globalThis.__xrDualWarm === true), String(await ev(() => globalThis.__xrDualWarm)));
 if (!(gs.xrbtn && gs.display !== 'none')) {
   // STOP HERE. Every later check needs a booted product; running them would throw on a missing glyph and
   // (before this) leak the browser and the world. Print what the boot said instead — that is the reason.

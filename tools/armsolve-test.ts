@@ -3,6 +3,7 @@
 // reach at the end, never a pop); the elbow angle is CONTINUOUS across a wide sweep (no flip — the old pole
 // solver flipped at its singularity); the elbow stays outside the torso capsule when the hand crosses the
 // body; the wrist twist is split (forearm rolls, hand takes the remainder — grip orientation still exact);
+// the twist is continuous across the forearm's real range, ~100° pronation to ~190° supination (no forearm flip);
 // and a lost grip holds 0.5 s then relaxes to the clip instead of snapping.
 // Recipe: `bun tools/armsolve-test.ts`
 import { plugin } from "bun";
@@ -105,6 +106,50 @@ const ident = new THREE.Quaternion();
   ok(Math.abs(q1.angleTo(want)) < 0.02, `hand orientation exact after the split (err ${(q1.angleTo(want) * 180 / Math.PI).toFixed(2)}°)`);
   const forearmRoll = lowerBefore.angleTo(v.bones.rightLowerArm.quaternion) * 180 / Math.PI;
   ok(forearmRoll > 70 && forearmRoll < 100, `forearm carried the bulk of the twist (${forearmRoll.toFixed(1)}° of 100°)`);
+}
+
+// 6. twist continuity (owner, 09-23, tigerbee: thumb-down/palm-out → thumb-out/palm-up and the forearm "tries to
+//    flip the other way"). Inside a forearm's real range — ~100° of pronation past palm-down to ~190° of supination
+//    — every roll of the grip, from any start, must move the forearm smoothly. The old split wrapped the twist to
+//    ±180° about the REST hand and faded 155–178°: 9.4° of forearm per degree of grip, near palm-up.
+//    NOT asked: 270° both ways from every start on the circle — no single-valued twist survives that (a first cut of
+//    this test asked it and failed both solvers). The rig mapping below is MEASURED on this synthetic humanoid
+//    (grip roll about the forearm → twist from rest, palm-down ≈ 0, supination + on the right, − on the left) and
+//    guarded, so a change to the rig or WRIST_R says so here instead of silently shifting the band.
+{
+  for (const side of ['right', 'left']) {
+    const sg = side === 'right' ? 1 : -1, gripOf = (tw: number) => sg * tw + sg * 120.7;
+    const band: [number, number] = [-100, 190];   // twist, supination-positive
+    const setup = () => {
+      const v = humanoid(); const sh = v.bones[side + 'UpperArm'].getWorldPosition(new THREE.Vector3());
+      const t = sh.clone().add(new THREE.Vector3(side === 'right' ? -0.1 : 0.1, 0, 0.45));
+      solveArm(v, side, t, ident, { dt: 1 / 72 }); v.scene.updateMatrixWorld(true);
+      const fa = v.bones[side + 'Hand'].getWorldPosition(new THREE.Vector3()).sub(v.bones[side + 'LowerArm'].getWorldPosition(new THREE.Vector3())).normalize();
+      const ax = v.bones[side + 'Hand'].position.clone().normalize();
+      const at = (tw: number) => { solveArm(v, side, t, new THREE.Quaternion().setFromAxisAngle(fa, gripOf(tw) * Math.PI / 180), { dt: 1 / 72 }); v.scene.updateMatrixWorld(true); };
+      const roll = () => { const q = v.bones[side + 'LowerArm'].quaternion; return 2 * Math.atan2(q.x * ax.x + q.y * ax.y + q.z * ax.z, q.w) * 180 / Math.PI; };
+      // SEED at the start, as a session or a tracking regain would (a one-frame 180° jump there is not a motion)
+      const seed = (tw: number) => { delete v.userData._arm; at(tw); };
+      return { v, at, roll, seed };
+    };
+    { const { v, seed } = setup(); seed(0); const tw = v.userData._arm?.[side]?.twist;
+      // a finite NUMBER, not merely defined: the seed path writes st.twist = null, so `!== undefined` passed on a solver
+      // that never reported a twist at all (watched: the mutant stayed green)
+      ok(Number.isFinite(tw), `${side}: the solver reports its twist (st.twist is a number) — the rig-mapping guard below has a subject`);
+      if (Number.isFinite(tw)) ok(Math.abs(tw * 180 / Math.PI) < 1.5, `${side}: rig mapping as measured (palm-down grip → twist ${(tw * 180 / Math.PI).toFixed(1)}°, want ≈0)`); }
+    const sweep = (from: number, to: number) => {
+      const { at, roll, seed } = setup(); seed(from);
+      let prev = roll(), worst = 0; const dir = Math.sign(to - from);
+      for (let tw = from + dir; dir > 0 ? tw <= to : tw >= to; tw += dir) { at(tw); const r = roll(); let j = Math.abs(r - prev); j = Math.min(j, 360 - j); worst = Math.max(worst, j); prev = r; }
+      return worst;
+    };
+    const reported = Math.max(sweep(-100, 185), sweep(185, -100));
+    ok(reported < 2.5, `${side}: the reported path, thumb-down/palm-out ↔ palm-up, forearm continuous (worst ${reported.toFixed(2)}°/°)`);
+    let worst = 0, worstAt = '';
+    for (const s0 of [-100, -45, 0, 45, 90, 135, 190]) for (const end of band) if (end !== s0) {
+      const w = sweep(s0, end); if (w > worst) { worst = w; worstAt = `${s0}° → ${end}°`; } }
+    ok(worst < 2.5, `${side}: every sweep inside the forearm's range continuous (worst ${worst.toFixed(2)}°/° at ${worstAt})`);
+  }
 }
 
 // 5. hold-then-relax: after a solve, losing the grip holds the pose 0.5 s, then eases to the clip; after ~1.5 s it's gone

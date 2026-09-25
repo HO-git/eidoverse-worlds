@@ -82,7 +82,7 @@ export const xrSimGrip = (side, pos, quat) => { if (CONFIG.params.has('xrsim')) 
 // a 0.2 s dwell (hysteresis: no flicker between two elbows); the chosen angle is smoothed 0.08 s at
 // ≤720°/s, reset outright on a teleport (>0.6·chain). Reach is SOFT at the end (exponential, s=0.02),
 // so full extension never pops. The wrist twist is SPLIT: the forearm rolls (keep ≤15°/15% on the
-// hand, fade 155–178°, cap 120°) and the hand takes the remainder — the grip orientation still
+// hand, cap 120°) and the hand takes the remainder — the grip orientation still
 // lands exactly. Joint-limit costs (humeral/pronation/wrist) are NOT ported: they need Basis's per-
 // joint limit tables; a later rung. Emotes trump IK. Lost tracking: hold 0.5 s, then relax to the
 // clip at 3 Hz (Basis's tracker-loss rule) instead of snapping in one frame.
@@ -91,7 +91,7 @@ const WRIST_L = new THREE.Quaternion(-WRIST_R.x, WRIST_R.y, WRIST_R.z, -WRIST_R.
 const ARM = { SAMPLES: 36, REFINE: 8, MIN_ELBOW: 22 * Math.PI / 180, MIN_REACH_FRAC: 0.05, SOFT: 0.02, PRIOR_W: 0.5, PREV_W: 0.25,
   TORSO_W: 1.5, LOCAL_BASIN: 60 * Math.PI / 180, BASIN_JUMP: 100 * Math.PI / 180, SWITCH_MARGIN: 0.12, DWELL: 0.2, SMOOTH: 0.08, MAX_RATE: 720 * Math.PI / 180,
   TELEPORT: 0.6, HEAD_FADE: [0.15, 0.45], REST_OUT: 0.35, REST_BACK: 0.25,
-  WRIST_KEEP_FRAC: 0.15, WRIST_KEEP_MAX: 15 * Math.PI / 180, ROLL_MAX: 120 * Math.PI / 180, WRAP_FADE: [155 * Math.PI / 180, 178 * Math.PI / 180],
+  WRIST_KEEP_FRAC: 0.15, WRIST_KEEP_MAX: 15 * Math.PI / 180, ROLL_MAX: 120 * Math.PI / 180, TWIST_CENTER: 45 * Math.PI / 180, TWIST_WINDOW: 240 * Math.PI / 180,
   HOLD: 0.5, RELAX_HZ: 3 };
 const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _d = new THREE.Vector3(), _u = new THREE.Vector3(), _elbow = new THREE.Vector3(), _rest = new THREE.Vector3();
 // solver scratch — these run per side, per body (remotes too since C18), per frame: nothing here may allocate
@@ -116,7 +116,7 @@ function twistAbout(q, axis) {
 }
 function armState(vrm, side) {
   const ud = vrm.userData = vrm.userData || {}; const a = ud._arm = ud._arm || {};
-  return a[side] = a[side] || { seeded: false, swivel: 0, switchT: 0, lastT: new THREE.Vector3(), lastAxis: new THREE.Vector3(), lost: 0, held: null };
+  return a[side] = a[side] || { seeded: false, swivel: 0, switchT: 0, lastT: new THREE.Vector3(), lastAxis: new THREE.Vector3(), lost: 0, held: null, twist: null };
 }
 // Basis Frame(): a circle basis that stays continuous as the reach axis swings around the body
 function swivelFrame(axis, up, fwd, out) {
@@ -202,7 +202,7 @@ export function solveArm(vrm, side, targetPos, targetQuat, opts = {}) {
   }
   const target = wrapA(f1 < f2 ? x1 : x2);
   const teleport = st.seeded && targetPos.distanceToSquared(st.lastT) > ARM.TELEPORT * ARM.TELEPORT * chain * chain;
-  if (!st.seeded || teleport) st.swivel = target;
+  if (!st.seeded || teleport) { st.swivel = target; st.twist = null; }
   else { const alpha = 1 - Math.exp(-dt / ARM.SMOOTH); let s = wrapA(target - st.swivel) * alpha; const m = ARM.MAX_RATE * dt; s = THREE.MathUtils.clamp(s, -m, m); st.swivel = wrapA(st.swivel + s); }
   st.seeded = true; st.lastT.copy(targetPos); st.lastAxis.copy(_axis);
   angToDir(st.swivel, _dir); _elbow.copy(_ctr).addScaledVector(_dir, radius);
@@ -214,8 +214,22 @@ export function solveArm(vrm, side, targetPos, targetQuat, opts = {}) {
     H.parent.getWorldQuaternion(_q).invert();
     _qH.copy(_q).multiply(targetQuat).multiply(side === 'left' ? WRIST_L : WRIST_R);
     _fa.copy(H.position).normalize();   // forearm axis in the lower arm's local frame
-    const demand = twistAbout(_qH, _fa), mag = Math.abs(demand);
-    let roll = (mag - Math.min(ARM.WRIST_KEEP_FRAC * mag, ARM.WRIST_KEEP_MAX)) * (1 - smoothstep(ARM.WRAP_FADE[0], ARM.WRAP_FADE[1], mag));
+    // CONTINUOUS twist (owner, 09-23, tigerbee: thumb-down/palm-out → thumb-out/palm-up and the forearm 'tries to
+    // flip the other way'). The twist was wrapped to ±180° about the REST hand (palm down) and faded 155–178°; but
+    // a forearm's range isn't centred on rest — palm-up is ~170° of supination, thumb-down ~100° of pronation — so
+    // full supination sat on the wrap, and the forearm unwound +120° → 0 → −120° over ~60° of wrist
+    // (armsolve-test 6: 9.4° of forearm per degree of grip). Now: (a) the twist is measured about the forearm's
+    // ANATOMICAL middle (45° of supination; supination is + on the right, − on the left in the normalized rig), so
+    // the one ambiguous angle a seed can land on is 135° of pronation past palm-down, not palm-up; (b) it unwraps
+    // against last frame, continuous through ±180°; (c) it SATURATES 240° either side of that middle — past it the
+    // forearm holds its cap and the hand takes the rest. A twist must change branch once per 360° somewhere; this
+    // puts it ~420° from the middle. Reseeded wherever the swivel is (first frame, teleport, tracking lost).
+    const raw = twistAbout(_qH, _fa), mid = side === 'left' ? -ARM.TWIST_CENTER : ARM.TWIST_CENTER;
+    const demand = st.twist == null ? mid + wrapA(raw - mid)
+      : THREE.MathUtils.clamp(st.twist + wrapA(raw - st.twist), mid - ARM.TWIST_WINDOW, mid + ARM.TWIST_WINDOW);
+    st.twist = demand;
+    const mag = Math.abs(demand);
+    let roll = mag - Math.min(ARM.WRIST_KEEP_FRAC * mag, ARM.WRIST_KEEP_MAX);
     roll = Math.min(roll, ARM.ROLL_MAX); if (demand < 0) roll = -roll;
     if (Math.abs(roll) > 1e-4) {
       L.quaternion.multiply(_q2.setFromAxisAngle(_fa, roll)); L.updateWorldMatrix(false, false);
@@ -239,7 +253,7 @@ export function relaxArm(vrm, side, dt) {
   st.lost += dt > 0 ? dt : 1 / 60;
   if (st.lost <= ARM.HOLD) { U.quaternion.copy(st.held.U); L.quaternion.copy(st.held.L); H.quaternion.copy(st.held.H); return true; }
   const w = Math.exp(-ARM.RELAX_HZ * (st.lost - ARM.HOLD));   // 1 → 0 after the hold
-  if (w < 0.01) { st.seeded = false; return false; }
+  if (w < 0.01) { st.seeded = false; st.twist = null; return false; }
   _qU.copy(U.quaternion); _qL.copy(L.quaternion); _qH.copy(H.quaternion);   // the clip's pose
   U.quaternion.copy(_qU).slerp(st.held.U, w); L.quaternion.copy(_qL).slerp(st.held.L, w); H.quaternion.copy(_qH).slerp(st.held.H, w);
   return true;

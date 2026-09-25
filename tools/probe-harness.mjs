@@ -97,7 +97,10 @@ export async function ownedWorld({ live = null, key = process.env.JOIN_KEY || 'd
   const BUN = process.execPath.includes('bun') ? process.execPath
     : (process.env.BUN_PATH || '/home/claude/.bun/bin/bun');
   const srv = spawn(BUN, ['server/server.ts'], {
-    env: { ...process.env, PORT: String(PORT), JOIN_TOKEN: key, WORLDS_DIR: scratch,
+    // SKIP_OPT_SWEEP by default: a probe server shares the checkout's OPT_DIR (assets/opt) — its boot sweeps would
+    // build variants INTO the directory a live world serves from, mid-session (09-24 22:40: a lowered LOD floor had
+    // probe servers writing new store LODs under the owner's VR test). A probe that wants the sweep passes it in env.
+    env: { ...process.env, SKIP_OPT_SWEEP: '1', PORT: String(PORT), JOIN_TOKEN: key, WORLDS_DIR: scratch,
            EIDO_BOOT_NONCE: NONCE, ...extraEnv },
     stdio: ['ignore', 'ignore', 'ignore'],
   });

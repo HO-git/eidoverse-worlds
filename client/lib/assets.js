@@ -228,7 +228,7 @@ async function negotiated(path, eligible) {
   const key = eligible && ktx2.workerConfig ? await ktx2KeyReady : null;
   return negotiate(path, key);
 }
-function makeLoader(vrm = false) {
+export function makeLoader(vrm = false) {   // exported for tools/glbperf-parity-probe (the client's own loader)
   const l = new GLTFLoader();
   l.setDRACOLoader(draco);
   l.setKTX2Loader(ktx2);

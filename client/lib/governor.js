@@ -252,12 +252,16 @@ const LEVERS = [
   },
   {
     name: 'pixels',
+    // #32: in a headset the ratio scales each EYE'S VIEWPORT, not the resolution (xrpixelratio.js). Not a lever there:
+    // return false so the ladder moves on to one that helps, instead of spending a rung on a deferred no-op.
     shed() {
+      if (renderer.xr?.isPresenting) return false;
       if (pixelRatio <= 0.7) return false;
       setPR(Math.max(0.7, pixelRatio - 0.25));
       return true;
     },
     restore() {
+      if (renderer.xr?.isPresenting) return false;
       if (pixelRatio >= residentBase()) return false;
       setPR(Math.min(residentBase(), pixelRatio + 0.125));
       return true;
@@ -409,7 +413,7 @@ export function governPerformance(fps) {
     goodFor = 0;
     calmFor = 0;
     midFor++;
-    if (cruiseActive() && midFor > 7 && pixelRatio > cruiseFloor()) {
+    if (cruiseActive() && midFor > 7 && pixelRatio > cruiseFloor() && !renderer.xr?.isPresenting) {
       setPR(Math.max(cruiseFloor(), pixelRatio - 0.25));
       midFor = 0;
       if (history.length < 60) history.push(`− pixels (cruise) @${Math.round(performance.now() / 1000)}s`);

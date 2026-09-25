@@ -5,7 +5,9 @@
 // Patches, each marked EIDO: (1) DPR scale — canvas rasterised at `scale` px per CSS px so the quad
 // matches xrpanels' 900 px/m; (2) inline <svg> drawn via serialise→Image (the icon system);
 // (3) `pause`/`resume` + a per-instance min interval so live panels don't re-rasterise at 60 Hz;
-// (4) events are NOT re-dispatched on window (three's did — it tripped desktop handlers).
+// (4) events are NOT re-dispatched on window (three's did — it tripped desktop handlers);
+// (5) elementAt/scrollAt for trigger-scroll; (6) `suspend`/`unsuspend` — the DOM observer off while a
+// kept quad's element is back on the desktop (domquad's soft swap).
 import {
 	CanvasTexture,
 	LinearFilter,
@@ -114,7 +116,7 @@ class HTMLTexture extends CanvasTexture {
 		const config = { attributes: true, childList: true, subtree: true, characterData: true };
 		observer.observe( dom, config );
 
-		this.observer = observer;
+		this.observer = observer; this.observerConfig = config;   // EIDO (6)
 
 	}
 
@@ -158,6 +160,9 @@ class HTMLTexture extends CanvasTexture {
 		return null;
 	}
 	pause() { this.paused = true; }   // EIDO (3): a quad that isn't shown stops rasterising
+	// EIDO (6): a quad kept across sessions (domquad soft swap) stops WATCHING while its element lives on the desktop
+	suspend() { this.suspended = true; this.observer?.disconnect(); this.scheduleUpdate = clearTimeout( this.scheduleUpdate ); }
+	unsuspend() { if ( ! this.suspended ) return; this.suspended = false; this.observer?.observe( this.dom, this.observerConfig ); }
 	resume() { this.paused = false; this.update(); }
 
 	update() {

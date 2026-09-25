@@ -373,7 +373,7 @@ export function radialEntries() {   // exported with makeRadial for the headless
     if (out.length % 2) out.push(SPACER);
     return out;
   }
-  const panels = { svg: '<svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 26 26"><text x="13" y="19.5" font-family="system-ui, sans-serif" font-size="19" font-weight="700" text-anchor="middle" fill="#f2f7f5">∃</text></svg>', label: 'panels', on: () => xrPanelsShown(), act: () => { bus.emit('xr:panels'); tee('[xr] panels toggled (ring)'); } };
+  const panels = { svg: '<svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 26 26"><text x="13" y="19.5" font-family="system-ui, sans-serif" font-size="19" font-weight="700" text-anchor="middle" fill="#f2f7f5">∃</text></svg>', label: 'panels', on: () => xrPanelsShown(), act: ringPanelsAct };
   const leave = { svg: xrGlyph(52), label: 'leave VR', on: () => true, close: true, guard: true, act: () => leaveVR('ring') };   // guard: trigger only — a stick brush toward 6 o'clock threw the owner out (22:29)
   // emotes is its own strip on the desk, not a dock panel — a fixed slot, first on the right (1 o'clock)
   const right = [{ icon: 'hand-waving', label: 'emotes', sub: 'emotes', on: () => false, act: () => {} }];
@@ -549,6 +549,8 @@ const buttonsTrusted = () => performance.now() > inputsSettledAt;
 
 // ---- session ---------------------------------------------------------------
 let sessionNo = 0;   // per page: tee() folds byte-identical lines (repeats 2–19 are DROPPED), so every entry line carries its number
+const ringPanelsAct = () => { bus.emit('xr:panels'); tee('[xr] panels toggled (ring)'); };
+globalThis.__xrRingPanels = ringPanelsAct;   // harness: the ring's 'panels' slot, the real action (xr-quad-softswap probe)
 let entering = false;   // requestSession → setSession is a window of ~1–3 s; a second click (or a leave) inside it made two sessions fight (Basis: refuse enter/leave while in flight)
 // The busy-session retry (#197 review B1). `busyRetryFor` is the ENTRY INTENT that owns the pending
 // retry: a retry belongs to the click that scheduled it, so a later click — or a leave — makes it

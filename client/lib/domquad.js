@@ -17,6 +17,8 @@ const XR_FRAMES = ['world', 'emotes', 'settings', 'chat', 'debug', 'profile'];  
 const LIVE_MIN_MS = { debug: 250, chat: 250 };   // live panels re-rasterise at most 4 Hz; others at 16 ms
 
 let stage = null; let quads = null; let shown = false;
+let all = [];          // every quad ever staged, kept across sessions (soft swap); `quads` is this session's list
+let rigRef = null; let builds = 0;
 // where you put each panel (rig-local pos + yaw/pitch), per browser — a grabbed panel (C17) stays put next session
 const PLACE_LS = 'ew-xr-quads';
 const loadPlaces = () => { try { return JSON.parse(localStorage.getItem(PLACE_LS) || '{}'); } catch { return {}; } };
@@ -51,39 +53,63 @@ function ensureStage() {
   return stage;
 }
 
-function mount(api, i, n) {
-  const el = api.el;
-  const restore = { parent: el.parentNode, next: el.nextSibling, display: el.style.display, left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height, position: el.style.position, collapsed: el.classList.contains('collapsed') };
+// SOFT SWAP (Basis: build once, hide/show). A quad is STAGED every session — its element must leave the
+// desktop while presenting and come back after — but its mesh is BUILT only when first shown (quads start
+// hidden, and HTMLTexture's constructor rasterises the whole frame synchronously on the main thread: six of
+// those ran at every entry for panels nobody had opened) and then KEPT across sessions, paused and with its
+// observer suspended while the element lives on the desktop. A frame resized on the desktop since the mesh
+// was built rebuilds at its next show (HTMLMesh fixes its geometry at construction).
+function stageEl(q) {
+  const el = q.el, api = q.api;
+  q.restore = { parent: el.parentNode, next: el.nextSibling, display: el.style.display, left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height, position: el.style.position, collapsed: el.classList.contains('collapsed') };
   ensureStage().appendChild(el);
-  el.style.display = 'flex'; el.style.left = '0px'; el.style.top = '0px'; el.style.position = 'absolute';   // laid out, visible, INSIDE the offscreen stage (frames are position:fixed — left at that they piled up in the desktop's corner while presenting; R 22:25)
+  el.style.display = 'flex'; el.style.left = '0px'; el.style.top = '0px'; el.style.position = 'absolute';   // laid out, visible, INSIDE the offscreen stage (frames are position:fixed — left at that they piled up in the desktop's corner while presenting; owner, 22:25)
   if (el.offsetWidth < 40 || el.offsetHeight < 40) {   // a frame that has never been shown may carry no size yet
     const st = api._state ?? api.state ?? {}; el.style.width = `${st.w ?? 300}px`; el.style.height = `${st.h ?? 220}px`;
   }
+}
+
+function build(q) {
+  const el = q.el;
   const cssW = Math.max(40, el.offsetWidth);
   const scale = (PX_PER_M * W) / cssW;   // device px per CSS px so the quad reads at 900 px/m
-  const mesh = new HTMLMesh(el, { scale, minInterval: LIVE_MIN_MS[api.id] ?? 16 });
+  const mesh = new HTMLMesh(el, { scale, minInterval: LIVE_MIN_MS[q.id] ?? 16 });
+  builds++;
   mesh.material.transparent = false;
   const k = W / (cssW * 0.001);   // HTMLMesh geometry = CSS px × 1 mm; rescale to W metres
   mesh.scale.setScalar(k);
-  const a = (i - (n - 1) / 2) * 0.55;
+  const a = (q.i - (q.n - 1) / 2) * 0.55;
   mesh.position.set(Math.sin(a) * 0.85, 1.15, -Math.cos(a) * 0.85);
   mesh.rotation.y = -a;
-  const saved = loadPlaces()[api.id];
+  const saved = loadPlaces()[q.id];
   if (saved && Array.isArray(saved.pos) && saved.pos.length === 3 && saved.pos.every(Number.isFinite) && Number.isFinite(saved.yaw)) {
     mesh.position.fromArray(saved.pos); mesh.rotation.set(Number.isFinite(saved.pitch) ? saved.pitch : 0, saved.yaw, 0, 'YXZ');
   }
   mesh.userData.noCamCollide = true;
-  return { id: api.id, api, el, mesh, restore };
+  q.mesh = mesh; q.builtAt = [el.offsetWidth, el.offsetHeight];
 }
 
-function unmount(q) {
-  q.mesh.material.map?.dispose?.(); q.mesh.geometry.dispose(); q.mesh.material.dispose();
-  const r = q.restore;
+function drop(q) { if (!q.mesh) return; q.mesh.removeFromParent(); q.mesh.dispose(); q.mesh = null; }
+
+// visible = true builds (or rebuilds a stale) mesh; false only hides what exists
+function setVisible(q, on) {
+  if (on) {
+    const el = q.el;
+    if (q.mesh && (q.builtAt[0] !== el.offsetWidth || q.builtAt[1] !== el.offsetHeight)) drop(q);
+    if (!q.mesh) { build(q); rigRef?.add(q.mesh); }
+  }
+  if (!q.mesh) return;
+  q.mesh.visible = on; const t = q.mesh.material.map; if (on) t.resume?.(); else t.pause?.();
+}
+
+function unstageEl(q) {
+  const r = q.restore; if (!r) return;
   // the desktop DOM may have re-ordered while we were presenting: the saved sibling is only usable if it is
   // still that parent's child (live, 09-05 22:20: 'error when I try to leave VR' — insertBefore NotFoundError)
   const parent = r.parent ?? document.body;
   if (r.next && r.next.parentNode === parent) parent.insertBefore(q.el, r.next); else parent.appendChild(q.el);
   q.el.style.display = r.display; q.el.style.left = r.left; q.el.style.top = r.top; q.el.style.width = r.width; q.el.style.height = r.height; q.el.style.position = r.position; if (r.collapsed) q.el.classList.add('collapsed');
+  q.restore = null;
 }
 
 export const domQuadsEnabled = () => !new URLSearchParams(location.search).has('canvasquads');
@@ -92,25 +118,42 @@ export function domQuadsEnter(rig) {
   const apis = XR_FRAMES.map((id) => getFrame(id)).filter(Boolean);
   const extra = allFrames().filter((f) => f.xr && !apis.includes(f));
   const list = [...apis, ...extra];
-  quads = list.map((api, i) => mount(api, i, list.length));
-  for (const q of quads) rig.add(q.mesh);
-  // OFF by default while the quads are still being worked on (live 09-06 12:49): mounted, paused, hidden;
+  for (const q of all) if (!list.includes(q.api)) drop(q);   // a frame that went away since last session
+  rigRef = rig;
+  quads = list.map((api, i) => {
+    const q = all.find((x) => x.api === api) ?? { id: api.id, api, el: api.el, mesh: null, restore: null, builtAt: null };
+    q.el = api.el; q.i = i; q.n = list.length;
+    return q;
+  });
+  all = quads.slice();
+  for (const q of quads) {
+    try { stageEl(q); } catch (e) { console.warn('[domquad] stage', q.id, e); }
+    if (q.mesh) { rig.add(q.mesh); q.mesh.material.map.unsuspend?.(); }
+  }
+  // OFF by default while the quads are still being worked on (live 09-06 12:49): staged, hidden, unbuilt;
   // the ring's 'panels' slot (or a text-focus for the keyboard) shows them. ?quads=1 restores the old default.
   shown = new URLSearchParams(location.search).get('quads') === '1';
-  for (const q of quads) { q.mesh.visible = shown; const t = q.mesh.material.map; if (shown) t.resume?.(); else t.pause?.(); }
+  for (const q of quads) setVisible(q, shown);
   bus.emit('xr:domquads', quads.map((q) => q.id));
 }
 
 export function domQuadsExit(rig) {
   if (!quads) return;
-  for (const q of quads) { rig.remove(q.mesh); try { unmount(q); } catch (e) { console.warn('[domquad] unmount', q.id, e); } }   // one bad restore must not strand the others (or the session teardown)
-  quads = null; shown = false;
+  for (const q of quads) {   // one bad restore must not strand the others (or the session teardown)
+    try { if (q.mesh) { q.mesh.removeFromParent(); q.mesh.visible = false; const t = q.mesh.material.map; t.pause?.(); t.suspend?.(); } unstageEl(q); } catch (e) { console.warn('[domquad] unmount', q.id, e); }
+  }
+  quads = null; shown = false; rigRef = null;
 }
 
-export const domQuadsShown = () => !!quads && quads.some((q) => q.mesh.visible);
+/** probe window: how many meshes exist, how many were ever built (a re-entry that rebuilds shows here) */
+const domQuadsDebug = () => ({ ids: all.map((q) => q.id), kept: all.length, built: all.filter((q) => q.mesh).length, builds, staged: (quads ?? []).length, shown: domQuadsShown(),
+  meshIds: all.map((q) => q.mesh?.uuid ?? null), onDesktop: all.map((q) => !!q.el && !q.el.closest('#xr-stage')), observing: all.map((q) => (q.mesh ? !q.mesh.material.map.suspended : null)) });
+globalThis.__domQuads = domQuadsDebug;
+
+export const domQuadsShown = () => !!quads && quads.some((q) => q.mesh?.visible);
 export function domQuadsSetShown(v) {
   shown = !!v;
-  for (const q of quads ?? []) { q.mesh.visible = shown; const t = q.mesh.material.map; if (shown) t.resume?.(); else t.pause?.(); }
+  for (const q of quads ?? []) setVisible(q, shown);
 }
 
 // mirrors xrPanelsPick: distance to the quad under the ray, or null; on click, the
@@ -121,7 +164,7 @@ export function domQuadsPick(handRay, click = false) {
   _rc.ray.origin.setFromMatrixPosition(handRay.matrixWorld);
   _rc.ray.direction.set(0, 0, -1).applyMatrix4(_m);
   _rc.far = 3;
-  const hit = _rc.intersectObjects(quads.map((q) => q.mesh), false)[0];
+  const hit = _rc.intersectObjects(quads.filter((q) => q.mesh).map((q) => q.mesh), false)[0];
   if (!hit) return null;
   if (click && hit.uv) {
     const data = { x: hit.uv.x, y: 1 - hit.uv.y };
@@ -139,7 +182,7 @@ export function domQuadsScroll(handRay, dy) {
   _rc.ray.origin.setFromMatrixPosition(handRay.matrixWorld);
   _rc.ray.direction.set(0, 0, -1).applyMatrix4(_m);
   _rc.far = 3;
-  const hit = _rc.intersectObjects(quads.map((q) => q.mesh), false)[0];
+  const hit = _rc.intersectObjects(quads.filter((q) => q.mesh).map((q) => q.mesh), false)[0];
   if (!hit?.uv) return false;
   return !!hit.object.material.map.scrollAt?.(hit.uv.x, 1 - hit.uv.y, dy);
 }
@@ -147,12 +190,12 @@ export function domQuadsScroll(handRay, dy) {
 // one quad by id — a ring slot opens that frame's quad; `on` null toggles
 export function domQuadShow(id, on = null) {
   const q = quads?.find((x) => x.id === id); if (!q) return false;
-  q.mesh.visible = on == null ? !q.mesh.visible : !!on;
-  const t = q.mesh.material.map; if (q.mesh.visible) t.resume?.(); else t.pause?.();
-  shown = quads.some((x) => x.mesh.visible);
-  return q.mesh.visible;
+  setVisible(q, on == null ? !q.mesh?.visible : !!on);
+  shown = quads.some((x) => x.mesh?.visible);
+  return !!q.mesh?.visible;
 }
 export const domQuadIds = () => (quads ?? []).map((q) => q.id);
+export const domQuadOpen = (id) => !!quads?.find((q) => q.id === id)?.mesh?.visible;
 
 // ---- grabbable, following panels (gap list C17; Basis's design over rig-locked quads). The
 // grip+trigger chord on a quad takes the QUAD (xr.js asks here before it asks the world, the same
@@ -166,7 +209,7 @@ export function domQuadsGrab(handRay) {
   _rc.ray.origin.setFromMatrixPosition(handRay.matrixWorld);
   _rc.ray.direction.set(0, 0, -1).applyMatrix4(_m);
   _rc.far = 3;
-  const hit = _rc.intersectObjects(quads.filter((q) => q.mesh.visible).map((q) => q.mesh), false)[0];
+  const hit = _rc.intersectObjects(quads.filter((q) => q.mesh?.visible).map((q) => q.mesh), false)[0];
   return hit ? quads.find((q) => q.mesh === hit.object) ?? null : null;
 }
 /** Hand the quad back to `rig` where it visually is; upright it. Returns the quad's rig-local pose. */
@@ -180,4 +223,4 @@ export function domQuadRelease(q, rig) {
   savePlace(q.id, p);
   return p;
 }
-export const domQuadTexture = (id) => quads?.find((q) => q.id === id)?.mesh.material.map ?? null;
+export const domQuadTexture = (id) => quads?.find((q) => q.id === id)?.mesh?.material.map ?? null;

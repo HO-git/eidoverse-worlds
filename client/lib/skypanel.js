@@ -14,7 +14,7 @@ import { sendVerb } from './net.js';
 import { flashHint } from './ui.js';
 import { selectRow } from './rows.js';
 import { previewSky, skyArgs, skyImpl, WEATHERS, CLOUDS, SKY_WORLDS,
-  CLOUD_QUALITY, getCloudQuality, setCloudQuality } from './sky.js';
+  CLOUD_QUALITY, getCloudChoice, setCloudQuality } from './sky.js';
 import { GRASS_QUALITY, getGrassQuality, setGrassQuality,
   getGrassDensity, getGrassShed, getGrassApplied } from './terrain.js';
 import { MODEL_QUALITY } from './lod_policy.js';
@@ -113,7 +113,7 @@ export function paintSky(body) {
   // volumetric march is the most expensive thing the client draws and its cost
   // is per-fragment, so a big high-refresh display pays several times what a
   // small window does for the same sky.
-  const { row: cqRow } = selectRow('clouds⚙', CLOUD_QUALITY, getCloudQuality(),
+  const { row: cqRow } = selectRow('clouds⚙', CLOUD_QUALITY, getCloudChoice(),
     (v) => { setCloudQuality(v); flashHint(`clouds: ${v} (yours only)`); });
   cqRow.title = 'local performance setting — not shared with the world';
   body.appendChild(cqRow);

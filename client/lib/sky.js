@@ -17,7 +17,7 @@ import { THREE, scene, sun, hemi, renderer, camera } from './core.js';
 // ?shadowdebug=1 — R 09-07 19:17: 'crank it way up to see if it's there at all'. Sun shadows measured ~10 % darker than lit
 // ground (fill light drowns the sun's share); this dims the fill to a fifth so the shadow map's coverage is legible.
 const SHADOW_DEBUG_FILL = new URLSearchParams(globalThis.location?.search ?? '').has('shadowdebug') ? 0.2 : 1;
-import { report, bus } from './base.js';
+import { report, bus, tee } from './base.js';
 import { loadEidoModule, primeFiles, listLibrary, fetchBytes } from './assets.js';
 import { markPhase } from './boot.js';
 import { attachBakedDome, detachBakedDome, updateBakedDome, bakedActive, requestBake,
@@ -117,12 +117,48 @@ const bakeOpts = () => {
 let cloudQuality = localStorage.getItem('ew-cloud-quality') ?? 'medium';
 export const getCloudQuality = () => cloudQuality;
 
+// VR CAP: in a headset on the WEBGL backend, clouds never run 'high'. High is the live volumetric march, per pixel
+// PER EYE at the headset's full size (5920x2960 on the reporting headset) — 12-13 fps — and each eye marches from its
+// own origin with its own noise, so the two eyes see different skies (sky double-vision, the world fine). 'medium' is
+// the baked panorama both eyes look AT: stereo-correct and cheap. The saved choice is untouched and comes back on exit.
+// ⚑ WEBGPU: deliberately NOT capped — the question is open again there; revisit when VR rides WebGPU-XR (measure fps
+// and eye agreement before extending this rule).
+let xrPresenting = false;
+let xrCappedFrom = null;          // the level the cap replaced, restored on exit
+const vrCapApplies = () => xrPresenting && !!renderer.backend?.isWebGLBackend;
+bus.on('xr:state', (on) => {
+  xrPresenting = !!on;
+  if (on && vrCapApplies() && cloudQuality === 'high') {
+    xrCappedFrom = 'high';
+    tee('[sky] VR on WebGL: clouds capped high → medium for the session (the saved choice stays high)');
+    setCloudQuality('medium', { persist: false }).catch((e) => report('sky VR cap', e));
+  } else if (!on && xrCappedFrom) {
+    const back = xrCappedFrom; xrCappedFrom = null;
+    tee(`[sky] VR exit: clouds back to ${back}`);
+    setCloudQuality(back, { persist: false }).catch((e) => report('sky VR cap (exit)', e));
+  }
+});
+
+/** What the person CHOSE — a settings row shows this, not the level the VR cap is running meanwhile. */
+export const getCloudChoice = () => xrCappedFrom ?? cloudQuality;
+
 /** Change the local cloud budget. Rebuilds the sky, since passes are baked in
  *  at construction. */
-export async function setCloudQuality(level) {
-  if (!CLOUD_QUALITY.includes(level) || level === cloudQuality) return;
+
+export async function setCloudQuality(level, { persist = true } = {}) {
+  if (!CLOUD_QUALITY.includes(level)) return;
+  // asking for 'high' INSIDE a WebGL headset session: remember it for the exit, run medium now
+  if (level === 'high' && vrCapApplies()) {
+    xrCappedFrom = 'high';
+    if (persist) localStorage.setItem('ew-cloud-quality', level);
+    tee('[sky] VR on WebGL: high clouds held at medium until exit');
+    level = 'medium';
+    persist = false;
+  }
+  else if (persist && xrPresenting) xrCappedFrom = null;   // a deliberate non-high choice in the headset replaces the cap's memory
+  if (persist) localStorage.setItem('ew-cloud-quality', level);   // before the no-op return: choosing the level already running is still a choice
+  if (level === cloudQuality) return;
   cloudQuality = level;
-  localStorage.setItem('ew-cloud-quality', level);
   currentWorld = null;          // force a rebuild at the new budget
   skyBuilds = 0;
   if (clock) await render();

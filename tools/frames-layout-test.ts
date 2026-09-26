@@ -644,6 +644,48 @@ console.log("FRAMES — a shrink is not a decision: grow the window back and eve
   (window as any).innerWidth = 1000; window.dispatchEvent(new Event("resize"));
   check("after a reset, a window resize keeps the frame at its default, not its old drag spot",
     rect(pl) === resetAt, `${resetAt} -> ${rect(pl)}`);
+
+  // HIDDEN THROUGH THE RESIZE (review C1): a display:none frame measures 0 tall in a
+  // browser, so edge-docking and fit() both went blind, and show() fitted only once.
+  // Esc (hide all) → resize → Esc is the everyday path. This fixture measures a hidden
+  // frame as 0, which the shared measurable() does not.
+  const hid: any = makeFrame("rt-hidden", { title: "hid", x: 40, y: 40, w: 200, h: 150 });
+  (hid.el as any).getBoundingClientRect = () => ({ left: hid.state.x, top: hid.state.y, width: hid.state.w,
+    height: hid.state.h + 30, right: hid.state.x + hid.state.w, bottom: hid.state.y + hid.state.h + 30 });
+  Object.defineProperty(hid.el, "offsetHeight", { get: () => hid.el.style.display === "none" ? 0 : hid.state.h + 30, configurable: true });
+  hid.show();
+  Object.assign(hid._state, { x: 1000 - 8 - 200, y: 700 - 8 - 180 }); hid._markMoved(); hid._save();   // docked bottom-right
+  hid.hide();
+  (window as any).innerHeight = 900; window.dispatchEvent(new Event("resize"));
+  hid.show();
+  check("a docked frame hidden through a grow rides its edge when shown", hid.state.y + 180 === 900 - 8, rect(hid));
+  hid.hide();
+  (window as any).innerHeight = 500; window.dispatchEvent(new Event("resize"));
+  hid.show();
+  check("...and one hidden through a shrink comes back inside the viewport", hid.state.y + 180 <= 500 - 8, rect(hid));
+  (window as any).innerHeight = 700; window.dispatchEvent(new Event("resize"));
+
+  // LOADED INTO A DIFFERENT WINDOW (review C2): the save now records its viewport, so a
+  // docked frame must come up docked at load — not mid-air, then jump on the first resize.
+  (window as any).innerWidth = 1400; window.dispatchEvent(new Event("resize"));
+  localStorage.setItem("ew-frame-rt-load", JSON.stringify({ x: 792, y: 100, w: 200, h: 150, hidden: false, placed: true, vw: 1000, vh: 700 }));
+  const ld: any = measurable(makeFrame("rt-load", { title: "ld", x: 40, y: 40, w: 200, h: 150 }));
+  check("a right-docked save loaded 400px wider comes up docked", ld.state.x === 1192, rect(ld));
+  window.dispatchEvent(new Event("resize"));
+  check("...and the first resize does not move it", ld.state.x === 1192, rect(ld));
+  (window as any).innerWidth = 1000; window.dispatchEvent(new Event("resize"));
+
+  // A NUDGE WHILE SQUEEZED IS A MOVE, NOT A RESIZE (review C4): the owner's rule exempts
+  // what the person deliberately moved or resized — a drag chose a position, not the
+  // height the small window imposed. Through the real title-bar drag.
+  const ng: any = measurable(makeFrame("rt-nudge", { title: "ng", x: 300, y: 100, w: 220, h: 500 })); ng.show();
+  (window as any).innerHeight = 300; window.dispatchEvent(new Event("resize"));
+  const gx = ng.state.x + 50, gy = ng.state.y + 10;
+  ng.head.dispatchEvent(pe("pointerdown", gx, gy));
+  ng.head.dispatchEvent(pe("pointermove", gx + 20, gy));
+  ng.head.dispatchEvent(pe("pointerup", gx + 20, gy));
+  (window as any).innerHeight = 700; window.dispatchEvent(new Event("resize"));
+  check("a drag while squeezed keeps its new x but not the squeezed height", ng.state.x === 320 && ng.state.h === 500, rect(ng));
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

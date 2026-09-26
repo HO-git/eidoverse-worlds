@@ -63,7 +63,9 @@ try {
   }
   await pg.setViewportSize({ width: 1280, height: 300 }); await settle();
   await toggle('debug'); await settle(); await toggle('debug'); await settle();
-  await pg.setViewportSize(FULL); await boot();
+  // settle BEFORE reloading: a reload that races the grow's resize event measures the
+  // race (auto-hidden panels restore on that event), not the layout
+  await pg.setViewportSize(FULL); await settle(); await boot();
   const d = diff(before, await rects());
   say(d.length === 0, `a reload after a squeezed toggle: ${d.length ? d.join(' · ') : 'every panel where it was'}`);
   say(errs.length === 0, `no page errors${errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''}`);

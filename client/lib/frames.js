@@ -204,7 +204,9 @@ document.addEventListener('pointerdown', (e) => {
     captureEl?.removeEventListener('lostpointercapture', finish);
     document.body.style.cursor = '';
     _resizing = false;
-    f.markMoved?.(); f.save();             // a resize is deliberate too
+    // the axes this zone moved: w/e change width (w also x), n/s change height (n also y)
+    f.markMoved?.((/[ew]/.test(z) ? 'w' : '') + (z.includes('w') ? 'x' : '') + (/[ns]/.test(z) ? 'h' : '') + (z.includes('n') ? 'y' : ''));
+    f.save();                              // a resize is deliberate too
 
   };
   // capture keeps the stream coming while the pointer is outside the window;
@@ -367,7 +369,10 @@ export function makeFrame(id, opts = {}) {
     // so toggling any panel once exempted the frame forever. That needs its own
     // signal, persisted with state and written only at the deliberate acts.
     let placed = saved?.placed === true;
-    const markMoved = () => { moved = true; placed = true; state.placed = true; commitRest(); };
+    // `axes`: what the deliberate act chose. A drag chooses a position, never the size
+    // a squeezed window was imposing at the time (review C4); an edge-resize chooses
+    // the axes its zone moved.
+    const markMoved = (axes = 'xywh') => { moved = true; placed = true; state.placed = true; commitRest(axes); };
   // R, 2026-09-11, on the bug this exists for: the emote bar "will always pop
   // sideways to the right regardless if there's room for it" — snapTo calls
   // _fit() 180ms after every drag settles, and fit() re-centred an x:'center'
@@ -420,8 +425,9 @@ export function makeFrame(id, opts = {}) {
   // into the next load either.
   let rest = { x: state.x, y: state.y, w: state.w, h: state.h,
     vw: saved?.vw ?? innerWidth, vh: saved?.vh ?? innerHeight };
-  function commitRest() {
-    rest = { x: state.x, y: state.y, w: state.w, h: state.h, vw: innerWidth, vh: innerHeight };
+  function commitRest(axes = 'xywh') {
+    rest = { ...rest, vw: innerWidth, vh: innerHeight };
+    for (const k of axes) rest[k] = state[k];
   }
   // Rest -> display for the current viewport. A frame that rested against the right
   // or bottom edge of ITS authoring viewport rides that edge (judged on the rest rect,
@@ -456,7 +462,10 @@ export function makeFrame(id, opts = {}) {
       paint();
       // A hidden element measures zero, so a frame created hidden never got a
       // real position — it has to be fitted the first time it becomes visible.
-      if (!fitted) { fitted = true; fit(); }
+      // Re-project on EVERY show, not just the first: a hidden frame measures 0 tall,
+      // so edge-docking and fit() were blind to any resize it sat out (Esc, resize,
+      // Esc — review C1). Painted first, so it is measurable now.
+      if (!fitted) { fitted = true; fit(); } else { project(); fit(); }
       save(); raise();
       return api;
     },
@@ -599,7 +608,7 @@ export function makeFrame(id, opts = {}) {
       // deliberately stuck a window under the dock, there's never a situation we should allow this')
       const d = document.querySelector('#dock')?.getBoundingClientRect(), hh = root.offsetHeight;
       state.underDock = !!(d && d.width && d.left < state.x + state.w && state.x < d.right && d.top < state.y + hh && state.y < d.bottom);
-      markMoved(); save();                 // a drag IS the deliberate act
+      markMoved('xy'); save();             // a drag IS the deliberate act — of position
     };
     head.addEventListener('pointermove', move);
     head.addEventListener('pointerup', up);
@@ -647,6 +656,9 @@ export function makeFrame(id, opts = {}) {
   // back at full width on a narrow one and ran off the edge, unreachable under
   // html,body{overflow:hidden} (#185 review). fit() only ever pulls a frame inside
   // the viewport, so honouring a save and fitting it are not in conflict.
+  // A save carries the viewport it was made in: seat it for THIS one before the first
+  // fit, or a docked frame loads mid-air and jumps on the first resize (review C2).
+  if (saved && !state.hidden) { project(); paint(); }
   if (!state.hidden) { fitted = true; fit(); }
   addEventListener('resize', fit);
 

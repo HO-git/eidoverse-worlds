@@ -29,7 +29,7 @@ plugin({
 });
 
 const { THREE } = await import('./core-stub.mjs');
-const { Avatar } = await import('../client/lib/avatar.js');
+const { Avatar, BLINK } = await import('../client/lib/avatar.js');
 const { DRIVEN_BONES } = await import('../client/lib/ragdoll.js');
 
 let pass = 0, fail = 0;
@@ -217,6 +217,78 @@ for (const constant of [false, true]) {
       nodes.hips.quaternion.angleTo(clipPose) < 1e-3,
       `${nodes.hips.quaternion.angleTo(clipPose).toFixed(3)} rad off`);
   }
+}
+
+// ---- eyelids: where "closed" comes from -------------------------------------
+// THREE sources, in descending authority, and the middle one failed silently.
+//
+// Janus removed the Limit Rotation constraints from the upper lids -- a
+// reasonable edit to a rig -- and the blink driver, which INFERRED the closing
+// angle from those constraints, found nothing and fell through to the generic
+// BLINK.closed of 1.2 rad (69 deg). His rig closes at 38-42. The lids swung
+// nearly 30 degrees too far and drove through the eye, and nothing anywhere
+// said so: a fallback that is reached by absence cannot announce itself.
+//
+// So: an authored POSE wins, a constraint is second, the dial is last. Each is
+// asserted here, including that the dial is still reached when a rig offers
+// neither -- the fallback is correct behaviour, it just must not be silent
+// about a rig that HAS an answer.
+{
+  const lidNode = (name: string, extras: Record<string, unknown>) => {
+    const o = new THREE.Object3D();
+    o.name = name;
+    o.userData = { gltfExtras: extras };
+    return o;
+  };
+  const lidsOf = (extras: Record<string, unknown>) => {
+    const scene = new THREE.Object3D();
+    scene.add(lidNode('L_Eyelid_Upper', extras));
+    const av = Object.create(Avatar.prototype) as any;
+    av.vrm = { scene };
+    av._findLids();
+    return av._lids?.[0] ?? null;
+  };
+
+  // 1. AUTHORED POSE: taken as-is, because it is already the angle from rest.
+  const posed = lidsOf({ blink_closed_src: 'pose', blink_closed_x: 0.6593 });
+  check('an authored closed pose is used verbatim',
+    posed?.exported !== null && Math.abs((posed?.exported ?? 0) - 0.6593) < 1e-4,
+    `exported=${posed?.exported}`);
+  check('...and it is nowhere near the generic 1.2 rad dial',
+    Math.abs((posed?.exported ?? 0) - BLINK.closed) > 0.4,
+    `pose ${posed?.exported} vs dial ${BLINK.closed}`);
+
+  // A pose wins even when constraints are ALSO present: the rig author stating
+  // the pose outranks a range that merely brackets it.
+  const both = lidsOf({
+    blink_closed_src: 'pose', blink_closed_x: 0.6593,
+    limit_min_x: 2.618, limit_max_x: 4.189,
+  });
+  check('an authored pose outranks the constraints beside it',
+    Math.abs((both?.exported ?? 0) - 0.6593) < 1e-4, `exported=${both?.exported}`);
+
+  // 2. CONSTRAINTS: absolute angles, so the delta is closed - centre.
+  //    150/240 deg bracketing a rest of ~195 gives 45 deg of closing.
+  const limited = lidsOf({ limit_min_x: 2.618, limit_max_x: 4.189, blink_closed_x: 4.189 });
+  const wantDelta = 4.189 - (2.618 + 4.189) / 2;
+  check('a Limit Rotation is read as closed MINUS the range centre',
+    Math.abs((limited?.exported ?? 0) - wantDelta) < 1e-3,
+    `exported=${limited?.exported} want ${wantDelta.toFixed(4)}`);
+  check('...which is a plausible lid sweep, not a 240-degree one',
+    Math.abs(limited?.exported ?? 9) < 1.0, `exported=${limited?.exported}`);
+
+  // 3. NEITHER: fall back to the dial. This is the state Janus's rig was in.
+  const bare = lidsOf({});
+  check('a rig with no closed angle falls back to the dial',
+    bare?.exported === null, `exported=${bare?.exported}`);
+
+  // and the guards: nonsense is refused rather than driven through the eye
+  const absurd = lidsOf({ blink_closed_src: 'pose', blink_closed_x: 2.9 });
+  check('an implausible pose angle is refused', absurd?.exported === null,
+    `exported=${absurd?.exported}`);
+  const inverted = lidsOf({ limit_min_x: 4.189, limit_max_x: 2.618, blink_closed_x: 4.189 });
+  check('an inverted constraint range is refused', inverted?.exported === null,
+    `exported=${inverted?.exported}`);
 }
 
 // ---- wings ------------------------------------------------------------------

@@ -961,23 +961,42 @@ export class Avatar {
       const m = /^[LR]_Eyelid_(Upper|Lower)$/.exec(o.name ?? '');
       if (!m) return;
       const ex = o.userData?.gltfExtras ?? o.userData ?? {};
-      // A Limit Rotation's numbers are ABSOLUTE angles in the bone's own frame,
-      // not offsets from rest — mythos's upper lids export min 150 / max 240
-      // degrees, bracketing the ~195 the lid actually rests at. Read as a delta
-      // that is a 240-degree sweep: the lid leaves the head entirely and the eye
-      // is bare, which reads as "you can see through the eyelids" and survives
-      // any amount of making the mesh bigger.
-      //
-      // Rest sits at the middle of a range that brackets it, so the closing
-      // delta is closed - centre = 45 degrees here. Anything that does not come
-      // out plausible is discarded in favour of the dial: a rig may have set
-      // those limits for something other than a blink.
+      // TWO SOURCES, in order of authority: a saved closed POSE (authored),
+      // then a Limit Rotation constraint (inferred), then BLINK.closed (a
+      // generic dial). See each branch.
       let lim = NaN;
-      const mn = Number(ex.limit_min_x), mx = Number(ex.limit_max_x);
       const cl = Number(ex.blink_closed_x);
-      if ([mn, mx, cl].every(Number.isFinite) && mx > mn) {
-        const d = cl - (mn + mx) / 2;
-        if (Math.abs(d) > 1e-3 && Math.abs(d) < 1.6) lim = d;
+      if (ex.blink_closed_src === 'pose') {
+        // AUTHORED, not inferred. eido_export.py read this out of a saved
+        // eyes-closed pose asset, so it is already the lid's rotation FROM
+        // REST -- no centring, because there is no range to centre in.
+        //
+        // This path exists because the inferred one quietly stopped working:
+        // Janus removed the Limit Rotation constraints from the upper lids,
+        // which is a reasonable thing to do to a rig, and the branch below
+        // then found nothing and handed the lids BLINK.closed -- 1.2 rad, 69
+        // degrees, against a rig whose closed pose is 38-42. The lids swung
+        // ~30 degrees too far and drove through the eye. A pose asset is the
+        // author saying what closed looks like; a constraint was only ever
+        // evidence about it.
+        if (Number.isFinite(cl) && Math.abs(cl) > 1e-3 && Math.abs(cl) < 1.6) lim = cl;
+      } else {
+        // A Limit Rotation's numbers are ABSOLUTE angles in the bone's own
+        // frame, not offsets from rest -- mythos's upper lids used to export
+        // min 150 / max 240 degrees, bracketing the ~195 the lid rests at.
+        // Read as a delta that is a 240-degree sweep: the lid leaves the head
+        // entirely and the eye is bare, which reads as "you can see through
+        // the eyelids" and survives any amount of making the mesh bigger.
+        //
+        // Rest sits at the middle of a range that brackets it, so the closing
+        // delta is closed - centre. Anything implausible is discarded in
+        // favour of the dial: a rig may have set those limits for something
+        // other than a blink.
+        const mn = Number(ex.limit_min_x), mx = Number(ex.limit_max_x);
+        if ([mn, mx, cl].every(Number.isFinite) && mx > mn) {
+          const d = cl - (mn + mx) / 2;
+          if (Math.abs(d) > 1e-3 && Math.abs(d) < 1.6) lim = d;
+        }
       }
       found.push({
         node: o,

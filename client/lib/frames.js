@@ -367,7 +367,7 @@ export function makeFrame(id, opts = {}) {
     // so toggling any panel once exempted the frame forever. That needs its own
     // signal, persisted with state and written only at the deliberate acts.
     let placed = saved?.placed === true;
-    const markMoved = () => { moved = true; placed = true; state.placed = true; };
+    const markMoved = () => { moved = true; placed = true; state.placed = true; commitRest(); };
   // R, 2026-09-11, on the bug this exists for: the emote bar "will always pop
   // sideways to the right regardless if there's room for it" — snapTo calls
   // _fit() 180ms after every drag settles, and fit() re-centred an x:'center'
@@ -410,13 +410,40 @@ export function makeFrame(id, opts = {}) {
     placed: saved?.placed === true,
   };
 
+  // THE REST RECT: where this frame belongs, and the viewport it was authored in. The
+  // displayed rect (`state`) is DERIVED from it on every viewport change and may be
+  // clamped freely; only a deliberate act (drag end, resize end, reset) or a rider that
+  // owns the frame's size writes here. Clamping `state` directly was a ratchet: shrink
+  // the window until panels collide, grow it back, and they stayed collided, because
+  // the small viewport's answer had become the frame's layout (reported 2026-09-24).
+  // save() persists THIS, so a toggle while the window is small can't bake the squeeze
+  // into the next load either.
+  let rest = { x: state.x, y: state.y, w: state.w, h: state.h,
+    vw: saved?.vw ?? innerWidth, vh: saved?.vh ?? innerHeight };
+  function commitRest() {
+    rest = { x: state.x, y: state.y, w: state.w, h: state.h, vw: innerWidth, vh: innerHeight };
+  }
+  // Rest -> display for the current viewport. A frame that rested against the right
+  // or bottom edge of ITS authoring viewport rides that edge (judged on the rest rect,
+  // never on the clamped one: a mid-air frame squeezed against an edge is not docked
+  // there). Everything is clamped inside afterwards, by the listener and by fit().
+  function project() {
+    const chrome = Math.max(0, (root.offsetHeight || 0) - state.h);
+    let x = rest.x, y = rest.y;
+    if (rest.vw - (rest.x + rest.w) <= 8 + STICKY && !(rest.x <= 8 + STICKY)) x += innerWidth - rest.vw;
+    if (rest.vh - (rest.y + rest.h + chrome) <= 8 + STICKY && !(rest.y <= 8 + STICKY)) y += innerHeight - rest.vh;
+    Object.assign(state, { x, y, w: rest.w, h: rest.h });
+  }
+
   const api = {
     id, el: root, body, head,
     // live refs for riders that own their own sizing (the emote bar snaps itself
     // to whole tiles). _fit is here because writing _state and calling _paint
     // alone BYPASSES the viewport clamp: the bar reflowed to three rows and
     // painted itself past the bottom edge (#185 review, 800x700).
-    _state: state, _paint: () => paint(), _fit: () => fit(), _markMoved: markMoved,
+    _state: state, _paint: () => paint(), _markMoved: markMoved, _project: () => project(),
+    // a rider writing _state.w/h is setting the frame's size, so that is the rest size
+    _fit: () => { rest.w = state.w; rest.h = state.h; fit(); },
       // READER for the same flag (#185 B1): the api carried a SETTER only, so the
       // viewport rule below had no way to ask whether the owner placed this frame.
       // `moved` is !!saved at construction and latches on a real drag or resize.
@@ -474,6 +501,7 @@ export function makeFrame(id, opts = {}) {
         // reset button. (agent review round 2)
         hidden: hidden || (id !== 'chat' && !fitsDefaults()),
       });
+      commitRest();
       // ...and through fit(), not paint() alone: paint skips every viewport
       // clamp, so reset restored the authoring-viewport widths uncapped —
       // chat right=555 in a 390px viewport, 173px unreachable under
@@ -507,7 +535,7 @@ export function makeFrame(id, opts = {}) {
   // persisted"; see the note at the `moved` declaration). This comment used to
   // describe that rejected version and survived the fix. (round 4: comment rot)
   function save() {
-    localStorage.setItem(LS(id), JSON.stringify(state));
+    localStorage.setItem(LS(id), JSON.stringify({ ...state, x: rest.x, y: rest.y, w: rest.w, h: rest.h, vw: rest.vw, vh: rest.vh }));
   }
   function paint() {
     root.style.display = state.hidden ? 'none' : 'flex';
@@ -854,21 +882,15 @@ function stickyEdges(state, height) {
     b: innerHeight - (state.y + height) <= 8 + STICKY,
   };
 }
-let _lastVW = innerWidth, _lastVH = innerHeight;
 let _lastFits = null;   // B1: the fit verdict at the last viewport change
 
 // Ride the edges: frames sticky to right/bottom keep their edge gap when the
 // window resizes; everything is then clamped back inside regardless.
 addEventListener('resize', () => {
-  const dw = innerWidth - _lastVW, dh = innerHeight - _lastVH;
   for (const f of frames.values()) {
     const st = f._state; if (!st) continue;
+    f._project?.();                        // from the rest rect; edge-riding lives there now
     const hgt = f.el.offsetHeight || st.h;
-    // stickiness judged against the OLD viewport (pre-resize geometry)
-    const wasR = _lastVW - (st.x + st.w) <= 8 + STICKY;
-    const wasB = _lastVH - (st.y + hgt) <= 8 + STICKY;
-    if (wasR && !(st.x <= 8 + STICKY)) st.x += dw;
-    if (wasB && !(st.y <= 8 + STICKY)) st.y += dh;
     st.x = clamp(st.x, 8, Math.max(8, innerWidth - st.w - 8));
     st.y = clamp(st.y, 8, Math.max(8, innerHeight - hgt - 8));
     f._paint?.();
@@ -903,7 +925,6 @@ addEventListener('resize', () => {
     }
     _lastFits = fits;
   }
-  _lastVW = innerWidth; _lastVH = innerHeight;
 });
 
 export function getFrame(id) { return frames.get(id); }

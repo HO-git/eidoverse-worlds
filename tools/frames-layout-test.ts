@@ -576,5 +576,75 @@ console.log("AUTO-HIDDEN — survives a reload");
     g._state.autoHidden === false, JSON.stringify(g._state));
 }
 
+console.log("FRAMES — a shrink is not a decision: grow the window back and every panel is where it was");
+{
+  // Reported 2026-09-24: shrink the window until a bottom panel meets the top and
+  // the panels smoosh together, then STAY smooshed when the window grows back, sizes
+  // too. The clamp that keeps a frame inside a small viewport was writing the frame's
+  // own rect, so the small viewport's answer outlived it. Wanted: every panel returns
+  // to its layout position and size on any resize unless the person deliberately
+  // moved or resized it — and one they did move returns to where THEY put it.
+  (window as any).innerWidth = 1000; (window as any).innerHeight = 700;
+  window.dispatchEvent(new Event("resize"));
+  const bl = measurable(makeFrame("rt-bl", { title: "bl", x: 10, y: -10, w: 300, h: 200 })); bl.show();
+  const tr = measurable(makeFrame("rt-tr", { title: "tr", x: -8, y: 8, w: 250, h: 300 })); tr.show();
+  // a returning user's frame: saved by an ordinary show/hide, never dragged
+  localStorage.setItem("ew-frame-rt-saved", JSON.stringify({ x: 400, y: 250, w: 220, h: 180, hidden: false }));
+  const sv = measurable(makeFrame("rt-saved", { title: "saved", x: 40, y: 40, w: 220, h: 180 })); sv.show();
+  // a frame the owner dragged to a spot of their own
+  const pl: any = measurable(makeFrame("rt-placed", { title: "placed", x: 40, y: 40, w: 200, h: 160 })); pl.show();
+  Object.assign(pl._state, { x: 520, y: 330 }); pl._markMoved(); pl._save();
+  const rect = (f: any) => [f.state.x, f.state.y, f.state.w, f.state.h].join(",");
+  const cases: [string, any][] = [["bottom-left default", bl], ["top-right default", tr], ["saved, never placed", sv], ["placed by hand", pl]];
+  const before = cases.map(([, f]) => rect(f));
+
+  (window as any).innerHeight = 260;                      // the bottom panel's top meets the top edge
+  window.dispatchEvent(new Event("resize"));
+  check("the shrink really squeezes (else this binds nothing)",
+    cases.some(([, f], i) => rect(f) !== before[i]), cases.map(([, f]) => rect(f)).join(" | "));
+  sv.hide(); sv.show();                                   // an ordinary toggle while small
+  (window as any).innerHeight = 700;
+  window.dispatchEvent(new Event("resize"));
+  cases.forEach(([name, f], i) =>
+    check(`height shrink → grow: ${name} returns to its rect`, rect(f) === before[i], `${before[i]} -> ${rect(f)}`));
+
+  (window as any).innerWidth = 420;                       // and across: side-by-side panels collide
+  window.dispatchEvent(new Event("resize"));
+  (window as any).innerWidth = 1000;
+  window.dispatchEvent(new Event("resize"));
+  cases.forEach(([name, f], i) =>
+    check(`width shrink → grow: ${name} returns to its rect`, rect(f) === before[i], `${before[i]} -> ${rect(f)}`));
+
+  // The squeeze must not reach storage either: a toggle while small used to persist
+  // the squashed rect, so the NEXT load came up smooshed at full size.
+  (window as any).innerHeight = 260; window.dispatchEvent(new Event("resize"));
+  sv.hide(); sv.show();
+  const stored = JSON.parse(localStorage.getItem("ew-frame-rt-saved") || "{}");
+  check("a toggle while squeezed persists the layout rect, not the squeezed one",
+    [stored.x, stored.y, stored.w, stored.h].join(",") === before[2], JSON.stringify(stored));
+  (window as any).innerHeight = 700; window.dispatchEvent(new Event("resize"));
+
+  // A RIDER owns its frame's size (emotebar.js snapTo writes _state.w/h, then _fit).
+  // What it writes is the frame's size from then on, so a window resize must keep it
+  // rather than re-projecting the size the frame had before the rider spoke.
+  const rider: any = measurable(makeFrame("rt-rider", { title: "rider", x: 40, y: 400, w: 352, h: 32 })); rider.show();
+  rider._state.w = 124; rider._state.h = 108; rider._fit();
+  (window as any).innerWidth = 1001; window.dispatchEvent(new Event("resize"));
+  // Height is the binding axis: an UNPLACED frame's width is re-derived from its
+  // declared w by fit() on purpose (the width-ratchet fix), with or without a rider.
+  check("a rider's height survives the next window resize",
+    rider.state.h === 108, rect(rider));
+  (window as any).innerWidth = 1000; window.dispatchEvent(new Event("resize"));
+
+  // Reset is the deliberate act of un-placing: after it, a resize must not drag the
+  // frame back to where the owner HAD put it.
+  pl.resetLayout();
+  const resetAt = rect(pl);
+  (window as any).innerWidth = 1001; window.dispatchEvent(new Event("resize"));
+  (window as any).innerWidth = 1000; window.dispatchEvent(new Event("resize"));
+  check("after a reset, a window resize keeps the frame at its default, not its old drag spot",
+    rect(pl) === resetAt, `${resetAt} -> ${rect(pl)}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

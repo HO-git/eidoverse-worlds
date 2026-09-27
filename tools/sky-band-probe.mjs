@@ -94,7 +94,13 @@ try {
       let nC;
       try { nC = await bandedBakeRender(rp, scene, cam, C, { cloudPasses: PASSES, passTexelBudget: BUDGET, budget: true }); }
       finally { renderer.render = origRender; renderer.xr.enabled = xrWas; }
-      return { nB, skyWaits, boundSeen, dB: await same(B), nC, dC: await same(C), bandCalls: bandCalls.length, bad: bandCalls.filter((b) => b.xr || b.inRaf).length };
+      // teardown mid-bake (review 2, M1): alive() goes false after 3 strips — the bake stops and says so
+      const D = mk(); let drawn = 0, cancelErr = null;
+      const origR2 = renderer.render;
+      renderer.render = function (s, c) { if (s.children?.some((m) => m.material === mat)) drawn++; return origR2.call(this, s, c); };
+      try { await bandedBakeRender(renderer, scene, cam, D, { cloudPasses: PASSES, passTexelBudget: BUDGET, alive: () => drawn < 3 }); }
+      catch (e) { cancelErr = String(e?.message ?? e); } finally { renderer.render = origR2; }
+      return { drawnAfterTeardown: drawn, cancelErr, nB, skyWaits, boundSeen, dB: await same(B), nC, dC: await same(C), bandCalls: bandCalls.length, bad: bandCalls.filter((b) => b.xr || b.inRaf).length };
     } finally { globalThis.requestAnimationFrame = origRAF; }
   }), new Promise((_, rej) => setTimeout(() => rej(new Error('page pinned 60 s (r2)')), 60000))]);
   if (r2) {
@@ -104,6 +110,7 @@ try {
     check('budgeted: byte-identical to the one-draw bake', r2.nB >= 4 && r2.dB === 0, `${r2.dB} bytes differ over ${r2.nB} strips`);
     check('presenting: every band renders between frames with xr off (never inside an XR frame)', r2.bandCalls >= 4 && r2.bad === 0, `${r2.bad} of ${r2.bandCalls} inside a frame or with xr on`);
     check('presenting: byte-identical to the one-draw bake', r2.dC === 0, `${r2.dC} bytes differ`);
+    check('teardown mid-bake: no strip after the sky is gone, and the bake rejects as cancelled', r2.drawnAfterTeardown === 3 && /cancel/.test(r2.cancelErr ?? ''), JSON.stringify({ drawn: r2.drawnAfterTeardown, err: r2.cancelErr }));
   }
   check('bands: the bake was rendered as several strips, across frames', r.n >= 4 && r.frames >= r.n - 1, `${r.n} strips over ${r.frames} frames (cuts at rows ${r.cuts.join(',')})`);
   check('same: banded pixels are byte-identical to the one-draw bake (seam rows included)', r.diff === 0, `${r.diff} of ${r.total} bytes differ (max Δ ${r.maxd}); rows ${r.badRows.join(',') || '-'}`);

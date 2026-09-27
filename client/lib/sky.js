@@ -20,7 +20,7 @@ const SHADOW_DEBUG_FILL = new URLSearchParams(globalThis.location?.search ?? '')
 import { report, bus, tee, CONFIG } from './base.js';
 import { loadEidoModule, primeFiles, listLibrary, fetchBytes } from './assets.js';
 import { markPhase } from './boot.js';
-import { bandCuts, bandedBakeRender } from './sky_baked.js';
+import { bandCuts, bandedBakeRender, bakeGeneration } from './sky_baked.js';
 import { attachBakedDome, detachBakedDome, updateBakedDome, bakedActive, requestBake,
   envTexture, adoptEnvironment, whenBakeReady } from './sky_baked.js';
 import { beginWork } from './loadwork.js';
@@ -679,6 +679,7 @@ async function ensureSkyBake() {
   // call was spreading the renderer into the options and working by luck.)
   // On baked tiers this same bake IS the visible sky, so it renders at the
   // tier's display resolution and full march quality.
+  const gen = bakeGeneration();       // a teardown mid-bake bumps it: the strips stop, nothing attaches to a dead sky
   try {
     // The boot bake as BANDS (sky_baked.js bandedBakeRender): bakeEnv's one full-quad renderAsync is intercepted for
     // this call only and re-issued as cost-weighted strips across frames — same material, same texels. ?skyband=0 = off.
@@ -710,7 +711,7 @@ async function ensureSkyBake() {
       const target = renderer.getRenderTarget();
       renderer.setRenderTarget(outer ?? null);   // bakeEnv left the bake target bound; the frames between bands are the world's
       const t0 = performance.now();
-      return bandedBakeRender(renderer, sc, cam, target, { cloudPasses: opts.cloudPasses ?? 8, passTexelBudget: BAND_BUDGET, budget: true })
+      return bandedBakeRender(renderer, sc, cam, target, { cloudPasses: opts.cloudPasses ?? 8, passTexelBudget: BAND_BUDGET, budget: true, alive: () => bakeGeneration() === gen })
         .then((n) => { const l = `[sky] boot bake banded: ${n} bands over ${(performance.now() - t0).toFixed(0)} ms`; console.log(l); tee(l); renderer.setRenderTarget(target); });
     };
     try { await skyApi.bakeEnv?.(opts); } finally { renderer.renderAsync = origRA; }
@@ -721,6 +722,7 @@ async function ensureSkyBake() {
     // content into the persistent texture and put it back (see module top)
     adoptEnvironment();
   } catch (e) { console.warn('sky reflections unavailable', e); }
+  if (bakeGeneration() !== gen) return;   // torn down while baking: a newer build owns the sky now
   if (BAKED_TIERS[cloudQuality]) {
     const { cloudPasses, intervalMs } = BAKED_TIERS[cloudQuality];
     if (!attachBakedDome(skyApi, { cloudPasses, intervalMs })) {

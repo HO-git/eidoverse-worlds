@@ -47,6 +47,8 @@ let sys = null;        // sky_system internals
 let targets = null;    // [A, B] — A is the engine's _envTarget, B is ours
 let blendU = null;     // 0 → targets[0] on the dome, 1 → targets[1]
 let front = 0;         // index the blend currently rests on
+let bakeGen = 0;       // bumped at teardown: a band loop or refresh from an older sky stops instead of drawing into freed targets
+export const bakeGeneration = () => bakeGen;
 let bandScene = null;
 let bandMeshes = null;
 let bandGeos = null;
@@ -178,7 +180,7 @@ export async function renderBetweenXRFrames(r, fn) {
  *  global uvs as the quad — so the same texels, just not in one draw. The band pipeline is compiled off the render path
  *  first (a cold band met inside a frame is the 1.5MB-shader stall again). Returns the band count. */
 export async function bandedBakeRender(r, bakeScene, bakeCam, target, { cloudPasses = cfg.cloudPasses, passTexelBudget = cfg.passTexelBudget,
-  nextFrame = () => new Promise((res) => requestAnimationFrame(res)), budget = false } = {}) {
+  nextFrame = () => new Promise((res) => requestAnimationFrame(res)), budget = false, alive = () => true } = {}) {
   const bakeMat = bakeScene.children?.[0]?.material;
   if (!bakeMat) throw new Error('bandedBakeRender: bake scene has no quad');
   const cuts = bandCuts(target.width, target.height, cloudPasses, passTexelBudget);
@@ -202,7 +204,9 @@ export async function bandedBakeRender(r, bakeScene, bakeCam, target, { cloudPas
       // budget: each band is a gpu unit of the shared per-frame budget (the client's callers; the probe paces itself).
       // Nothing is bound across this wait: other frames render meanwhile.
       const g = budget ? await turn('sky', { gpu: true }) : null;
+      if (!alive()) throw new Error('bake cancelled: the sky was torn down mid-bake');   // finally frees the strips
       const draw = () => {
+        if (!alive()) throw new Error('bake cancelled: the sky was torn down mid-bake');   // again: a macrotask may have passed
         for (let j = 0; j < meshes.length; j++) meshes[j].visible = j === i;
         const prev = r.getRenderTarget(), autoClear = r.autoClear;
         r.autoClear = false;          // strips abut and each fully overdraws its own texels
@@ -573,6 +577,7 @@ function maybeRefreshGraph() {
   refreshHeldLogged = false;
   state = 'refreshing';
   const A = targets[0];
+  const gen = bakeGen, alive = () => gen === bakeGen;
   // bakeEnv's single full-quad renderAsync becomes cost-weighted strips (the boot bake's treatment, sky.js):
   // one 4096x2048 multi-pass draw is past what a GPU watchdog tolerates. Strips pause while presenting.
   const origRA = renderer.renderAsync;
@@ -583,12 +588,13 @@ function maybeRefreshGraph() {
     const target = renderer.getRenderTarget();
     renderer.setRenderTarget(outer ?? null);
     const t0 = performance.now();
-    return bandedBakeRender(renderer, sc, cam, target, { cloudPasses: cfg.cloudPasses, passTexelBudget: cfg.passTexelBudget, nextFrame: nextDesktopFrame, budget: true })
+    return bandedBakeRender(renderer, sc, cam, target, { cloudPasses: cfg.cloudPasses, passTexelBudget: cfg.passTexelBudget, nextFrame: nextDesktopFrame, budget: true, alive })
       .then((n) => { refreshStats.bands = n; tee(`[sky] graph refresh baked in ${n} bands over ${(performance.now() - t0).toFixed(0)} ms`); renderer.setRenderTarget(target); });
   };
   Promise.resolve(sys.bakeEnv(renderer, {
     width: A.width, height: A.height, cloudPasses: cfg.cloudPasses,
   })).finally(() => { renderer.renderAsync = origRA; }).then(() => {
+    if (!alive()) return;             // torn down meanwhile: this dome, its targets and its state are someone else's now
     const bake = sys._envBake;
     const bakeMat = bake?.scene?.children?.[0]?.material;
     if (!bakeMat) throw new Error('bake graph missing after refresh');
@@ -607,6 +613,7 @@ function maybeRefreshGraph() {
     state = 'warming';
     return warmBakePipeline().then(() => { if (state === 'warming') state = 'idle'; });
   }).catch((e) => {
+    if (!alive()) return;
     console.warn('[sky] bake graph refresh failed', e?.message ?? e);
     pinnedCloudsOn = wantClouds;   // stop retrying every cycle
     state = 'idle';
@@ -668,6 +675,7 @@ function finishBake(now) {
  *  sky.js's teardown diff claimed the real domes at build time, so putting
  *  them back in the scene lets its disposal pass find them again. */
 export function detachBakedDome() {
+  bakeGen++;
   if (parked) {
     for (const d of parked) scene.add(d);
     parked = null;

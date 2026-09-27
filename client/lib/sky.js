@@ -21,7 +21,7 @@ import { report, bus, tee, CONFIG } from './base.js';
 import { loadEidoModule, primeFiles, listLibrary, fetchBytes } from './assets.js';
 import { markPhase } from './boot.js';
 import { bandCuts, bandedBakeRender, bakeGeneration } from './sky_baked.js';
-import { attachBakedDome, detachBakedDome, updateBakedDome, bakedActive, requestBake,
+import { attachBakedDome, detachBakedDome, updateBakedDome, bakedActive, requestBake, holdLiveDomesInXR, releaseLiveDomes,
   envTexture, adoptEnvironment, whenBakeReady } from './sky_baked.js';
 import { beginWork } from './loadwork.js';
 import { setDayness, releaseForeignLights } from './lightrig.js';
@@ -140,8 +140,14 @@ let heldRebuild = false;          // a sky-world switch that arrived in the head
 let rebuildInXR = false;          // the VR cap's own flip at entry is allowed through (it exists to make VR cheaper)
 /** What the headset is holding back, for the probe and the debug panel: { quality, rebuild } or null. */
 export const skyHeld = () => (heldQuality || heldRebuild ? { quality: heldQuality, rebuild: heldRebuild } : null);
+// In a headset the live cloud march never shows when a baked dome is on its way: held out until it attaches
+// (sky_baked.holdLiveDomesInXR). A tier with no baked dome (high, where the VR cap doesn't apply) keeps its march.
+function holdLiveInHeadset() {
+  if (xrPresenting && BAKED_TIERS[cloudQuality] && cloudQuality !== 'off' && !bakedActive()) holdLiveDomesInXR(skyApi);
+}
 bus.on('xr:state', (on) => {
   xrPresenting = !!on;
+  if (on) holdLiveInHeadset(); else releaseLiveDomes();   // the desktop shows the live march until its bake lands
   // At exit, ONE rebuild covers whatever was held: a held quality rebuilds at that level (and picks up a held world
   // switch, since the rebuild reads the latest sky args); the cap's own restore below rebuilds too, so when the cap is
   // active it carries the held world switch and nothing extra runs. (A quality held while capped cannot exist: the
@@ -521,6 +527,7 @@ async function renderEidoverse(a) {
     try { await building; } finally { building = null; }
   }
   applyLive(a);
+  holdLiveInHeadset();                   // a build in a headset: no live march on screen while its bake is coming
   const bake = beginWork('sky bake');    // names the env-bake + reflections gaps
   phase('apply');
   try { await ensureSkyBake(); } finally { bake.end(); }

@@ -43,6 +43,28 @@ import { ask, spent, turn } from './framebudget.js';
 let dome = null;
 let mat = null;
 let parked = null;     // the live domes we pulled out of the scene graph
+let xrHeld = null;     // [dome, parent] pairs held out of the scene in a headset until a baked dome takes over
+
+/** In a headset the live domes are the full per-eye cloud march: different noise in each eye, and on the owner's rig
+ *  ~13 fps while a first compile runs (09-27). When a baked tier is coming, hold them out until the baked dome attaches;
+ *  the sky meanwhile is the atmosphere without clouds. Safe to call repeatedly. */
+export function holdLiveDomesInXR(skyApi) {
+  if (dome || xrHeld) return false;
+  const s = skyApi?._internals?.sky;
+  const live = (s?.domes ?? []).filter((d) => d?.parent);
+  if (!live.length) return false;
+  xrHeld = live.map((d) => [d, d.parent]);
+  for (const [d, p] of xrHeld) p.remove(d);
+  tee(`[sky] headset: ${xrHeld.length} live cloud dome(s) held out until the baked dome is ready`);
+  return true;
+}
+/** Put held domes back (the baked dome is attaching, the sky is being torn down, or the session ended). */
+export function releaseLiveDomes() {
+  if (!xrHeld) return;
+  for (const [d, p] of xrHeld) if (!d.parent) p.add(d);
+  xrHeld = null;
+}
+export const liveDomesHeld = () => !!xrHeld;
 let sys = null;        // sky_system internals
 let targets = null;    // [A, B] — A is the engine's _envTarget, B is ours
 let blendU = null;     // 0 → targets[0] on the dome, 1 → targets[1]
@@ -246,6 +268,7 @@ export function attachBakedDome(skyApi, opts = {}) {
   // sky.update() re-asserts cloudDome.visible on every weather/cloud change,
   // so a visibility flag would not stay put. Off-scene meshes cost nothing,
   // and update()'s position/visible writes against them stay harmless.
+  releaseLiveDomes();   // held in a headset: back in, so the park below takes them (and teardown can find them)
   parked = s.domes.filter((d) => d?.parent);
   for (const d of parked) d.parent.remove(d);
 
@@ -681,6 +704,7 @@ function finishBake(now) {
  *  them back in the scene lets its disposal pass find them again. */
 export function detachBakedDome() {
   bakeGen++;
+  releaseLiveDomes();
   if (parked) {
     for (const d of parked) scene.add(d);
     parked = null;

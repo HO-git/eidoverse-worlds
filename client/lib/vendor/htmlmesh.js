@@ -6,7 +6,7 @@
 // matches xrpanels' 900 px/m; (2) inline <svg> drawn via serialise→Image (the icon system);
 // (3) `pause`/`resume` + a per-instance min interval so live panels don't re-rasterise at 60 Hz;
 // (4) events are NOT re-dispatched on window (three's did — it tripped desktop handlers);
-// (5) elementAt/scrollAt for trigger-scroll; (7) a pick targets ONE element and bubbles; (6) `suspend`/`unsuspend` — the DOM observer off while a
+// (8) wrapped text nodes draw word by word; (5) elementAt/scrollAt for trigger-scroll; (7) a pick targets ONE element and bubbles; (6) `suspend`/`unsuspend` — the DOM observer off while a
 // kept quad's element is back on the desktop (domquad's soft swap).
 import {
 	CanvasTexture,
@@ -338,7 +338,26 @@ function html2canvas( element, scale = 1 ) {   // EIDO (1)
 			width = rect.width;
 			height = rect.height;
 
-			drawText( style, x, y, element.nodeValue.trim() );
+			// EIDO (8): a text node that WRAPS spans several line boxes; drawn as one fillText at its bounding box it
+			// started at the box's left (over a chat line's name) and left the wrapped lines empty (the owner's
+			// headset pass, 09-27). Wrapped nodes draw word by word, each at its own laid-out position.
+			if ( range.getClientRects().length > 1 ) {
+
+				const text = element.nodeValue, re = /\S+/g;
+				let m;
+				while ( ( m = re.exec( text ) ) !== null ) {
+
+					range.setStart( element, m.index ); range.setEnd( element, m.index + m[ 0 ].length );
+					const r = range.getBoundingClientRect();
+					if ( r.width > 0 ) drawText( style, r.left - offset.left - 0.5, r.top - offset.top - 0.5, m[ 0 ] );
+
+				}
+
+			} else {
+
+				drawText( style, x, y, element.nodeValue.trim() );
+
+			}
 
 		} else if ( element instanceof SVGSVGElement ) {   // EIDO (2): the icon system is inline <svg>
 			const r = element.getBoundingClientRect(); const x = r.left - offset.left, y = r.top - offset.top, w = r.width, h = r.height;

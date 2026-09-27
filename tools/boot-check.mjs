@@ -107,6 +107,10 @@ try {
             : null;
           return { id: (t.title || t.getAttribute('aria-label') || t.textContent || '?').trim().slice(0, 18), owner }; })
         .filter((c) => c.owner),
+      // the owner's rule for the capability card (09-27): it may cover anything while its dismiss button is visible
+      // and clickable, i.e. the pixel at the button's centre is the button
+      capDismissable: (() => { const bt = document.querySelector('.capnotice .cn-ok'); if (!bt) return null; const r = bt.getBoundingClientRect();
+        if (!r.width || !r.height) return false; const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return bt === h || bt.contains(h); })(),
       // how many control surfaces were MEASURABLE at all. A check that reports
       // green from an empty collection is worse than no check: at 390x844 the
       // emote bar is hidden by fitsDefaults, so `.frame .tile` yields nine
@@ -173,7 +177,10 @@ try {
     // over a z-25 bar, or the rail once it reorients along the top edge.
     // EVERY thief counts, including ones outside my selector list — dropping
     // 'other' is how #earbtn's inner <rect> made a real occluder invisible.
-    const stolen = g.controls ?? [];
+    // …except under the capability card while it can be dismissed (owner, 09-27; intentionally reverses #185 B2's
+    // reachability rule for this one dismissible notice). A card whose dismiss button can't be clicked still fails.
+    if (g.capDismissable === false) fail(`the capability card's dismiss button is not clickable at ${g.vw}x${g.vh} (${where})`);
+    const stolen = (g.controls ?? []).filter((c) => !(c.owner === '.capnotice' && g.capDismissable));
     if (stolen.length) {
       fail(`controls unreachable at ${g.vw}x${g.vh} — the pixel at their centre belongs to other chrome (${where}):\n  `
         + stolen.map((c) => `"${c.id}" covered by ${c.owner}`).join('\n  '));

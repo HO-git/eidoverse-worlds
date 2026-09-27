@@ -6,6 +6,7 @@ import { getFrame } from './frames.js';
 import { takeGpuRecovered } from './gpulost.js';
 
 const LS = 'ew-capnotice-dismissed';
+export const AUTO_MS = 30000;
 export const WEBGL = {
   title: 'Running on WebGL 2',
   body: 'This browser is using its WebGL 2 backend instead of WebGPU — usually a phone, an older browser, or VR on a browser without WebGPU flags. ' +
@@ -15,9 +16,7 @@ export const WEBGL = {
 let card = null;
 let setAnchor = null;   // the matchMedia handler, live only while a card exists
 let unwatch = null;     // its teardown, run when the last item is dismissed
-let placeTop = null;    // the card lands UNDER the settled emote bar
-let barRO = null;       // the bar reflows without firing any event
-let barSeen = null;
+let placeTop = null;    // top-centre, over everything (owner, 09-27)
 function dismissed() { try { return new Set(JSON.parse(localStorage.getItem(LS) || '[]')); } catch { return new Set(); } }
 
 // a card that is the ONLY explanation for a dead canvas can't be silenced for good (review 12a L1): the page stopped
@@ -56,68 +55,22 @@ function show(key, title, body) {
     // fed snapTo a negative width and reflowed the 9-across bar to a 48x350 column)."
     // That is exactly what reached a phone — nine tiles in one 48px column down the
     // right edge. The card is now removed from that list and placed SECOND instead.
-    placeTop = () => {
-      if (!card) return;
-      // TOP-CENTRE unless something is there (owner, 09-19: 'top-center if there is no menu currently there —
-      // avoid menus if there is a reason to'). Every width: the same measurement, against the card's own span.
-      const cr = card.getBoundingClientRect(); const x0 = cr.left, x1 = cr.right;
-      const inSpan = (g) => g.right > x0 && g.left < x1;
-      const bar = getFrame('emotes')?.el;
-      if (bar && bar !== barSeen && typeof ResizeObserver === 'function') {
-        barSeen = bar; barRO?.disconnect(); barRO = new ResizeObserver(() => placeTop?.()); barRO.observe(bar);
-      }
-      // ONLY the rail and its glyphs, and only where they reach into the card's own
-      // x-span: the VERTICAL rail at [0..42] never reaches left:50, the HORIZONTAL one
-      // at [10..304] does. The BAR IS NOT CLEARED — see below.
-      let bottom = 0;
-      for (const sel of ['#dock', '#micbtn', '#earbtn']) {
-        const g = document.querySelector(sel)?.getBoundingClientRect();
-        if (g && g.width && inSpan(g) && g.top < 120) bottom = Math.max(bottom, g.bottom);
-      }
-      // AND THE BAR, WHICH THE CARD MUST CLEAR — not because the bar constrains the
-      // card's SIZE (it does not; the bar is out of roomFor()'s list and the card is out
-      // of the bar's, so the cycle is gone in both directions) but because a tile whose
-      // centre is covered cannot be tapped. The card is z-60 and the bar z-25, so
-      // "over it" is not a compromise the z-order can rescue: boot-check@390x844 reports
-      // `"stand" covered by .capnotice` and that is Mica's #185 B2 in miniature —
-      // "9 of 9 tiles unclickable ... reachable again the moment the card was dismissed".
-      // Dismissibility is not reachability.
-      if (bar && getComputedStyle(bar).display !== 'none') {
-        const g = bar.getBoundingClientRect();
-        if (g.width && inSpan(g)) bottom = Math.max(bottom, g.bottom);
-      }
-      // ...AND EVERY OTHER CONTROL IN THE TOP HALF OF THE CARD'S SPAN. Four attempts
-      // enumerated chrome by hand (#dock, #micbtn, #earbtn, the bar) and every one
-      // missed the thing actually being covered: chat's tab row, which is `.frame
-      // button`. boot-check@844x390+touch names them — "all" / "mentions" / "system" /
-      // "chat options" — sitting at y 80..109 in landscape, BELOW the bar's 56. There
-      // is no gap between the two to land in, so the card clears both.
-      //
-      // The top-half bound is what keeps this from chasing chat's own tabs in PORTRAIT,
-      // where they sit at y 534 and the card belongs at 52. A control whose centre is
-      // past the midline is not in the card's way; it is on the other side of the screen.
-      for (const el of document.querySelectorAll('.frame .tile, .frame button, #dock button')) {
-        const g = el.getBoundingClientRect();
-        if (!g.width || !g.height || !inSpan(g)) continue;
-        if (g.top + g.height / 2 > innerHeight / 2) continue;
-        bottom = Math.max(bottom, g.bottom);
-      }
-      card.style.top = Math.round(bottom + 8) + 'px';
-    };
-
+    // TOP-CENTRE, OVER EVERYTHING, UNTIL DISMISSED (owner, 09-27). This used to measure the rail, the emote bar and
+    // every frame button in its span and drop below them (#185 B2: 'dismissibility is not reachability'). With the
+    // layouts people actually build, the card wandered: mid-screen over the body, half across a panel. The owner's
+    // rule replaces it: a notice with a visible, clickable dismiss button may cover anything until it's dismissed, and
+    // each item also dismisses itself for this visit after AUTO_MS (paused while the pointer is on it), so nothing
+    // stays covered for long even if nobody clicks. boot-check tests exactly that rule.
+    placeTop = () => { if (card) card.style.top = '8px'; };
     document.body.appendChild(card);   // IN THE DOM BEFORE THE FIRST MEASURE: a detached card's rect is all zeros, every occupant test misses, and the card is born over the emote bar (pre-review B1)
     const repaint = () => { setAnchor(); placeTop(); };
     repaint();
     mq.addEventListener('change', repaint);
     addEventListener('resize', repaint);
     addEventListener('dockmoved', repaint);
-    // nothing announces the bar opening: the dock button calls the frame's show(),
-    // which paints and saves and emits nothing. mictoggle.js uses the same safety net.
-    const tick = setInterval(() => placeTop?.(), 2000);
     unwatch = () => {
       mq.removeEventListener('change', repaint); removeEventListener('resize', repaint);
-      removeEventListener('dockmoved', repaint); clearInterval(tick);
-      barRO?.disconnect(); barRO = null; barSeen = null;
+      removeEventListener('dockmoved', repaint);
       setAnchor = null; placeTop = null; unwatch = null;
     };
   }
@@ -127,7 +80,13 @@ function show(key, title, body) {
   item.innerHTML = '<b></b><p></p><div class="cn-btns"><button class="cn-ok">got it</button><button class="cn-never">don’t show again</button></div>';
   item.querySelector('b').textContent = title;
   item.querySelector('p').textContent = body;
-  const close = () => { item.remove(); if (card && !card.childElementCount) { card.remove(); card = null; unwatch?.(); } };
+  let auto = 0;
+  const close = () => { clearTimeout(auto); item.remove(); if (card && !card.childElementCount) { card.remove(); card = null; unwatch?.(); } };
+  // the fallback: gone for this visit after AUTO_MS unless the pointer is on it (not 'don't show again')
+  const arm = () => { clearTimeout(auto); auto = setTimeout(close, AUTO_MS); };
+  item.addEventListener('mouseenter', () => clearTimeout(auto));
+  item.addEventListener('mouseleave', arm);
+  arm();
   item.querySelector('.cn-ok').onclick = close;
   if (ESSENTIAL.has(key)) item.querySelector('.cn-never').remove();
   else item.querySelector('.cn-never').onclick = () => { try { seen.add(key); localStorage.setItem(LS, JSON.stringify([...seen])); } catch {} close(); };

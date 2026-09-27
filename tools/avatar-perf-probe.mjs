@@ -18,8 +18,9 @@ try {
     // the current server's answer; OLD_SERVER=1 answers like a pre-stamp server (a portrait exists, perf ignored)
     await route.fulfill({ status: 200, contentType: 'application/json', body: process.env.OLD_SERVER ? '{"ok":true,"existed":true}' : '{"ok":true,"meta":true,"perf":true}' });
   });
-  let synthName = null;
+  let synthName = null, rosterFetches = 0;
   await pg.route('**/avatars', async (route) => {
+    rosterFetches++;
     const res = await route.fetch(); const j = await res.json();
     if (j[0]) { synthName = j[0].name; j[0] = { ...j[0], perf: { tris: 123456, draws: 55, mats: 14, alpha: 3, bones: 160, texMB: 44.2, rank: 3, rankName: 'poor', worst: 'tris', v: '1' } }; }
     for (const a of j.slice(1)) a.perf = null;
@@ -78,15 +79,28 @@ try {
   const cards = await pg.evaluate(async () => {
     document.querySelector('#sec-avatar .head')?.click();
     for (let i = 0; i < 60 && !document.querySelector('#sec-avatar .av-grid .card'); i++) await new Promise((r) => setTimeout(r, 100));
-    return [...document.querySelectorAll('#sec-avatar .av-grid .card')].map((c) => ({ name: c.querySelector('span')?.textContent, title: c.title,
+    return [...document.querySelectorAll('#sec-avatar .av-grid .card')].map((c) => ({ name: c.querySelector('span')?.textContent, title: c.querySelector('.av-shot .opt-rank')?.title ?? '', cardTitle: c.title,
       pill: c.querySelector('.av-shot .opt-rank') ? { rank: c.querySelector('.opt-rank').dataset.rank, bg: getComputedStyle(c.querySelector('.opt-rank')).backgroundColor,
         inShot: (() => { const a = c.querySelector('.av-shot').getBoundingClientRect(), b = c.querySelector('.opt-rank').getBoundingClientRect(); return b.right <= a.right - 4 && b.bottom <= a.bottom - 4 && b.top > a.top + a.height / 2; })() } : null }));
   });
   const syn = cards.find((c) => c.name === synthName), others = cards.filter((c) => c.name !== synthName);
   console.log(`   ${cards.length} avatar cards; synthetic: ${JSON.stringify(syn?.pill)}`);
   check('avatar card with a perf record: rank pill in its tier color, inset on the portrait\'s bottom-right', syn?.pill?.rank === '3' && syn.pill.bg === 'rgb(255, 122, 47)' && syn.pill.inShot, syn);
-  check('…the hover names the rank, the category and the numbers', /^perf: poor — set by triangles\n\s+123,456 tris · 55 draws/.test(syn?.title ?? ''), syn?.title);
-  check('cards without a record: no pill, the hover says not measured yet', others.length > 0 && others.every((c) => !c.pill && /not measured yet/.test(c.title)), others.slice(0, 2));
+  check('the perf tooltip is ON the pill; the card tooltip is just the name', syn?.cardTitle === syn?.name && !/perf/.test(syn?.cardTitle ?? ''), [syn?.cardTitle, syn?.name]);
+  check('…the pill hover names the rank, the category and the numbers', /^perf: poor — set by triangles\n\s+123,456 tris · 55 draws/.test(syn?.title ?? ''), syn?.title);
+  check('cards without a record: no pill; the card tooltip is just the name', others.length > 0 && others.every((c) => !c.pill && !c.title && c.cardTitle === c.name), others.slice(0, 2));
+  // (4) with the avatar section OPEN, wearing a not-yet-stamped body repaints it once the stamp is confirmed
+  const before = rosterFetches;
+  const third = await pg.evaluate(async (skip) => {
+    const list = await (await fetch('/avatars')).json();
+    const t = list.find((a) => !skip.includes(a.name) && !/corrupt/.test(a.name));
+    if (!t) return null;
+    const { switchAvatar } = await import('./lib/palette.js');
+    await switchAvatar(t.path, t.name); return t.name;
+  }, [live.name, other.other]);
+  await pg.waitForTimeout(6000);
+  const stampedThird = posts.some((u) => u.includes('perf=') && new URL(u).searchParams.get('name') === third);
+  check('a confirmed stamp repaints the open avatar section (it re-reads the roster)', !!third && stampedThird && rosterFetches >= before + 2, { third, stampedThird, before, after: rosterFetches });
   check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | ') || 'none');
 } catch (e) { check('probe ran', false, String(e).slice(0, 300)); }
 finally { await browser.close(); await world.close(); }

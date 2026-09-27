@@ -178,10 +178,15 @@ const tip = document.createElement('div');
 tip.id = 'tipchip';
 document.body.appendChild(tip);
 let tipTimer = null, tipHost = null;
+// ancestors with their own title= while a DESCENDANT holds the tip: their titles are borrowed too, or the browser
+// paints the ancestor's NATIVE tooltip beside ours (owner, 09-24: a Build card's name over its ↻ chip's hint)
+let tipAnc = [];
 
 function tipHide() {
   clearTimeout(tipTimer); tipTimer = null;
   if (tipHost) { if (tipHost._tip) tipHost.setAttribute('title', tipHost._tip); tipHost._tip = null; tipHost = null; }
+  for (const [el, t] of tipAnc) el.setAttribute('title', t);
+  tipAnc = [];
   tip.classList.remove('show');
 }
 document.addEventListener('mouseover', (e) => {
@@ -191,6 +196,9 @@ document.addEventListener('mouseover', (e) => {
   const text = host.getAttribute('title');
   if (!text) return;
   tipHost = host; host._tip = text; host.removeAttribute('title');
+  for (let a = host.parentElement?.closest('[title]'); a; a = a.parentElement?.closest('[title]')) {
+    tipAnc.push([a, a.getAttribute('title')]); a.removeAttribute('title');
+  }
   tipTimer = setTimeout(() => {
     if (tipHost !== host || !document.body.contains(host)) return;
     tip.textContent = host._tip;   // reread: paintHud may have refreshed it

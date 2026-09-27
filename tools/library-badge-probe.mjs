@@ -33,6 +33,12 @@ try {
   await pg.goto(`${world.origin}/?world=staging&name=badgeprobe&key=${world.key}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await pg.waitForFunction(() => globalThis.__ewEngineUp && document.querySelector('#sec-build .head'), null, { timeout: 60000 });
   const r = await pg.evaluate(async () => {
+    // the panel's OPENING cards (the starters, before any search) carry status too
+    document.querySelector('#sec-build .head').click();
+    for (let i = 0; i < 60 && !document.querySelector('#sec-build .grid .card .opt-rank'); i++) await new Promise((res) => setTimeout(res, 100));
+    const opening = [...document.querySelectorAll('#sec-build .grid .card')].map((c) => ({ name: c.querySelector('span')?.textContent, rank: c.querySelector('.opt-rank')?.dataset.rank ?? null }));
+    document.querySelector('#sec-build .head').click();
+    globalThis.__opening = opening;
     const Q = 'glb';   // every filename-scored entry matches; store entries match on their manifest names or not at all
     document.querySelector('#sec-build .head').click();
     for (let i = 0; i < 40 && !document.querySelector('#sec-build input[type=search]'); i++) await new Promise((res) => setTimeout(res, 100));
@@ -48,7 +54,9 @@ try {
     input.value = Q; input.dispatchEvent(new Event('input'));
     const json = await (await fetch(`/library-models?q=${Q}`)).json();
     for (let i = 0; i < 60 && document.querySelectorAll('#sec-build .grid .card').length < json.length; i++) await new Promise((res) => setTimeout(res, 100));
-    const cards = [...document.querySelectorAll('#sec-build .grid .card')].map((c) => ({ name: c.querySelector('span')?.textContent, title: c.title, chip: [...c.querySelectorAll('.opt-chip')].map((x) => x.textContent).join('') || null,
+    const cards = [...document.querySelectorAll('#sec-build .grid .card')].map((c) => ({ name: c.querySelector('span')?.textContent, cardTitle: c.title,
+      // tooltips live on the pill (perf + status) and the chips (status) — the hover text is theirs, not the card's
+      title: [c.querySelector('.opt-rank')?.title, ...[...c.querySelectorAll('.opt-chip')].map((x) => x.title)].filter(Boolean).join('\n'), chip: [...c.querySelectorAll('.opt-chip')].map((x) => x.textContent).join('') || null,
       rank: c.querySelector('.opt-rank')?.dataset.rank ?? null,
       // measured against the PICTURE: the row sits on the image's bottom-right, clear of its top label strip and the name
       box: (() => { const im = c.querySelector('.pv img, .pv > div')?.getBoundingClientRect(), row = c.querySelector('.opt-row')?.getBoundingClientRect();
@@ -70,7 +78,7 @@ try {
       everyCard: [...document.querySelectorAll('#sec-build .grid .card')].every((c) => !!c.querySelector('.opt-rebuild') !== (c.querySelector('span')?.textContent === 'zz synthetic overlay only')),
       overlayHasNone: (() => { const c = [...document.querySelectorAll('#sec-build .grid .card')].find((c) => c.querySelector('span')?.textContent === 'zz synthetic overlay only'); return !!c && !c.querySelector('.opt-rebuild'); })(),
       token: CONFIG.token ?? '', tip: chip?.title ?? null, toast: toasts.find((t) => /rebuild/.test(t)) ?? null, after: chip?.textContent };
-    return { json, cards, reb, starters };
+    return { json, cards, reb, starters, opening: globalThis.__opening };
   });
   // by INDEX, not name: display names truncate at 48 chars and two library files share one (paint keeps order)
   let mism = [];
@@ -101,14 +109,81 @@ try {
   console.log(`   note: real-catalog chips (excluding synthetic) ⚠ ${r.json.filter((h) => !h.path.startsWith('store/syn-') && Object.values(h.opt).some((v) => ['refused', 'deferred', 'stale'].includes(v.state))).length}, LOD ${r.json.filter((h) => !h.path.startsWith('store/syn-') && h.opt.lod?.state === 'built').length}`);
   const syn = (n) => r.cards.find((c) => c.name === n);
   check('synthetic: stale → ⚠, deferred → ⚠, refused → ⚠, lod built → LOD, all-pending → no chip', syn('zz synthetic stale')?.chip === '⚠' && syn('zz synthetic deferred')?.chip === '⚠' && syn('zz synthetic refused')?.chip === '⚠' && syn('zz synthetic lod built')?.chip === 'LOD' && syn('zz synthetic pending')?.chip === null, ['stale', 'deferred', 'refused', 'lod built', 'pending'].map((k) => syn(`zz synthetic ${k}`)?.chip));
-  const q = rebuilds[0] ? new URL(rebuilds[0].url).searchParams : null;
+  // ONE tooltip at a time: card → its ↻ chip with the real mouse. While the chip's house tip shows, the card must hold no
+  // native title (else Chrome paints it beside ours — owner, 09-24 22:29); after leaving, both titles are back.
+  const cardSel = '#sec-build .grid .card:nth-child(1)';
+  await pg.hover(cardSel, { position: { x: 20, y: 20 } }); await pg.waitForTimeout(600);
+  await pg.hover(`${cardSel} .opt-rebuild`); await pg.waitForTimeout(700);
+  const onChip = await pg.evaluate((sel) => ({ cardTitle: document.querySelector(sel).getAttribute('title'),
+    tip: document.querySelector('#tipchip.show')?.textContent ?? null }), cardSel);
+  await pg.mouse.move(5, 5); await pg.waitForTimeout(300);
+  const after = await pg.evaluate((sel) => ({ cardTitle: document.querySelector(sel).getAttribute('title'), chipTitle: document.querySelector(`${sel} .opt-rebuild`).getAttribute('title') }), cardSel);
+  console.log('   tooltip handoff:', JSON.stringify({ onChip, after }));
+  check('hovering the ↻ chip shows ONLY its tip (the card holds no native title meanwhile)', onChip.cardTitle === null && /^rebuild GPU textures/.test(onChip.tip ?? ''), onChip);
+  check('…and both titles come back on leave', !!after.cardTitle && /^rebuild/.test(after.chipTitle ?? ''), after);
+  const firstClickPosts = rebuilds.slice();   // the ↻ check below is about the FIRST click (the section below clicks ↻ again)
+  // a REAL mouse click on each chip of a card must not start a placement (the card's own click holds a ghost)
+  const chipClicks = {};
+  for (const sel of ['.opt-rank', '.opt-chip', '.opt-rebuild']) {
+    const card = await pg.evaluateHandle((s) => [...document.querySelectorAll('#sec-build .grid .card')].find((c) => c.querySelector(s)), sel);
+    const el = await card.asElement()?.$(sel);
+    if (!el) { chipClicks[sel] = 'absent'; continue; }
+    await el.click(); await pg.waitForTimeout(400);
+    chipClicks[sel] = await pg.evaluate(async () => { const b = await import('./lib/build.js'); const g = b.hasGhost(); b.cancelGhost(); return g; });
+  }
+  const focusAfterClick = await pg.evaluate(() => document.activeElement?.className ?? '');
+  const bodyClick = await pg.evaluate(async () => { const c = document.querySelector('#sec-build .grid .card'); c.querySelector('span').click(); await new Promise((r) => setTimeout(r, 1500)); const b = await import('./lib/build.js'); const g = b.hasGhost(); b.cancelGhost(); return g; });
+  console.log('   chip clicks → ghost?', JSON.stringify(chipClicks), '| card body → ghost?', bodyClick);
+  check('a real click on the pill, a LOD/⚠ chip, or ↻ never starts a placement', Object.values(chipClicks).every((v) => v === false), chipClicks);
+  check('…while a click on the card itself still does (the control)', bodyClick === true, bodyClick);
+  check('a mouse click on ↻ leaves it unfocused (only Tab focuses it)', focusAfterClick !== 'opt-rebuild', focusAfterClick);
+  // keyboard + touch: ↻ takes focus; Enter and Space each rebuild once and never place; its hit box is finger-sized
+  const kb = {};
+  {
+    const chipSel = '.opt-rebuild';
+    const card = await pg.evaluateHandle((s) => [...document.querySelectorAll('#sec-build .grid .card')].find((c) => c.querySelector(s)), chipSel);
+    // the card-body control above held a ghost, which collapses the panels: open the Build panel again
+    await pg.evaluate(async () => { if (!document.querySelector('#sec-build .grid .card .opt-rebuild')?.offsetParent) document.querySelector('#sec-build .head').click();
+      for (let i = 0; i < 40 && !document.querySelector('#sec-build .grid .card .opt-rebuild')?.offsetParent; i++) await new Promise((r) => setTimeout(r, 100)); });
+    const el = await card.asElement()?.$(chipSel);
+    if (el) {
+      // the HIT area, measured the way a pointer finds it: the extent around the drawn chip that still lands on the chip
+      kb.size = await el.evaluate((c) => {
+        const r = c.getBoundingClientRect(), cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+        const onChip = (x, y) => c.contains(document.elementFromPoint(x, y));
+        let l = 0, rt = 0, t = 0, b = 0;
+        while (l < 30 && onChip(r.left - l - 1, cy)) l++;
+        while (rt < 30 && onChip(r.right + rt, cy)) rt++;
+        while (t < 30 && onChip(cx, r.top - t - 1)) t++;
+        while (b < 30 && onChip(cx, r.bottom + b)) b++;
+        const left = document.elementFromPoint(r.left - l - 1, cy);
+        return [Math.round(r.width + l + rt), Math.round(r.height + t + b), left?.className ?? ''];
+      });
+      for (const key of ['Enter', ' ']) {
+        const n0 = rebuilds.length;
+        await el.focus();
+        kb[`focused:${key}`] = await pg.evaluate(() => document.activeElement?.classList.contains('opt-rebuild'));
+        await pg.keyboard.press(key === ' ' ? 'Space' : key); await pg.waitForTimeout(1200);
+        kb[`posts:${key}`] = rebuilds.length - n0;
+        kb[`ghost:${key}`] = await pg.evaluate(async () => { const b = await import('./lib/build.js'); const g = b.hasGhost(); b.cancelGhost(); return g; });
+      }
+    }
+  }
+  console.log('   ↻ keyboard/size:', JSON.stringify(kb));
+  check('↻ is keyboard-reachable: Enter and Space each send ONE rebuild and never start a placement',
+    kb['focused:Enter'] && kb['focused: '] && kb['posts:Enter'] === 1 && kb['posts: '] === 1 && kb['ghost:Enter'] === false && kb['ghost: '] === false, kb);
+  check('↻ hit area is at least 22×22 px (finger / laser), and does not cover the chip beside it', kb.size && kb.size[0] >= 22 && kb.size[1] >= 22 && !/opt-chip|opt-rank/.test(kb.size[2]), kb.size);
+  const q = firstClickPosts[0] ? new URL(firstClickPosts[0].url).searchParams : null;
   console.log('   rebuild:', JSON.stringify({ ...r.reb, requests: rebuilds.length }));
   check('↻ on every card that can rebuild, none on an overlay-only model (it would 400); full strength with a warning, dim otherwise', r.reb.everyCard && r.reb.overlayHasNone && r.reb.staleOpacity === '1' && r.reb.plainOpacity === '0.55', r.reb);
-  check('↻ click: ONE POST /rebuild with the card\'s path; the page\'s key as a Bearer header, never in the URL', rebuilds.length === 1 && rebuilds[0].method === 'POST'
-    && q.get('path') === 'store/syn-stale.glb' && !q.has('token') && rebuilds[0].auth === `Bearer ${r.reb.token}`, rebuilds);
+  check('↻ click: ONE POST /rebuild with the card\'s path; the page\'s key as a Bearer header, never in the URL', firstClickPosts.length === 1 && firstClickPosts[0].method === 'POST'
+    && q.get('path') === 'store/syn-stale.glb' && !q.has('token') && firstClickPosts[0].auth === `Bearer ${r.reb.token}`, rebuilds);
   check('↻ says what it does on hover (its own title, not the card\'s status list)', /^rebuild GPU textures \+ LOD/.test(r.reb.tip ?? ''), r.reb.tip);
   check('↻ click never reaches the card (no placement ghost)', r.reb.cardClicked === 0, r.reb.cardClicked);
   check('↻ click tells the person what is rebuilding, and the chip comes back', /GPU textures \+ LOD/.test(r.reb.toast ?? '') && r.reb.after === '↻', [r.reb.toast, r.reb.after]);
+  console.log('   opening cards:', JSON.stringify(r.opening));
+  check('the OPENING (starter) cards carry the rank pill too', r.opening.length >= 6 && r.opening.every((c) => c.rank != null), r.opening);
+  check('card tooltip = just the model name; the numbers are on the pill', r.cards.every((c) => c.cardTitle && !/perf|tris|GPU textures/.test(c.cardTitle)), r.cards.slice(0, 2).map((c) => c.cardTitle));
   check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | ') || 'none');
 } catch (e) { check('probe ran', false, String(e).slice(0, 300)); }
 finally { await browser.close(); await world.close(); }

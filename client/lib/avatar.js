@@ -2417,7 +2417,7 @@ async function stampAvatarPerf(name, vrm, token, path) {
   // only a server that SAYS it stored the stamp burns the once-per-version flag: an older server answers 200
   // {existed} for a body with a portrait and drops `perf` on the floor — the next wear must try again
   const j = r.ok ? await r.json().catch(() => null) : null;
-  if (j?.perf === true) localStorage.setItem(key, '1');
+  if (j?.perf === true) { localStorage.setItem(key, '1'); bus.emit('avatar-perf', { name }); }   // the avatar cards repaint
 }
 
 export async function contributeThumbnail(name, vrm, token = '', { force = false, path = null } = {}) {

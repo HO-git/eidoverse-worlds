@@ -6,7 +6,7 @@
 // matches xrpanels' 900 px/m; (2) inline <svg> drawn via serialise→Image (the icon system);
 // (3) `pause`/`resume` + a per-instance min interval so live panels don't re-rasterise at 60 Hz;
 // (4) events are NOT re-dispatched on window (three's did — it tripped desktop handlers);
-// (5) elementAt/scrollAt for trigger-scroll; (6) `suspend`/`unsuspend` — the DOM observer off while a
+// (5) elementAt/scrollAt for trigger-scroll; (7) a pick targets ONE element and bubbles; (6) `suspend`/`unsuspend` — the DOM observer off while a
 // kept quad's element is back on the desktop (domquad's soft swap).
 import {
 	CanvasTexture,
@@ -624,47 +624,56 @@ function htmlevent( element, event, x, y ) {
 	x = x * rect.width + rect.left;
 	y = y * rect.height + rect.top;
 
-	function traverse( element ) {
+	// EIDO (7): ONE target, like a browser. three dispatched a non-bubbling event on EVERY element under the point,
+	// depth-first, and kept walking into nodes the handlers had just inserted: a trigger on a house dropdown opened
+	// its list (appended in the same frame) and the walk then clicked the option under the same point — the value
+	// changed and nothing appeared to expand (a headset session, 2026-09-26). The target is the topmost element under
+	// the point (the last hit in document order), chosen BEFORE anything is dispatched; the event bubbles from it.
+	// Like a browser's hit test, two more rules. A scroll box (overflow other than visible) clips its descendants: a
+	// row scrolled out of view, later in document order, must not win over the visible control above it. And a node's
+	// OWN pointer-events:none takes it and its subtree out until a descendant sets it back. domquad's offscreen stage
+	// sets an inline pointer-events:none so the DESKTOP mouse can't reach it, and that inherits into every staged
+	// element, hiding which nones are deliberate. So for the pick only, inline nones on the panel and its ancestors are
+	// lifted (and restored before anything is dispatched): the computed styles then show just the panel's own CSS.
+	let target = null;
+	const lifted = [];
+	for ( let n = element; n && n.style; n = n.parentElement ) if ( n.style.pointerEvents === 'none' ) { lifted.push( n ); n.style.pointerEvents = 'auto'; }
+	try {
+	( function find( node, clip, pe, off ) {
 
-		if ( element.nodeType !== Node.TEXT_NODE && element.nodeType !== Node.COMMENT_NODE ) {
-
-			const rect = element.getBoundingClientRect();
-
-			if ( x > rect.left && x < rect.right && y > rect.top && y < rect.bottom ) {
-
-				element.dispatchEvent( new MouseEvent( event, mouseEventInit ) );
-
-				if ( element instanceof HTMLInputElement && element.type === 'range' && ( event === 'mousedown' || event === 'click' ) ) {
-
-					const [ min, max ] = [ 'min', 'max' ].map( property => parseFloat( element[ property ] ) );
-
-					const width = rect.width;
-					const offsetX = x - rect.x;
-					const proportion = offsetX / width;
-					element.value = min + ( max - min ) * proportion;
-					element.dispatchEvent( new InputEvent( 'input', { bubbles: true } ) );
-
-				}
-
-				if ( element instanceof HTMLInputElement && ( element.type === 'text' || element.type === 'number' || element.type === 'email' || element.type === 'password' ) && ( event === 'mousedown' || event === 'click' ) ) {
-
-					element.focus();
-
-				}
-
-			}
-
-			for ( let i = 0; i < element.childNodes.length; i ++ ) {
-
-				traverse( element.childNodes[ i ] );
-
-			}
-
+		if ( node.nodeType !== Node.ELEMENT_NODE ) return;
+		const st = getComputedStyle( node );
+		if ( st.display === 'none' || st.visibility === 'hidden' ) return;
+		if ( st.pointerEvents === 'none' && pe !== 'none' ) off = true;
+		else if ( st.pointerEvents !== 'none' && pe === 'none' ) off = false;
+		const r = node.getBoundingClientRect();
+		const inClip = ! clip || ( x > clip.left && x < clip.right && y > clip.top && y < clip.bottom );
+		if ( ! off && inClip && x > r.left && x < r.right && y > r.top && y < r.bottom ) target = node;
+		if ( st.overflowX !== 'visible' || st.overflowY !== 'visible' ) {
+			clip = clip ? { left: Math.max( clip.left, r.left ), top: Math.max( clip.top, r.top ), right: Math.min( clip.right, r.right ), bottom: Math.min( clip.bottom, r.bottom ) } : r;
 		}
+		for ( let i = 0; i < node.childNodes.length; i ++ ) find( node.childNodes[ i ], clip, st.pointerEvents, off );
+
+	} )( element, null, 'auto', false );
+	} finally { for ( const n of lifted ) n.style.pointerEvents = 'none'; }
+	if ( ! target ) return;
+
+	target.dispatchEvent( new MouseEvent( event, { ...mouseEventInit, bubbles: true, cancelable: true } ) );
+
+	if ( target instanceof HTMLInputElement && target.type === 'range' && ( event === 'mousedown' || event === 'click' ) ) {
+
+		const r = target.getBoundingClientRect();
+		const [ min, max ] = [ 'min', 'max' ].map( property => parseFloat( target[ property ] ) );
+		target.value = min + ( max - min ) * ( ( x - r.x ) / r.width );
+		target.dispatchEvent( new InputEvent( 'input', { bubbles: true } ) );
 
 	}
 
-	traverse( element );
+	if ( target instanceof HTMLInputElement && ( target.type === 'text' || target.type === 'number' || target.type === 'email' || target.type === 'password' ) && ( event === 'mousedown' || event === 'click' ) ) {
+
+		target.focus();
+
+	}
 
 }
 

@@ -11,7 +11,7 @@
 import { THREE } from './core.js';
 import { bus } from './base.js';
 import { renderCanvas, hitRegion } from './panels.js';
-import { domQuadsEnabled, domQuadsEnter, domQuadsExit, domQuadsPick, domQuadsSetShown, domQuadsShown, domQuadShow, domQuadOpen, domQuadsGrab, domQuadRelease } from './domquad.js';   // the REAL frames on quads (default); ?canvasquads=1 keeps these canvases
+import { domQuadsEnabled, domQuadsEnter, domQuadsExit, domQuadsPick, domQuadsPress, domQuadsDrag, domQuadsRelease, domQuadsSetShown, domQuadsShown, domQuadShow, domQuadOpen, domQuadsGrab, domQuadRelease } from './domquad.js';   // the REAL frames on quads (default); ?canvasquads=1 keeps these canvases
 
 const PX_PER_M = 900;              // canvas pixels per world metre of quad
 const W = 0.58;                    // quad width, metres — an arm's-length read
@@ -138,6 +138,16 @@ export function xrPanelsPick(handRay, click = false) {
   }
   return hit.distance;
 }
+
+/** Trigger down: {dist, press} or null. On the DOM quads a press on a non-interactive spot becomes drag-to-scroll
+ *  (domquad.js); the canvas quads click at once, as before. */
+export function xrPanelsPress(handRay) {
+  if (domQuadsEnabled()) return domQuadsPress(handRay);
+  const dist = xrPanelsPick(handRay, true);
+  return dist == null ? null : { dist, press: null };
+}
+export const xrPanelsDrag = (handRay, press) => domQuadsDrag(handRay, press);
+export const xrPanelsReleasePress = (press, cancel = false) => domQuadsRelease(press, cancel);
 
 /** C17: the panel under the laser, as a grabbable — {id, mesh} or null. Canvas quads grab too. */
 export function xrPanelsGrab(handRay) {

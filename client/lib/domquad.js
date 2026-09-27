@@ -164,7 +164,7 @@ export function domQuadsPick(handRay, click = false) {
   _rc.ray.origin.setFromMatrixPosition(handRay.matrixWorld);
   _rc.ray.direction.set(0, 0, -1).applyMatrix4(_m);
   _rc.far = 3;
-  const hit = _rc.intersectObjects(quads.filter((q) => q.mesh).map((q) => q.mesh), false)[0];
+  const hit = _rc.intersectObjects(quads.filter((q) => q.mesh?.visible).map((q) => q.mesh), false)[0];
   if (!hit) return null;
   if (click && hit.uv) {
     const data = { x: hit.uv.x, y: 1 - hit.uv.y };
@@ -175,6 +175,53 @@ export function domQuadsPick(handRay, click = false) {
   return hit.distance;
 }
 
+// Trigger on a panel, the way touch works (and Resonite / VRChat panels): on something you can act on (a button, an
+// input, a link…) it clicks at once, as before; on anything else it's a PRESS: drag past DRAG_PX and the panel scrolls
+// with the laser, release without dragging and it clicks where it was pressed.
+const INTERACTIVE = 'a[href],button,input,select,textarea,label,summary,[role=button],[role=checkbox],[role=switch],'
+  + '[role=slider],[role=tab],[role=option],[role=menuitem],[contenteditable=""],[contenteditable="true"],[onclick]';
+const DRAG_PX = 8;
+function aim(handRay) {
+  _m.identity().extractRotation(handRay.matrixWorld);
+  _rc.ray.origin.setFromMatrixPosition(handRay.matrixWorld);
+  _rc.ray.direction.set(0, 0, -1).applyMatrix4(_m);
+  _rc.far = 3;
+}
+const fire = (mesh, data) => { for (const type of ['mousedown', 'mouseup', 'click']) mesh.dispatchEvent({ type, data }); };
+
+/** Trigger down on the quads: {dist, press} (press is null when it already clicked), or null when no quad is hit. */
+export function domQuadsPress(handRay) {
+  if (!quads || !shown) return null;
+  aim(handRay);
+  const hit = _rc.intersectObjects(quads.filter((q) => q.mesh?.visible).map((q) => q.mesh), false)[0];
+  if (!hit) return null;
+  if (!hit.uv) return { dist: hit.distance, press: null };
+  const data = { x: hit.uv.x, y: 1 - hit.uv.y };
+  const el = hit.object.material.map.elementAt?.(data.x, data.y);
+  if (!el || el.closest?.(INTERACTIVE)) { domQuadsPick(handRay, true); return { dist: hit.distance, press: null }; }
+  return { dist: hit.distance, press: { mesh: hit.object, data, lastY: data.y, travel: 0, dragging: false } };
+}
+
+/** Trigger held after a press: the panel follows the laser once it has moved DRAG_PX. */
+export function domQuadsDrag(handRay, press) {
+  aim(handRay);
+  const hit = _rc.intersectObject(press.mesh, false)[0];
+  if (!hit?.uv) return;
+  const map = press.mesh.material.map;
+  const y = 1 - hit.uv.y, h = map.dom?.getBoundingClientRect().height ?? 0;
+  const dPx = (y - press.lastY) * h;
+  press.lastY = y;
+  press.travel += Math.abs(dPx);
+  if (!press.dragging && press.travel >= DRAG_PX) press.dragging = true;
+  if (press.dragging && dPx) map.scrollAt?.(press.data.x, press.data.y, -dPx);   // content follows the laser
+}
+
+/** Trigger up: a press that never dragged is a click where it began. `cancel` (a grab took over) drops it. */
+export function domQuadsRelease(press, cancel = false) {
+  if (!press || cancel || press.dragging || !press.mesh.parent) return;
+  fire(press.mesh, press.data);
+}
+
 /** Scroll the panel under the ray by dy CSS px (right stick Y while the laser is on a quad). */
 export function domQuadsScroll(handRay, dy) {
   if (!quads || !shown) return false;
@@ -182,7 +229,7 @@ export function domQuadsScroll(handRay, dy) {
   _rc.ray.origin.setFromMatrixPosition(handRay.matrixWorld);
   _rc.ray.direction.set(0, 0, -1).applyMatrix4(_m);
   _rc.far = 3;
-  const hit = _rc.intersectObjects(quads.filter((q) => q.mesh).map((q) => q.mesh), false)[0];
+  const hit = _rc.intersectObjects(quads.filter((q) => q.mesh?.visible).map((q) => q.mesh), false)[0];
   if (!hit?.uv) return false;
   return !!hit.object.material.map.scrollAt?.(hit.uv.x, 1 - hit.uv.y, dy);
 }

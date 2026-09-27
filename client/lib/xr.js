@@ -27,7 +27,7 @@ import { CONFIG, report, bus, tee, wornNameOf } from './base.js';
 import { frameDebug } from './frame.js';
 import { resetFingers, xrBodyDebug } from './xrbody.js';
 import { stroke, fillPath } from './icons.js';
-import { xrPanelsEnter, xrPanelsExit, xrPanelsPick, showXRPanel, xrPanelHas, xrPanelOpen, xrPanelsGrab, xrPanelRelease, xrPanelsShown } from './xrpanels.js';
+import { xrPanelsEnter, xrPanelsExit, xrPanelsPick, xrPanelsPress, xrPanelsDrag, xrPanelsReleasePress, showXRPanel, xrPanelHas, xrPanelOpen, xrPanelsGrab, xrPanelRelease, xrPanelsShown } from './xrpanels.js';
 import { domQuadsScroll } from './domquad.js';
 import { myState, xrIntent, camYaw, setCamYaw, setXrProbe } from './controller.js';
 import { ringEmoteEntries } from './emotebar.js';
@@ -597,6 +597,7 @@ function aimRadial(x, y) {
 }
 let radialOpen = false, stickPressWas = false;
 const triggerWas = { left: false, right: false };
+const panelPress = { left: null, right: null };   // a trigger press on a panel, pending drag-or-click
 // Buttons are NOT trusted for the first 700 ms after an input source appears: the gamepad's first
 // frames report pressed=true garbage (owner, 09-06 11:35: 'panels toggled' fired by itself, sandwiched
 // between the two connect lines; same family as the NaN axis). Edges inside the window are swallowed.
@@ -1154,7 +1155,9 @@ export function updateXR(dtSec = 1 / 72) {
       const G = side === 'right' ? R : L; const hand = hands[side];
       if (!G || !hand) continue;
       const grip = !!G.buttons[1]?.pressed, trig = !!G.buttons[0]?.pressed;
-      hand.laser.visible = grip || trig;
+      // the laser also shows, with no button held, while it rests on a panel (Resonite's always-there pointer): that is
+      // what makes the panel under it scrollable with the stick, and shows where a trigger will land
+      hand.laser.visible = grip || trig || xrPanelsPick(hand.ray, false) != null;
       hand.box.visible = !getSelf()?.vrm;   // a body owns the hands → no test box
       if (!buttonsTrusted()) { triggerWas[side] = trig; continue; }
       if (grip && trig && !held) tryGrab(side);   // panels only
@@ -1162,12 +1165,19 @@ export function updateXR(dtSec = 1 / 72) {
       if (trig && !triggerWas[side] && !grip && !(radialOpen && side === 'right')) {
         // panels claim the laser before the world does — a click meant for a
         // stepper must never select the mountain behind it
-        const panelDist = xrPanelsPick(hand.ray, true);
+        const pr = xrPanelsPress(hand.ray);
+        const panelDist = pr?.dist ?? null;
+        if (pr?.press) panelPress[side] = pr.press;
         if (panelDist != null) haptic(side, 0.3, 18);   // a button, felt
         if (panelDist == null) {
           const hit = rayHitEntity(hand.ray);
           if (hit) { bus.emit('xr:select', hit.id); flashHint(`→ ${hit.id}`); }
         }
+      }
+      if (panelPress[side]) {
+        // a press on a panel: held, it drags the panel's scroll; released, it clicks unless it dragged; a grab cancels it
+        if (trig && !grip) xrPanelsDrag(hand.ray, panelPress[side]);
+        else { xrPanelsReleasePress(panelPress[side], grip); panelPress[side] = null; }
       }
       if (hand.laser.visible) {
         const panelDist = xrPanelsPick(hand.ray, false);

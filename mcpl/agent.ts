@@ -150,6 +150,9 @@ const fillOf = (t: { area: number; x: number[]; z: number[] }) => {
 const DECK_FILL = 0.45;
 
 // A canned "knocked over" pose for headless agents, which cannot simulate.
+/** One bone of a held pose: a rotation, or {q, t, s} (shared/humanoid.js poseChannels). */
+type PoseValue = number[] | { q?: number[]; t?: number[]; s?: number[] | number };
+
 const DOWNED_POSE: Record<string, number[]> = {
   spine: [0.6, 0, 0, 0.8], chest: [0.5, 0, 0, 0.87], neck: [0.3, 0, 0, 0.95],
   leftUpperArm: [0, 0, -0.9, 0.44], rightUpperArm: [0, 0, 0.9, 0.44],
@@ -170,7 +173,7 @@ export class WorldAgent {
   /** A held custom pose — sparse humanoid-bone quaternions. Presence only:
    *  it rides the pose packet and is never a log verb, because it is a moment,
    *  not a change to the world. `null` clears. */
-  heldPose: Record<string, number[]> | null = null;
+  heldPose: Record<string, PoseValue> | null = null;
   /** Where heldPose came from. An AUTHORED pose (set deliberately — the pose
    *  tool, a puppet, the server's settled memory) is a place: it survives
    *  walking, posture changes and sleep. A PHYSICS pose (ragdoll sim frame,
@@ -190,7 +193,7 @@ export class WorldAgent {
    *  sites, and the one that got missed would be a pose that outlived every
    *  walk forever. This cannot be missed: it is the same identity trick the
    *  renderer's `_composeBegin` and the interpolator's `lastPose` both use. */
-  private heldPoseSticky: Record<string, number[]> | null = null;
+  private heldPoseSticky: Record<string, PoseValue> | null = null;
   draggedBy: string | null = null;   // whose takeover sim drives this body (bodydrag)
   dragAt = 0;                        // last drag sample, for the silence timeout
   pins = new Map<string, number[]>(); // persistent bodydrag nails: joint -> [x,y,z]
@@ -1875,7 +1878,7 @@ export class WorldAgent {
 
   /** Resume MY OWN sim from wherever a drag left this body — the same
    *  settle-under-owner-authority browsers do, pins enforced for real. */
-  private async settleFromDrag(pose: Record<string, number[]> | null, sim?: any) {
+  private async settleFromDrag(pose: Record<string, PoseValue> | null, sim?: any) {
     const epoch = ++this.bodyEpoch;
     const body = await this.ensureBody();
     if (this.bodyEpoch !== epoch) return;
@@ -2609,7 +2612,7 @@ export class WorldAgent {
   }
 
   /** Hold a custom pose (yourself). Sparse bone -> [x,y,z,w] quaternion. */
-  setPose(bones: Record<string, number[]> | null, sticky = false) {
+  setPose(bones: Record<string, PoseValue> | null, sticky = false) {
     this.heldPose = bones;
     this.heldPoseAuthored = bones != null;
     // Only a deliberate self-pose can ask to survive walking, and only THIS
@@ -2880,7 +2883,7 @@ export class WorldAgent {
   /** Ask another body to hold a pose or play an animation. It decides.
    *  `ragdoll: true` asks it to go limp; `{lean:[x,y,z]}` (m/s) says which
    *  way the shove sends it — the receiver simulates and caps for itself. */
-  puppet(target: string, spec: { pose?: Record<string, number[]>; anim?: unknown; ragdoll?: boolean | { lean: number[] } }) {
+  puppet(target: string, spec: { pose?: Record<string, PoseValue>; anim?: unknown; ragdoll?: boolean | { lean: number[] } }) {
     if (this.joined && this.ws?.readyState === 1) {
       this.ws.send(JSON.stringify({ type: "puppet", target,
         pose: spec.pose ?? null, anim: spec.anim ?? null, ragdoll: spec.ragdoll ?? null }));

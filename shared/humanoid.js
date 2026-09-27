@@ -49,6 +49,7 @@ export const FINGER_BONES = (() => {
 
 /** Every bone name a VRM humanoid can carry. */
 export const HUMANOID_BONES = [...REQUIRED_BONES, ...OPTIONAL_BONES, ...FINGER_BONES];
+const HUMANOID_SET = new Set(HUMANOID_BONES);
 
 const BY_KEY = new Map();
 for (const b of HUMANOID_BONES) BY_KEY.set(b.toLowerCase(), b);
@@ -148,49 +149,122 @@ export function poseChannels(v) {
   return q || t || s ? { q, t, s } : null;
 }
 
+/** Check and clean one pose value: a bare quaternion, or {q?, t?, s?}.
+ *  Returns {value, renormalized} or {why}. The value comes back in the
+ *  smallest form that says it — a bare array when only q was given. */
+export function normalizePoseValue(v) {
+  if (Array.isArray(v)) {
+    const q = normalizeQuat(v);
+    return q.why ? { why: q.why } : { value: q.q, renormalized: q.renormalized };
+  }
+  if (!v || typeof v !== 'object') return { why: 'want [x,y,z,w], or {q, t, s}' };
+  const extra = Object.keys(v).filter((k) => !['q', 't', 's'].includes(k));
+  if (extra.length) return { why: `unknown channel ${extra.map((k) => `"${k}"`).join(', ')} — want q (rotation), t (translation), s (scale)` };
+  const out = {};
+  let renormalized = false;
+  if (v.q != null) {
+    const q = normalizeQuat(v.q);
+    if (q.why) return { why: `q: ${q.why}` };
+    out.q = q.q; renormalized = q.renormalized;
+  }
+  if (v.t != null) {
+    if (!Array.isArray(v.t) || v.t.length !== 3 || !v.t.map(Number).every(Number.isFinite)) return { why: 't: want [x,y,z] in metres' };
+    out.t = v.t.map(Number);
+  }
+  if (v.s != null) {
+    const s = typeof v.s === 'number' ? [v.s, v.s, v.s] : v.s;
+    if (!Array.isArray(s) || s.length !== 3 || !s.map(Number).every(Number.isFinite)) return { why: 's: want one number, or [x,y,z]' };
+    if (!s.every((c) => Number(c) > 0)) return { why: 's: every component must be above 0 — 0 collapses the bone, a negative mirrors it' };
+    out.s = typeof v.s === 'number' ? Number(v.s) : s.map(Number);
+  }
+  if (!('q' in out) && !('t' in out) && !('s' in out)) return { why: 'empty — give at least one of q, t, s' };
+  return { value: 't' in out || 's' in out ? out : out.q, renormalized };
+}
+
+/** The closest name in a list, for a "did you mean" over a rig's own bones. */
+function nearest(name, names) {
+  const key = String(name).toLowerCase();
+  let best = null, bestD = 4;
+  for (const n of names) {
+    const d = distance(key, n.toLowerCase());
+    if (d < bestD) { bestD = d; best = n; }
+  }
+  return best;
+}
+
 /**
  * Validate a sparse pose map, reporting everything it did rather than
  * silently keeping the good parts.
  *
+ * Names resolve in this order: an exact VRM humanoid name; then an exact bone
+ * of the rig (`opts.rig`) — a raw humanoid bone reads as its VRM name, any
+ * other is kept as a CUSTOM bone; then humanoid synonyms ("forearm"). Exact
+ * rig names outrank synonyms because rigs reuse them: mythos-alpha has a real
+ * `Pelvis` below its hips, and folding that onto `hips` would pose the wrong
+ * bone without a word. Bones ABOVE the hips are refused: the body's place
+ * comes from hips every frame, so posing them would be undone.
+ *
  * @param {unknown} bones raw input, straight off the wire or a tool call
- * @param {{known?: string[]|null}} [opts] `known` = the bones THIS rig actually
- *        has, when the caller knows them; a valid name missing from the rig is
- *        reported as `absent` rather than accepted into a pose that can't land.
- * @returns {{pose: Record<string, number[]>, accepted: string[],
- *            renamed: Array<{from: string, to: string}>,
+ * @param {{known?: string[]|null, rig?: {bones: string[], humanoidOf: Record<string,string>,
+ *          aboveHips?: string[]}|null}} [opts]
+ *        `known` = the humanoid bones THIS rig has (a valid name it lacks is
+ *        `absent`); `rig` = every bone it has. Without a rig, a name that is
+ *        no humanoid bone and no likely typo of one is kept but `unchecked`.
+ * @returns {{pose: Record<string, number[]|object>, accepted: string[], custom: string[],
+ *            unchecked: string[], renamed: Array<{from: string, to: string}>,
  *            renormalized: string[], absent: string[],
  *            rejected: Array<{name: string, why: string, suggest?: string}>}}
  */
 export function validatePose(bones, opts = {}) {
   const out = {
-    pose: {}, accepted: [], renamed: [], renormalized: [], absent: [], rejected: [],
+    pose: {}, accepted: [], custom: [], unchecked: [], renamed: [], renormalized: [], absent: [], rejected: [],
   };
   if (!bones || typeof bones !== 'object' || Array.isArray(bones)) {
-    out.rejected.push({ name: '(whole pose)', why: 'want an object mapping bone name to [x,y,z,w]' });
+    out.rejected.push({ name: '(whole pose)', why: 'want an object mapping bone name to [x,y,z,w] or {q, t, s}' });
     return out;
   }
-  const known = opts.known ? new Set(opts.known) : null;
+  const rig = opts.rig ?? null;
+  const rigBones = rig ? new Set(rig.bones) : null;
+  const above = new Set(rig?.aboveHips ?? []);
+  const known = opts.known ? new Set(opts.known)
+    : rig ? new Set(Object.values(rig.humanoidOf ?? {})) : null;
   for (const [raw, v] of Object.entries(bones)) {
-    const name = canonicalBone(raw);
+    let name = null, isCustom = false, isUnchecked = false;
+    if (HUMANOID_SET.has(raw)) name = raw;
+    else if (rigBones?.has(raw)) {
+      if (above.has(raw)) {
+        out.rejected.push({ name: raw, why: 'sits above the hips — the body is placed from hips every frame, so move hips ({t: [x,y,z]}) instead' });
+        continue;
+      }
+      name = rig.humanoidOf?.[raw] ?? raw;
+      isCustom = !rig.humanoidOf?.[raw];
+    } else name = canonicalBone(raw);
     if (!name) {
       const suggest = suggestBone(raw);
-      out.rejected.push({ name: raw, why: 'not a VRM humanoid bone', ...(suggest ? { suggest } : {}) });
-      continue;
+      if (rigBones || suggest) {
+        const near = rigBones ? nearest(raw, rig.bones) : null;
+        out.rejected.push({ name: raw, why: rigBones ? 'not a bone of this rig' : 'not a VRM humanoid bone',
+          ...((near ?? suggest) ? { suggest: near ?? suggest } : {}) });
+        continue;
+      }
+      name = raw; isCustom = true; isUnchecked = true;   // no rig to check against
     }
-    const q = normalizeQuat(v);
-    if (q.why) { out.rejected.push({ name: raw, why: q.why }); continue; }
-    if (known && !known.has(name)) { out.absent.push(name); continue; }
+    const pv = normalizePoseValue(v);
+    if (pv.why) { out.rejected.push({ name: raw, why: pv.why }); continue; }
+    if (!isCustom && known && !known.has(name)) { out.absent.push(name); continue; }
     // Two written names can fold to one bone ("leftElbow" and "LeftLowerArm").
     // Last-write-wins would drop one of them without a word — the exact silent
     // overwrite this module exists to stop. Keep the first, name the clash.
     if (name in out.pose) {
-      out.rejected.push({ name: raw, why: `also names ${name}, already set here — one bone, one rotation` });
+      out.rejected.push({ name: raw, why: `also names ${name}, already set here — one bone, one value` });
       continue;
     }
     if (name !== raw) out.renamed.push({ from: raw, to: name });
-    if (q.renormalized) out.renormalized.push(name);
-    out.pose[name] = q.q;
+    if (pv.renormalized) out.renormalized.push(name);
+    out.pose[name] = pv.value;
     out.accepted.push(name);
+    if (isCustom) out.custom.push(name);
+    if (isUnchecked) out.unchecked.push(name);
   }
   return out;
 }
@@ -207,6 +281,8 @@ export function poseReport(v) {
   if (renamed.length) bits.push(`read ${renamed.map((r) => `${r.from}→${r.to}`).join(', ')}`);
   if (renormalized.length) bits.push(`normalized ${renormalized.join(', ')}`);
   if (absent.length) bits.push(`your rig has no ${absent.join(', ')} — those did nothing`);
+  const unchecked = v?.unchecked ?? [];
+  if (unchecked.length) bits.push(`could not check ${unchecked.join(', ')} against the rig — a bone it lacks does nothing`);
   for (const r of rejected) {
     bits.push(`dropped ${r.name}: ${r.why}${r.suggest ? ` (did you mean ${r.suggest}?)` : ''}`);
   }

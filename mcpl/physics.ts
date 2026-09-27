@@ -326,7 +326,7 @@ export class HeadlessBody {
   /** Reset the stand-in to a pose at a place, standing on the live ground.
    *  `pose` is a sparse bone->quat map (a streamed pose — e.g. where a
    *  dragger's hand left this body); null means standing. */
-  private pose(x: number, z: number, yaw: number, pose: Record<string, number[]> | null) {
+  private pose(x: number, z: number, yaw: number, pose: Record<string, unknown> | null) {
     this.av.root.position.set(x, this.m.terrain.heightAt(x, z), z);
     this.av.root.rotation.y = yaw;
     for (const n of Object.values(this.av.nodes) as any[]) n.quaternion.identity();
@@ -346,7 +346,7 @@ export class HeadlessBody {
   begin(opts: {
     x: number; z: number; yaw: number;
     lean?: number[] | null;
-    pose?: Record<string, number[]> | null;
+    pose?: Record<string, unknown> | null;
     rootY?: number;                          // world y of the root at start (a lifted drop)
     pins?: Array<{ j: string; at: number[] }>;
     sim?: { j: string[]; p: number[]; v: number[] } | null;   // a handover
@@ -562,7 +562,7 @@ export class ReachBody {
 
   /** Put the stand-in where the streamed presence says the body is. `pose` is
    *  the sparse bone map off the wire (held pose / ragdoll frame), or null. */
-  poseAt(p: number[], yaw: number, pose: Record<string, number[]> | null) {
+  poseAt(p: number[], yaw: number, pose: Record<string, unknown> | null) {
     this.av.root.position.set(p[0], p[1] ?? 0, p[2]);
     this.av.root.rotation.y = yaw ?? 0;
     for (const [name, n] of Object.entries(this.av.nodes) as [string, any][]) { n.quaternion.identity(); n.position.copy(this.restPositions.get(name)); }

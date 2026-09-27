@@ -23,7 +23,8 @@
 
 import { readdirSync } from "node:fs";
 import sharp from "sharp";
-import { validatePose, validateTracks, tracksSpan, poseReport } from "../shared/humanoid.js";
+import { validatePose, validateTracks, tracksSpan, poseReport, HUMANOID_BONES } from "../shared/humanoid.js";
+import { rigBonesFor } from "./rigbones.ts";
 import { CONTACT_POINTS, canonicalPoint } from "../shared/contact.js";
 import { rawShapeError } from "./shape.ts";
 import type { WorldAgent } from "./agent.ts";
@@ -92,7 +93,7 @@ export const TOOLS = [
   { name: "catch_up", description: "What happened in the world while you were not thinking. Returns chat since a point in the world's history; omit `since` to continue from where you last caught up. Use when a conversation refers to something you have no memory of.", inputSchema: { type: "object", properties: { since: { type: "number" }, limit: { type: "number" } } } },
   { name: "activity", description: "Your ambient-activity sense — and the dial for it. While something is happening within radius_m of you (speech, movement, gestures, arrivals, building), you receive one digest per pulse_sec window on the world channel, tagged \"activity\" with metadata {activity: true} — never as a mention. If your host lets you configure wake rules, match that tag/metadata to be woken regularly exactly as long as there is life nearby; the stream stops by itself when the area goes quiet, so it costs nothing in an empty room. Call with no arguments to see your current settings. pulse_sec (10–3600 seconds, 0 = off) and radius_m (1–200) are your own to set and persist across sessions. If your host has no push channel (plain MCP), digests are held instead and handed over each time you call this tool — poll it when you want to know what has been happening around you.", inputSchema: { type: "object", properties: { pulse_sec: { type: "number" }, radius_m: { type: "number" } } } },
   { name: "whisper", description: "Say something privately to ONE participant. Not spoken aloud, no bubble, and deliberately never written to the world log — so it is also not replayed to anyone later.", inputSchema: { type: "object", properties: { to: { type: "string" }, text: { type: "string" } }, required: ["to", "text"] } },
-  { name: "pose", description: "Hold a custom body pose. `bones` is a sparse map of VRM humanoid bone name to a [x,y,z,w] quaternion (only the bones you care about; the rest keep animating). Example bones: leftUpperArm, leftLowerArm, rightUpperArm, rightLowerArm, spine, chest, neck, head. Names are checked and corrected where they are unambiguous, and anything dropped is reported back with the reason — so read the reply, it is your only feedback that the body did what you meant. Held until you `clear_pose` or move; pass hold:true to keep it through walking too (your legs still stride, so pose arms and head rather than legs if you mean to travel in it). Presence only — never written to the world log, so it costs nothing and vanishes when you leave. Pass `target` to pose SOMEONE ELSE (they decide whether to allow it).", inputSchema: { type: "object", properties: { bones: { type: "object" }, hold: { type: "boolean" }, target: { type: "string" } }, required: ["bones"] } },
+  { name: "pose", description: "Hold a custom body pose. `bones` is a sparse map of bone name to a value: a rotation [x,y,z,w], or {q, t, s} to also move or scale that bone — q rotation [x,y,z,w], t translation [x,y,z] in metres, s scale (one number, or [x,y,z]). Humanoid bones go by VRM name (leftUpperArm, leftLowerArm, spine, chest, neck, head, hips, leftUpperLeg...); ANY other bone your rig has goes by its own name (a wing, an eyelid, a twist bone, a tail) — call pose with no `bones` to list them. Rotations are relative to the parent bone's. Translation on hips moves the whole body in world metres (Y is up): {\"hips\": {\"t\": [0, -0.5, 0]}} lowers you half a metre, for kneeling or crouching; on any other bone t is how far it moves beyond where its parent carries it. Scale is in the bone's own axes and carries to its children. Names are checked against the rig and corrected where unambiguous, and anything dropped is reported back with the reason — so read the reply, it is your only feedback that the body did what you meant. Held until you `clear_pose` or move; pass hold:true to keep it through walking too (your legs still stride, so pose arms and head rather than legs if you mean to travel in it). Presence only — never written to the world log, so it costs nothing and vanishes when you leave. Pass `target` to pose SOMEONE ELSE (checked against THEIR rig; they decide whether to allow it).", inputSchema: { type: "object", properties: { bones: { type: "object" }, hold: { type: "boolean" }, target: { type: "string" } } } },
   { name: "clear_pose", description: "Release a held pose, easing back to normal animation. Pass `target` to release a pose you asked someone else to hold.", inputSchema: { type: "object", properties: { target: { type: "string" } } } },
   { name: "emote", description: "Fire a named gesture — the same one-shots humans have on their emote bar. Plays once over your locomotion; presence only, never logged. For a gesture that isn't listed, invent one with `animate`.", inputSchema: { type: "object", properties: { name: { type: "string", enum: ["wave", "cheer", "dance", "point", "salute", "clap", "talk", "flail"] } }, required: ["name"] } },
   { name: "reach", description: `Reach out with a hand (or foot) — real IK: everyone sees your arm extend toward the target and TRACK it (your walking, their moving) until clear_reach, and the palm turns to rest on the surface it meets. Two ways to aim it: (1) a contact point on a body — \`who\` (participant id; omit to touch your own body) + \`point\`, one of: ${Object.keys(CONTACT_POINTS).join(", ")}; the person you touch hears about it (they get a 'reaches toward you' event, then a 'touches' event when your hand arrives — you hear the same when someone touches you). (2) a bare point — x, y, z with \`space\`: 'world' (default, fixed), 'self' (your own root frame — moves with you), or a participant id (their root frame — tracks them). READ THE REPLY, it is your only feedback: it says whether the hand actually arrives, what limited it (joints, body, distance), and how far to walk if it fell short. A reach composes over walking, sitting and held poses. If YOU (the reacher) are knocked over, your outgoing reaches are cleared. The target walking, changing posture or falling does not revoke your tracking relation. The target currently has no tool to revoke someone else's incoming reach; agree on release with them. Presence-only, never logged.`, inputSchema: { type: "object", properties: { limb: { type: "string", enum: ["rightHand", "leftHand", "rightFoot", "leftFoot"], description: "default rightHand" }, who: { type: "string" }, point: { type: "string" }, x: { type: "number" }, y: { type: "number" }, z: { type: "number" }, space: { type: "string" }, standoff: { type: "number", description: "metres to hover off the surface (default 0.02 — resting on it)" }, palm: { type: "boolean", description: "false = don't orient the palm to the surface" } } } },
@@ -415,22 +416,36 @@ export const HANDLERS: Record<string, ToolHandler> = {
       // other feedback is a snapshot through a GPU host — so a bone name that
       // does not exist, a three-component quaternion, or two names folding
       // onto one bone must come back as words, not as a body that silently
-      // did not move. (See shared/humanoid.js.)
-      const v = validatePose(a.bones);
+      // did not move. (See shared/humanoid.js.) Checked against the rig of
+      // the body being posed: arbitrary bones exist only on the rigs that
+      // have them.
+      const target = a.target ? String(a.target) : null;
+      const avatar = target ? ag.people.get(target)?.avatar : ag.avatar;
+      const rig = avatar ? await rigBonesFor(ag.httpBase, avatar) : null;
+      if (a.bones == null) {
+        if (!rig) return text(`can't read ${target ? `${target}'s` : "your"} rig to list its bones. Humanoid names always work: ${HUMANOID_BONES.join(", ")}.`);
+        const humanoid = Object.entries(rig.humanoidOf).map(([raw, vrm]) => vrm === raw ? vrm : `${vrm} (${raw})`);
+        const other = rig.bones.filter((b) => !rig.humanoidOf[b] && !rig.aboveHips.includes(b));
+        return text(`${target ? `${target}'s` : "your"} rig — humanoid bones (by VRM name): ${humanoid.join(", ")}.`
+          + ` Other bones (by their own name): ${other.length ? other.join(", ") : "none"}.`
+          + `${rig.aboveHips.length ? ` Not poseable (above the hips; move hips instead): ${rig.aboveHips.join(", ")}.` : ""}`);
+      }
+      const v = validatePose(a.bones, { rig });
       const note = poseReport(v);
       if (!v.accepted.length) {
         return text(`no pose set — nothing usable in \`bones\`.${note ? ` ${note}.` : ""}`
-          + " Want a sparse map of VRM humanoid bone name to [x,y,z,w], e.g."
-          + ' {"leftUpperArm": [0, 0, -0.9, 0.44]}.');
+          + " Want a sparse map of bone name to [x,y,z,w] or {q, t, s}, e.g."
+          + ' {"leftUpperArm": [0, 0, -0.9, 0.44], "hips": {"t": [0, -0.4, 0]}}. Call pose with no bones to list your rig\'s.');
       }
-      if (a.target) {
-        ag.puppet(String(a.target), { pose: v.pose });
-        return text(`asked ${a.target} to hold a pose over ${v.accepted.length} bone(s)`
+      const what = `${v.accepted.length} bone(s)${v.custom.length ? ` (${v.custom.length} beyond the humanoid set: ${v.custom.join(", ")})` : ""}`;
+      if (target) {
+        ag.puppet(target, { pose: v.pose });
+        return text(`asked ${target} to hold a pose over ${what}`
           + `${note ? ` — ${note}` : ""}. They decide whether to take it.`);
       }
       const hold = !!a.hold;
       ag.setPose(v.pose, hold);
-      return text(`holding a pose over ${v.accepted.length} bone(s): ${v.accepted.join(", ")}`
+      return text(`holding a pose over ${what}: ${v.accepted.join(", ")}`
         + `${note ? ` — ${note}` : ""}`
         + `${hold ? ". It stays through walking — clear_pose to drop it." : ""}`);
 

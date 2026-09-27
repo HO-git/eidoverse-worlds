@@ -16,6 +16,7 @@ import { randomBytes } from "node:crypto";
 import { ROOT, WORLDS_DIR, LIBRARY_DIR, OPT_DIR, PATCH_DIR, LADDER, JOIN_TOKEN, STORE_MIN } from "./config.ts";
 import { isStoreOriginal, isServingArtifact, variantStatus, variantSource, freshOver } from "./store-variants.ts";
 import { glbPerfOfFile } from "./glbperf.ts";
+import { rankOf, TIER_NAMES } from "../shared/perfrank.js";
 import { wantsKtx2, KTX2_KEY } from "../shared/ktx2.js";
 import { LOD_RECIPE, lodVariantPath, lodVerdictKind, lodVerdictFinal } from "./store-variants.ts";
 import { hnSessions, hnJti, sessionFromCookie, saveSessions, SESSION_TTL_MS, HN_ISSUER_KEY, HN_ISS, HN_AUD, HN_LOGIN_URL, HN_REQUIRE_LOGIN } from "./auth.ts";
@@ -94,7 +95,24 @@ function requestSnap(world: World, follow: string, view = "first"): Promise<{ ok
  *  the join snapshot, so a joiner needs no separate round-trip before it
  *  can resolve a body name (the /avatars top-level await used to gate the
  *  client's entire module graph). */
-export function avatarRoster(): { name: string; path: string; height: number | null; seat?: unknown }[] {
+export type AvatarPerf = { tris: number; draws: number; mats: number; alpha: number; bones: number; texMB: number;
+  rank: number; rankName: string; worst: string; v: string };
+/** POST /thumb's `perf` (JSON of the loupe's numbers) + `v` → a validated record with the rank recomputed here, or
+ *  null. Every field must be a finite, non-negative, sane number — this is client-written. */
+export function avatarPerfParam(raw: string | null, v: string | null): AvatarPerf | null {
+  if (!raw || !v || !/^\d{1,16}$/.test(v) || raw.length > 400) return null;
+  let o: any; try { o = JSON.parse(raw); } catch { return null; }
+  const LIM = { tris: 5e7, draws: 1e5, mats: 1e4, alpha: 1e4, bones: 1e4, texMB: 1e5 } as const;
+  const n: any = {};
+  for (const [k, max] of Object.entries(LIM)) {
+    const x = Number(o?.[k]);
+    if (!Number.isFinite(x) || x < 0 || x > max) return null;
+    n[k] = k === "texMB" ? Math.round(x * 100) / 100 : Math.round(x);
+  }
+  const r = rankOf(n);
+  return { ...n, rank: r.rank, rankName: TIER_NAMES[r.rank], worst: r.worst, v };
+}
+export function avatarRoster(): { name: string; path: string; height: number | null; perf?: AvatarPerf | null; seat?: unknown }[] {
   const seen = new Map<string, { url: string; file: string }>();
   for (const base of [LIBRARY_DIR, OPT_DIR]) {
     const dir = join(base, "eidoverse/assets/vrms");
@@ -123,7 +141,7 @@ export function avatarRoster(): { name: string; path: string; height: number | n
   }
   // stature metadata, contributed alongside portraits (see POST /thumb);
   // a def's declared height wins over the measured sidecar
-  let hmeta: Record<string, { h: number }> = {};
+  let hmeta: Record<string, { h?: number; perf?: AvatarPerf }> = {};
   try {
     const mp = join(OPT_DIR, "thumbs", "meta.json");
     if (existsSync(mp)) hmeta = JSON.parse(readFileSync(mp, "utf8"));
@@ -135,6 +153,8 @@ export function avatarRoster(): { name: string; path: string; height: number | n
   // when a body's bytes actually changed.
   return [...seen].map(([name, { url, file }]) => ({ name, path: url,
     height: defs[name]?.height ?? hmeta[name.replace(/[^a-zA-Z0-9_-]/g, "_")]?.h ?? null,
+    // the loupe's rank of THIS version only: a stamp from an older export is withheld until a wearer re-measures
+    perf: ((p) => p && p.v === String(Math.round(Bun.file(file).lastModified)) ? p : null)(hmeta[name.replace(/[^a-zA-Z0-9_-]/g, "_")]?.perf),
     seat: seatStore.judge(name, file) }));
 }
 
@@ -808,19 +828,26 @@ const ROUTES: Route[] = [
       // client-side) — kept beside the images so /avatars can hand catalogs a
       // roster drawn to a common scale.
       const height = Number(url.searchParams.get("height"));
-      if (Number.isFinite(height) && height > 0.2 && height < 20) {
+      const hOk = Number.isFinite(height) && height > 0.2 && height < 20;
+      // …and the body's loupe numbers, measured by the wearer's client on the LOADED body (perfscope.statsOf — the
+      // runtime draws a GLB parse can't see: MToon outline groups). Tied to the body version `v` (the roster's ?v=
+      // mtime) so a re-export shows no stale rank. The rank is recomputed HERE from the numbers (shared/perfrank.js);
+      // a client-sent rank would be ignored.
+      const perf = avatarPerfParam(url.searchParams.get("perf"), url.searchParams.get("v"));
+      if (hOk || perf) {
         const metaPath = join(dir, "meta.json");
-        let meta: Record<string, { h: number }> = {};
+        let meta: Record<string, { h?: number; perf?: AvatarPerf }> = {};
         try { if (existsSync(metaPath)) meta = JSON.parse(readFileSync(metaPath, "utf8")); } catch { /* fresh */ }
-        meta[safe] = { h: Math.round(height * 100) / 100 };
+        meta[safe] = { ...meta[safe], ...(hOk ? { h: Math.round(height * 100) / 100 } : {}), ...(perf ? { perf } : {}) };
         atomicWrite(metaPath, JSON.stringify(meta));
       }
       // First contributor wins (re-posting on every join would be pointless
       // write traffic) — unless a re-mint pass explicitly forces the refresh.
       const force = url.searchParams.get("force") === "1";
-      if (existsSync(dest) && !force) return new Response(JSON.stringify({ ok: true, existed: true }),
+      if (existsSync(dest) && !force) return new Response(JSON.stringify({ ok: true, existed: true, perf: !!perf }),
         { headers: { "content-type": "application/json" } });
       const body = new Uint8Array(await req.arrayBuffer());
+      if (body.length === 0 && perf) return new Response(JSON.stringify({ ok: true, meta: true, perf: true }), { headers: { "content-type": "application/json" } });
       if (body.length > 400_000) return new Response("thumb too large", { status: 413 });
       if (body.length < 8 || body[0] !== 0x89 || body[1] !== 0x50) return new Response("not a PNG", { status: 415 });
       writeFileSync(dest, body);

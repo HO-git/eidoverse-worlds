@@ -149,7 +149,7 @@ wireAvatarSwitch(async (path, name) => {
     setMyAvatarPath(path);
     setMe(next);
     localStorage.setItem('ew-avatar-name', name);
-    contributeThumbnail(name, next.vrm, CONFIG.token);
+    contributeThumbnail(name, next.vrm, CONFIG.token, { path });
     if (net.joined) {
       // re-announce: everyone rebuilds my remote with the new body
       const { sendJoin } = await import('./net.js');

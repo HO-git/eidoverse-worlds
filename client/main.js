@@ -341,7 +341,7 @@ function start() {
         // signal — it costs an offscreen render-target compile burst, and the
         // old t+4s wall clock dropped that into the middle of the boot storm
         // (§16.1g). Calm = 5 smooth seconds with no load work in flight.
-        if (!av.isCapsule) whenCalm().then(() => contributeThumbnail(getMyAvatarName(), av.vrm, CONFIG.token));
+        if (!av.isCapsule) whenCalm().then(() => contributeThumbnail(getMyAvatarName(), av.vrm, CONFIG.token, { path: getMyAvatarPath() }));
       })
       .catch((e) => { bodySettled = true; markPhase('body', 1); report('avatar', e); releaseBodyGate('body failed — the world must not wait'); checkReady(); });
   }

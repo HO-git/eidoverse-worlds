@@ -208,6 +208,7 @@ bus.on('asset', ({ name, path }) => {
 // ---- avatars ---------------------------------------------------------------
 
 let onSwitchAvatar = null;
+const AV_CAT = { tris: 'triangles', draws: 'draw calls', texMB: 'texture memory', bones: 'bones', mats: 'materials', alpha: 'transparent materials' };
 export function wireAvatarSwitch(fn) { onSwitchAvatar = fn; }
 /** The one body-switch, for every surface (the desktop cards, the bodies panel, its quad). */
 export function switchAvatar(path, name) { return onSwitchAvatar?.(path, name); }
@@ -222,7 +223,7 @@ async function paintAvatars(body) {
   // used to give it its own size, so cards came out at two sizes (R's shot)
   const grid = document.createElement('div');
   grid.className = 'grid dense av-grid';
-  for (const { name, path } of list) {
+  for (const { name, path, perf } of list) {
     const card = document.createElement('button');
     card.className = `card panel ${path === myAvatarPath ? 'on' : ''}`;
     // the portrait BOX sizes the card, never the image: a lazy <img> that has
@@ -234,6 +235,18 @@ async function paintAvatars(body) {
        <span>${escapeHtml(name)}</span>`;
     const img = card.querySelector('img');
     img.addEventListener('error', () => { img.remove(); });
+    // the loupe's rank of this body AS LOADED (stamped by a wearer's client — routes.ts avatarRoster; absent until
+    // someone has worn this version): the same pill as the library cards, on the portrait's bottom-right
+    if (perf) {
+      const pill = document.createElement('b');
+      pill.className = 'opt-rank';
+      pill.dataset.rank = String(perf.rank);
+      pill.style.cssText = `position:absolute;right:6px;bottom:6px;z-index:1;display:inline-block;width:14px;height:8px;border-radius:4px;`
+        + `background:${TIER_COLORS[perf.rank]};box-shadow:0 0 0 1px rgba(0,0,0,.45)`;
+      card.querySelector('.av-shot').appendChild(pill);
+      card.title = `perf: ${perf.rankName} — set by ${AV_CAT[perf.worst] ?? perf.worst}\n  ${perf.tris.toLocaleString()} tris · ${perf.draws} draws · `
+        + `${perf.mats} materials · ${perf.texMB} MB textures${perf.bones ? ` · ${perf.bones} bones` : ''}${perf.alpha ? ` · ${perf.alpha} transparent` : ''}`;
+    } else card.title = 'perf: not measured yet (it is measured the first time someone wears this body)';
     card.onclick = () => onSwitchAvatar?.(path, name);
     grid.appendChild(card);
   }

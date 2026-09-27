@@ -292,8 +292,18 @@ export const isPresenting = () => presenting;
 // turn: 'snap' | 'smooth' · vignette: comfort tunnel on move/turn · mirror:
 // what the desktop window shows while presenting — 'off' | 'first' | 'third'.
 const PREF_XR = 'ew-xr-prefs';
-export const xrPrefs = (() => { try { return { turn: 'smooth', vignette: false, mirror: 'off', seated: false, ...JSON.parse(localStorage.getItem(PREF_XR) || '{}') }; } catch { return { turn: 'smooth', vignette: false, mirror: 'off', seated: false }; } })();
+export const xrPrefs = (() => { try { return { turn: 'smooth', vignette: false, mirror: 'off', seated: false, res: 'auto', ...JSON.parse(localStorage.getItem(PREF_XR) || '{}') }; } catch { return { turn: 'smooth', vignette: false, mirror: 'off', seated: false, res: 'auto' }; } })();
 { const m = new URLSearchParams(location.search).get('mirror'); if (m === 'off' || m === 'first' || m === 'third') xrPrefs.mirror = m; }   // URL override for A/B (the 'pop to origin' hunt, 09-05 21:46)
+// Eye resolution, as WebXR's framebufferScaleFactor: a per-axis scale of the size the runtime recommends. 'auto' (1.0)
+// is that size — SteamVR's resolution slider sets it, and it is deliberately LARGER than the panel because the lens
+// magnifies the centre. Desktop Chrome clamps the factor to 0.2–1.0, so this can only go down from there; it is read
+// once as a session starts (three warns if it changes while presenting). ?xrres=0.2..1 overrides for an A/B.
+export const XR_RES_SCALES = { auto: 1, 85: 0.85, 70: 0.7, 50: 0.5 };
+export function xrResScale() {
+  const q = +new URLSearchParams(location.search).get('xrres');
+  if (q >= 0.2 && q <= 1) return q;
+  return XR_RES_SCALES[xrPrefs.res] ?? 1;
+}
 export function setXrPref(k, v) { xrPrefs[k] = v; try { localStorage.setItem(PREF_XR, JSON.stringify(xrPrefs)); } catch {} bus.emit('xr:prefs', xrPrefs); }
 const DEADZONE = 0.18;
 const SNAP_DEG = 30;
@@ -672,6 +682,7 @@ async function enterVR({ retryOf = null } = {}) {
     const feats = session.enabledFeatures ?? [];
     const floor = feats.includes('local-floor') ? 'local-floor' : feats.includes('bounded-floor') ? 'bounded-floor' : null;
     try { renderer.xr.setReferenceSpaceType(floor ?? 'local'); } catch (e) { report('xr ref space', e); }
+    try { renderer.xr.setFramebufferScaleFactor(xrResScale()); } catch (e) { report('xr res scale', e); }   // also BEFORE setSession: the layer is sized as the session starts
     floorSpace = floor;
     scaleState.samples.length = 0; scaleState.locked = false; scaleState.firstAt = 0; scaleState.k = 1; scaleState.source = 'fallback'; loadSavedScale();
     bus.emit('xr:loop');   // frame.js hands the loop to three BEFORE setSession saves+wraps it (see frame.js)
@@ -696,7 +707,7 @@ async function enterVR({ retryOf = null } = {}) {
       tee(`[xr] enter #${sessionNo}: xrTarget ${t ? `${t.width}x${t.height} samples=${t.samples} type=${t.texture?.type} fmt=${t.texture?.format} cs=${t.texture?.colorSpace} multiview=${!!t.multiview}` : 'none'} renderer.samples=${renderer.samples}/${renderer._samples} fbts=${fb?.constructor?.name}:${fb?.size ?? '?'} layers=${renderer.xr._layers?.length ?? '?'} usesLayers=${renderer.xr._sessionUsesLayers}`); }
     { const gl = renderer.backend?.gl; let mv = 'n/a';
       try { const ex = gl?.getSupportedExtensions?.() ?? []; mv = ['OVR_multiview2', 'OCULUS_multiview'].filter((e) => ex.includes(e)).join('+') || 'none'; } catch { /* context lost */ }
-      tee(`[xr] enter #${sessionNo}: projLayer=${!!renderer.xr._glProjLayer} baseLayer=${!!renderer.xr._glBaseLayer} foveation=${renderer.xr.getFoveation?.() ?? '?'} multiviewExt=${mv} outputPass=${renderer.needsFrameBufferTarget}`); }
+      tee(`[xr] enter #${sessionNo}: projLayer=${!!renderer.xr._glProjLayer} baseLayer=${!!renderer.xr._glBaseLayer} foveation=${renderer.xr.getFoveation?.() ?? '?'} scale=${renderer.xr.getFramebufferScaleFactor?.() ?? '?'} target=${renderer.xr._xrRenderTarget?.width ?? '?'}x${renderer.xr._xrRenderTarget?.height ?? '?'} multiviewExt=${mv} outputPass=${renderer.needsFrameBufferTarget}`); }
     entryClock = { t0: performance.now(), setSessionMs: +(performance.now() - tReq).toFixed(0), frames: [], last: 0, programs: 0, programMs: 0, pipelines: 0 };
     // ENTRY PROBE (owner, 09-06 13:35: 'might need a better probe'): count + time every program/pipeline the
     // backend builds while the entry clock runs — the 3 s first frame becomes 'N programs in X ms'.

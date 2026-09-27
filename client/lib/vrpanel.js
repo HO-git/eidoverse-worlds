@@ -28,6 +28,13 @@ export function initVRPanel() {
     turn.title = 'smooth: continuous, like a desktop mouse — the default. snap: the world pivots 30° per stick flick, a comfort option.';
     body.appendChild(turn);
 
+    // eye resolution: 'auto' is what the headset's runtime asks for; each step is per axis, so pixels go as its square
+    const RES_OPTS = [['auto', 'auto (the headset asks)'], ['85', '85% (≈ ¾ the pixels)'], ['70', '70% (≈ ½ the pixels)'], ['50', '50% (¼ the pixels)']];
+    const { row: res } = selectRow('resolution', RES_OPTS, String(xrPrefs.res ?? 'auto'),
+      (v) => { setXrPref('res', v); flashHint(`VR resolution ${RES_OPTS.find(([k]) => k === v)?.[1] ?? v}${isPresenting() ? ' — applies next time you enter VR' : ''}`); });
+    res.title = 'auto: the size your headset runtime asks for (in SteamVR, its own resolution slider sets this; it is larger than the panel because the lens magnifies the centre). Lower is softer and faster. Takes effect when a session starts.';
+    body.appendChild(res);
+
     const vig = checkRow('comfort vignette', () => !!xrPrefs.vignette,
       (on) => { setXrPref('vignette', !!on); flashHint(`VR vignette ${on ? 'on' : 'off'}`); });
     vig.title = 'darkens the edges of your view while you move or turn on the stick; opens again when you stop.';

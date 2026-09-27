@@ -53,8 +53,7 @@
 
 import { renderer, sun, BASE_PIXEL_RATIO } from './core.js';
 import { CONFIG } from './base.js';
-import { warmStats } from './warmqueue.js';
-import { laneBusy } from './loadwork.js';
+import { busy as budgetBusy, setShare } from './framebudget.js';
 import { promoteTailPending, modelQuality } from './realize/models.js';
 import { setSlotCap, getSlotCap, maxSlots, litCount,
   setCasterBudget, getCasterBudget, casterCount, shadowsOn, shadowRes } from './lightrig.js';
@@ -326,13 +325,20 @@ const history = [];   // recent lever moves, for the debug surface
 
 // ---- loading grace + the calm signal (§16.2.D) ------------------------------
 
-/** The busy predicate: is the engine loading RIGHT NOW? Composed from the
- *  three places load work actually lives — the warm conductor (queued or
- *  mid-item), loadwork's cpu/gpu lanes, and the promote tail's pending
- *  boulders — each read through its own smallest honest export. */
+/** The busy predicate: is the engine loading RIGHT NOW? framebudget's busy() carries what its producers report —
+ *  the warm conductor (queued or mid-item) and loadwork's cpu/gpu lanes — and the promote tail's pending boulders
+ *  are read directly. (syncgate's deferred links are not loading in this sense: they link off-thread and cost no
+ *  frames.) */
 function loadingBusy() {
-  const w = warmStats();
-  return w.pending > 0 || w.running || laneBusy() || promoteTailPending() > 0;
+  return budgetBusy() || promoteTailPending() > 0;
+}
+
+// The share of each frame background work may use (framebudget), from the regime this pulse measured: smooth gets
+// the old 6 ms at 60 Hz; a slow machine gives loading less of a frame it is already missing; a headset's frames are
+// shorter and a missed one is felt, so it is capped lower.
+function backgroundShare(fps) {
+  const s = fps > 52 ? 0.36 : fps >= 26 ? 0.3 : 0.2;
+  return renderer.xr?.isPresenting ? Math.min(s, 0.25) : s;
 }
 
 let grace = false;        // the last pulse was held by loading grace
@@ -353,6 +359,8 @@ export function whenCalm() {
 
 /** Feed once per second with the measured fps. */
 export function governPerformance(fps) {
+  // the share follows the machine, not the storm: a second that loading itself slowed must not shrink loading's slice
+  if (!loadingBusy()) setShare(backgroundShare(fps));
   if (loadingBusy()) {
     // freeze BOTH directions and reset every streak: a storm-dip shed and a
     // splash-smooth restore are both answers to loading, not to the machine

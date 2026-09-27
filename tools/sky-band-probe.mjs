@@ -57,6 +57,54 @@ try {
     return { n, frames, diff, maxd, badRows: [...badRows].slice(0, 12), cuts, total: a.length };
   }, GAP), new Promise((_, rej) => setTimeout(() => rej(new Error('page pinned 60 s')), 60000))]);
   console.log('  result:', JSON.stringify(r));
+  // the client's two extra shapes (review 2: H2 + the budgeted wait): budget:true, then a renderer reporting a session
+  const r2 = GAP ? null : await Promise.race([pg.evaluate(async () => {
+    const { THREE, TSL, renderer } = await import('./lib/core.js');
+    const { bandedBakeRender } = await import('./lib/sky_baked.js');
+    const W = 256, H = 128, PASSES = 8, BUDGET = 16000;
+    const mat = new THREE.NodeMaterial();
+    mat.fragmentNode = TSL.Fn(() => { const u = TSL.uv(); return TSL.vec4(u.x, u.y, TSL.sin(u.x.mul(37.0)).mul(TSL.cos(u.y.mul(23.0))).mul(0.5).add(0.5), 1); })();
+    const scene = new THREE.Scene(); scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat));
+    const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const mk = () => new THREE.RenderTarget(W, H, { type: THREE.UnsignedByteType, depthBuffer: false });
+    const A = mk(); await renderer.compileAsync(scene, cam);
+    { const prev = renderer.getRenderTarget(); renderer.setRenderTarget(A); renderer.render(scene, cam); renderer.setRenderTarget(prev); }
+    const a = await renderer.readRenderTargetPixelsAsync(A, 0, 0, W, H);
+    const same = async (T) => { const b = await renderer.readRenderTargetPixelsAsync(T, 0, 0, W, H); let d = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d++; return d; };
+    // "inside a frame callback": set by every rAF callback, cleared by a timer queued from it (timers run after the frame task)
+    const origRAF = globalThis.requestAnimationFrame; let inRaf = false;
+    globalThis.requestAnimationFrame = (cb) => origRAF((t) => { inRaf = true; setTimeout(() => { inRaf = false; }, 0); cb(t); });
+    try {
+      // budget: sample every frame whether the bake target is still bound
+      // a hog takes each frame's free grant and overruns, so bands really WAIT for their turn (aging lets them in)
+      const fb = await import('./lib/framebudget.js');
+      const B = mk(); let boundSeen = 0, sampling = true;
+      (function samp() { if (!sampling) return; if (renderer.getRenderTarget() === B) boundSeen++; if (fb.ask('probe-hog')) fb.spent('probe-hog', 40); origRAF(samp); })();
+      const d0 = fb.budgetStats().lanes.sky?.denied ?? 0;
+      const nB = await bandedBakeRender(renderer, scene, cam, B, { cloudPasses: PASSES, passTexelBudget: BUDGET, budget: true });
+      sampling = false;
+      const skyWaits = (fb.budgetStats().lanes.sky?.denied ?? 0) - d0;
+      // presenting: the renderer as a session would show it to this function
+      const C = mk(); const fakeXr = { isPresenting: true, get enabled() { return renderer.xr.enabled; }, set enabled(v) { renderer.xr.enabled = v; } };
+      const rp = new Proxy(renderer, { get(t, k) { if (k === 'xr') return fakeXr; const v = t[k]; return typeof v === 'function' ? v.bind(t) : v; } });
+      const bandCalls = [];
+      const origRender = renderer.render;
+      renderer.render = function (s, c) { if (s.children?.some((m) => m.material === mat)) bandCalls.push({ xr: renderer.xr.enabled, inRaf }); return origRender.call(this, s, c); };
+      const xrWas = renderer.xr.enabled; renderer.xr.enabled = true;   // a session has it on
+      let nC;
+      try { nC = await bandedBakeRender(rp, scene, cam, C, { cloudPasses: PASSES, passTexelBudget: BUDGET, budget: true }); }
+      finally { renderer.render = origRender; renderer.xr.enabled = xrWas; }
+      return { nB, skyWaits, boundSeen, dB: await same(B), nC, dC: await same(C), bandCalls: bandCalls.length, bad: bandCalls.filter((b) => b.xr || b.inRaf).length };
+    } finally { globalThis.requestAnimationFrame = origRAF; }
+  }), new Promise((_, rej) => setTimeout(() => rej(new Error('page pinned 60 s (r2)')), 60000))]);
+  if (r2) {
+    console.log('  client shapes:', JSON.stringify(r2));
+    check('(setup) the budget really made bands wait', r2.skyWaits > 0, String(r2.skyWaits));
+    check('budgeted: the bake target is never left bound while a frame runs', r2.boundSeen === 0, `${r2.boundSeen} frames saw it bound`);
+    check('budgeted: byte-identical to the one-draw bake', r2.nB >= 4 && r2.dB === 0, `${r2.dB} bytes differ over ${r2.nB} strips`);
+    check('presenting: every band renders between frames with xr off (never inside an XR frame)', r2.bandCalls >= 4 && r2.bad === 0, `${r2.bad} of ${r2.bandCalls} inside a frame or with xr on`);
+    check('presenting: byte-identical to the one-draw bake', r2.dC === 0, `${r2.dC} bytes differ`);
+  }
   check('bands: the bake was rendered as several strips, across frames', r.n >= 4 && r.frames >= r.n - 1, `${r.n} strips over ${r.frames} frames (cuts at rows ${r.cuts.join(',')})`);
   check('same: banded pixels are byte-identical to the one-draw bake (seam rows included)', r.diff === 0, `${r.diff} of ${r.total} bytes differ (max Δ ${r.maxd}); rows ${r.badRows.join(',') || '-'}`);
   check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | ') || 'none');

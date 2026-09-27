@@ -38,6 +38,7 @@ import { THREE, TSL, scene, camera, renderer } from './core.js';
 import { tee } from './base.js';
 import { warm, P_AMBIENT } from './warmqueue.js';
 import { bandCuts } from './sky_bands.js';
+import { ask, spent, turn } from './framebudget.js';
 
 let dome = null;
 let mat = null;
@@ -159,13 +160,25 @@ let cfg = {
 
 export { bandCuts } from './sky_bands.js';   // pure maths, its own module so a unit test can load it
 
+/** Render `fn` BETWEEN XR frames with the pump's discipline (see xrPumpTick): xr.enabled off, the stale eye contexts
+ *  nulled (and never restored: null is the truth between frames). Awaits a macrotask first, so a caller woken from a
+ *  frame callback (rAF is the session clock while presenting) is out of the frame before it renders. */
+export async function renderBetweenXRFrames(r, fn) {
+  await new Promise((res) => setTimeout(res, 0));
+  const xrWas = r.xr.enabled;
+  r.xr.enabled = false;
+  if (r.backend) r.backend._currentContext = null;
+  r._currentRenderContext = null;
+  try { return fn(); } finally { r.xr.enabled = xrWas; }
+}
+
 /** The BOOT bake as bands (owner's machine, 2026-09-23: `[load] sky bake — 89951ms over 1 frame` on WebGL, then
  *  CONTEXT_LOST_WEBGL — one 4096x2048 8-pass full-screen draw is past what a GPU watchdog tolerates). Renders the bake
  *  scene's single full-screen quad into `target` as cost-weighted strips, one per frame, with the SAME material and
  *  global uvs as the quad — so the same texels, just not in one draw. The band pipeline is compiled off the render path
  *  first (a cold band met inside a frame is the 1.5MB-shader stall again). Returns the band count. */
 export async function bandedBakeRender(r, bakeScene, bakeCam, target, { cloudPasses = cfg.cloudPasses, passTexelBudget = cfg.passTexelBudget,
-  nextFrame = () => new Promise((res) => requestAnimationFrame(res)) } = {}) {
+  nextFrame = () => new Promise((res) => requestAnimationFrame(res)), budget = false } = {}) {
   const bakeMat = bakeScene.children?.[0]?.material;
   if (!bakeMat) throw new Error('bandedBakeRender: bake scene has no quad');
   const cuts = bandCuts(target.width, target.height, cloudPasses, passTexelBudget);
@@ -186,11 +199,21 @@ export async function bandedBakeRender(r, bakeScene, bakeCam, target, { cloudPas
     { const prev = r.getRenderTarget(); r.setRenderTarget(target);
       try { await r.compileAsync(bs, bakeCam).catch(() => {}); } finally { r.setRenderTarget(prev ?? null); } }
     for (let i = 0; i < meshes.length; i++) {
-      for (let j = 0; j < meshes.length; j++) meshes[j].visible = j === i;
-      const prev = r.getRenderTarget(), autoClear = r.autoClear;
-      r.autoClear = false;            // strips abut and each fully overdraws its own texels
-      r.setRenderTarget(target);
-      try { r.render(bs, bakeCam); } finally { r.setRenderTarget(prev ?? null); r.autoClear = autoClear; }
+      // budget: each band is a gpu unit of the shared per-frame budget (the client's callers; the probe paces itself).
+      // Nothing is bound across this wait: other frames render meanwhile.
+      const g = budget ? await turn('sky', { gpu: true }) : null;
+      const draw = () => {
+        for (let j = 0; j < meshes.length; j++) meshes[j].visible = j === i;
+        const prev = r.getRenderTarget(), autoClear = r.autoClear;
+        r.autoClear = false;          // strips abut and each fully overdraws its own texels
+        r.setRenderTarget(target);
+        const t0 = performance.now();
+        try { r.render(bs, bakeCam); } finally { r.setRenderTarget(prev ?? null); r.autoClear = autoClear; }
+        if (g) spent('sky', performance.now() - t0, null, g);
+      };
+      // a bake that runs into a headset session (the VR cap's high→medium rebuild; a desktop bake still banding at
+      // entry) must not render INSIDE an XR frame: that corrupts the per-eye render list (see xrPumpTick)
+      if (r.xr?.isPresenting) await renderBetweenXRFrames(r, draw); else draw();
       if (i < meshes.length - 1) await nextFrame();
     }
   } finally { for (const g of geos) g.dispose(); }
@@ -388,6 +411,7 @@ export function requestBake() {
 // pump path, baking re-freezes for the rest of the session and says so once
 // — the old frozen-sky behavior as fallback, never as default.
 const XR_BAKE_SPACING_MS = 40;
+let skyWaited = 0;   // band asks age like any waiter (the pump asks last in a frame; it must not starve)
 let xrPumpId = 0;
 let xrBakeBroken = false;
 
@@ -441,9 +465,16 @@ function xrPumpTick() {
         state = 'baking';
       }
     } else if (state === 'baking') {
-      renderBand(bandIdx);                  // one band per tick, off-frame
-      bandIdx += 1;
-      if (bandIdx >= bandMeshes.length) finishBake(now);
+      const g = ask('sky', { gpu: true, waited: skyWaited });
+      if (!g) skyWaited++;
+      else {
+        skyWaited = 0;
+        const t0 = performance.now();
+        renderBand(bandIdx);                // one band per tick, off-frame
+        spent('sky', performance.now() - t0, null, g);
+        bandIdx += 1;
+        if (bandIdx >= bandMeshes.length) finishBake(now);
+      }
     }
   } catch (e) {
     xrBakeBroken = true;
@@ -468,7 +499,12 @@ export function updateBakedDome(now = performance.now()) {
   if (presenting) scheduleXrPump();        // renders happen between XR frames
   if (state === 'baking') {
     if (presenting) return;                // the pump owns this state in XR
+    const g = ask('sky', { gpu: true, waited: skyWaited });   // a band is a gpu unit: at most one per frame, in the shared budget
+    if (!g) { skyWaited++; return; }
+    skyWaited = 0;
+    const t0 = performance.now();
     renderBand(bandIdx);
+    spent('sky', performance.now() - t0, null, g);
     bandIdx += 1;
     if (bandIdx >= bandMeshes.length) finishBake(now);
     return;
@@ -547,7 +583,7 @@ function maybeRefreshGraph() {
     const target = renderer.getRenderTarget();
     renderer.setRenderTarget(outer ?? null);
     const t0 = performance.now();
-    return bandedBakeRender(renderer, sc, cam, target, { cloudPasses: cfg.cloudPasses, passTexelBudget: cfg.passTexelBudget, nextFrame: nextDesktopFrame })
+    return bandedBakeRender(renderer, sc, cam, target, { cloudPasses: cfg.cloudPasses, passTexelBudget: cfg.passTexelBudget, nextFrame: nextDesktopFrame, budget: true })
       .then((n) => { refreshStats.bands = n; tee(`[sky] graph refresh baked in ${n} bands over ${(performance.now() - t0).toFixed(0)} ms`); renderer.setRenderTarget(target); });
   };
   Promise.resolve(sys.bakeEnv(renderer, {

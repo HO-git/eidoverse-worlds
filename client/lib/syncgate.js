@@ -33,7 +33,18 @@ export function installSyncGate(renderer, { tee = () => {}, gate = true } = {}) 
   be.__syncGate = stats;
 
   be.createRenderPipeline = (renderObject, promises) => {
-    if (promises != null) return orig(renderObject, promises);          // compileAsync: three polls already
+    if (promises != null) {                                              // compileAsync: three polls already
+      // …but a BIG program compiling there can still freeze the GPU process on a cold cache (the owner, 09-27): say
+      // which, immediately, so a freeze leaves its name as the last line in the clientlog
+      const ret = orig(renderObject, promises);
+      const fs = renderObject.pipeline?.fragmentProgram?.code?.length ?? 0;
+      if (fs > 200000) {
+        const o = renderObject.object, t0 = performance.now(), name = `${o?.type ?? '?'}:${named(o)} ${renderObject.material?.type ?? '?'} fs ${fs}`;
+        tee(`[syncgate] async compile started: ${name}`, true);
+        Promise.all(promises).then(() => tee(`[syncgate] async compile linked after ${(performance.now() - t0).toFixed(0)} ms: ${name}`, true), () => {});
+      }
+      return ret;
+    }
     stats.renderPath++;
     if (!isWorldPass(renderer.getRenderTarget())) stats.intoTarget++;
     const t0 = performance.now();

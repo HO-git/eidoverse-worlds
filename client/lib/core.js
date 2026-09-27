@@ -11,7 +11,7 @@
 
 import * as THREE from 'three';
 import * as TSL from 'three/tsl';
-import { CONFIG, tee, bus } from './base.js';
+import { CONFIG, tee, teeNow, bus } from './base.js';
 import { installGpuLostRecovery } from './gpulost.js';
 import { decideBackend } from './backend_choice.js';
 import { headsetSeenRecently as _headsetSeenRecently, migrateHeadsetSeen as _migrateHeadsetSeen } from './headset_seen.js';
@@ -183,7 +183,7 @@ if (globalThis.__xrCtx) { const a = _xrGl?.getContextAttributes(); Object.assign
 // Inert without a stereo camera, so every boot gets it — sessions can start from a non-XR boot too.
 globalThis.__xrPassSplit = separateXRPass(renderer);
 // No pipeline links on the render path: a missed warm pops in late instead of freezing the browser (syncgate.js). ?syncgate=0 = census only.
-globalThis.__syncGate = installSyncGate(renderer, { tee, gate: CONFIG.params.get('syncgate') !== '0' });
+globalThis.__syncGate = installSyncGate(renderer, { tee: (l, now) => (now ? teeNow(l) : tee(l)), gate: CONFIG.params.get('syncgate') !== '0' });
 // A lost context (GPU watchdog reset, driver crash) goes back to the live world instead of a black canvas (gpulost.js).
 globalThis.__gpuLost = installGpuLostRecovery({ canvas, renderer, tee, onStop: (why) => bus.emit('gpu-lost-stop', { why }) });
 // the splash watchdog (index.html) stops worrying: modules resolved and the

@@ -17,7 +17,7 @@ import { THREE, scene, sun, hemi, renderer, camera } from './core.js';
 // ?shadowdebug=1 — R 09-07 19:17: 'crank it way up to see if it's there at all'. Sun shadows measured ~10 % darker than lit
 // ground (fill light drowns the sun's share); this dims the fill to a fifth so the shadow map's coverage is legible.
 const SHADOW_DEBUG_FILL = new URLSearchParams(globalThis.location?.search ?? '').has('shadowdebug') ? 0.2 : 1;
-import { report, bus, tee, CONFIG } from './base.js';
+import { report, bus, tee, teeNow, CONFIG } from './base.js';
 import { loadEidoModule, primeFiles, listLibrary, fetchBytes } from './assets.js';
 import { markPhase } from './boot.js';
 import { bandCuts, bandedBakeRender, bakeGeneration } from './sky_baked.js';
@@ -594,7 +594,7 @@ async function worldSettled() {
     if (bootDone() && !loadingBusy()) { if (++calm >= 4) break; } else calm = 0;
     await new Promise((r) => setTimeout(r, 250));
   }
-  tee(`[sky] world settled after ${((performance.now() - t0) / 1000).toFixed(1)} s: compiling the sky now`);
+  teeNow(`[sky] world settled after ${((performance.now() - t0) / 1000).toFixed(1)} s: compiling the sky now`);
 }
 async function compileLiveDomes() {
   const domes = skyInner?.domes ?? [];

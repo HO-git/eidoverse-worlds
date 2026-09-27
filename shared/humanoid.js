@@ -128,6 +128,27 @@ export function normalizeQuat(v) {
 }
 
 /**
+ * One bone's entry in a held pose, read into its channels. A pose value is
+ * either the original bare quaternion `[x,y,z,w]`, or `{q?, t?, s?}`:
+ *   q  rotation [x,y,z,w] — the parent-relative rotation, as ever
+ *   t  translation [x,y,z] in model metres (Y up, +Z forward), measured in the
+ *      parent's rest axes turned by the parent's pose; on hips, plain model
+ *      space — `{t:[0,-0.3,0]}` on hips lowers the body 30 cm
+ *   s  scale in the bone's own axes: [x,y,z], or one number for uniform
+ * Returns `{q, t, s}` with absent channels null, or null when nothing in the
+ * value is usable. Every consumer that only understands rotations reads `.q`.
+ */
+export function poseChannels(v) {
+  const fin = (a, n) => Array.isArray(a) && a.length === n && a.every((x) => typeof x === 'number' && Number.isFinite(x));
+  if (fin(v, 4)) return { q: v, t: null, s: null };
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const q = fin(v.q, 4) ? v.q : null;
+  const t = fin(v.t, 3) ? v.t : null;
+  const s = fin(v.s, 3) ? v.s : (typeof v.s === 'number' && Number.isFinite(v.s) ? [v.s, v.s, v.s] : null);
+  return q || t || s ? { q, t, s } : null;
+}
+
+/**
  * Validate a sparse pose map, reporting everything it did rather than
  * silently keeping the good parts.
  *

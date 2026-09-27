@@ -32,6 +32,7 @@ import { DRIVEN_BONES } from './ragdoll.js';
 import { stroke as strokeIcon } from './icons.js';
 import { SEAT_CLIP_FILE } from './seatcore.js';
 import { planReaches } from '../../shared/reachorder.js';
+import { poseChannels } from '../../shared/humanoid.js';
 
 // The clip library is ~1.9MB PER SLOT. Waiting for all seven before a body
 // could exist put 13MB between a person and their own legs — the single
@@ -428,6 +429,10 @@ const _wr = new THREE.Quaternion();
 const _wax = new THREE.Vector3();
 const _wup = new THREE.Vector3();
 const _wsw = new THREE.Quaternion();
+const _hq = new THREE.Quaternion();        // raw-pose scratch (_applyRawPose) — per bone, per frame
+const _hv = new THREE.Vector3();
+const _hs = new THREE.Vector3();
+const _ONE = new THREE.Vector3(1, 1, 1);
 const DEG = Math.PI / 180;
 
 // THE LAMP'S BREATH, as dials rather than as three numbers buried in a
@@ -1163,16 +1168,84 @@ export class Avatar {
     return out;
   }
 
-  /** Hold a pose. `bones` is a sparse map name -> [x,y,z,w]. */
+  /** Any bone of this rig by its exported name — hair, wings, eyelids, twist
+   *  bones, the raw halves of humanoid bones — or null. Built once: remotes
+   *  call setPose every frame while a pose blends. */
+  _rawBone(name) {
+    if (!this._rawBones) {
+      this._rawBones = new Map();
+      this.vrm.scene.traverse((o) => { if (o.isBone && o.name && !this._rawBones.has(o.name)) this._rawBones.set(o.name, o); });
+    }
+    return this._rawBones.get(name) ?? null;
+  }
+
+  /** A raw bone's rest, from the TRS every bone had at load (assets.js
+   *  boneRest) rather than from the live node, which holds whatever the clip,
+   *  the springs or the wings last wrote. `pq` is the PARENT's rest rotation
+   *  in the model frame, `pinv` its inverse linear part, `rq` this bone's rest
+   *  local rotation: what a model-axes pose value needs to land in a
+   *  parent-local node. The composition three-vrm applies to humanoid bones
+   *  (raw = P⁻¹·q·P·rest), extended to every bone. Null when the body has no
+   *  recorded rest (the capsule stand-in). */
+  _rawRest(node) {
+    this._rawRests ??= new Map();
+    if (this._rawRests.has(node)) return this._rawRests.get(node);
+    const table = this.vrm.userData?.boneRest;
+    const local = (o) => {
+      const r = table[o.name];
+      return new THREE.Matrix4().compose(new THREE.Vector3().fromArray(r.p), new THREE.Quaternion().fromArray(r.q), new THREE.Vector3().fromArray(r.s));
+    };
+    let rest = null;
+    if (table?.[node.name]) {
+      // Walk up through bones at rest; the first non-bone (the armature node)
+      // does not animate, so where it is now IS where it rests.
+      const P = new THREE.Matrix4();
+      let o = node.parent;
+      while (o && o.isBone && table[o.name]) { P.premultiply(local(o)); o = o.parent; }
+      if (o && o !== this.vrm.scene) {
+        this.vrm.scene.updateMatrixWorld(true);
+        P.premultiply(this.vrm.scene.matrixWorld.clone().invert().multiply(o.matrixWorld));
+      }
+      const pq = new THREE.Quaternion();
+      P.decompose(new THREE.Vector3(), pq, new THREE.Vector3());
+      rest = { pq, pqInv: pq.clone().invert(), rq: new THREE.Quaternion().fromArray(table[node.name].q),
+        pinv: new THREE.Matrix3().setFromMatrix4(P).invert() };
+    }
+    this._rawRests.set(node, rest);
+    return rest;
+  }
+
+  /** Hold a pose. `bones` is a sparse map name -> value, where a value is a
+   *  bare [x,y,z,w] or {q?, t?, s?} (shared/humanoid.js poseChannels). A
+   *  VRM humanoid name rotates the normalized bone, composed over the clip as
+   *  it always has; any OTHER name the rig has (Hair_3_2, a wing, an eyelid,
+   *  L_ThighTwist02) is posed on the raw node. Translation and scale ride the
+   *  raw node for every bone, except hips translation, which goes through
+   *  the normalized hips so springs and everything downstream see the body
+   *  where it is. */
   setPose(bones) {
     if (!bones || typeof bones !== 'object') return this.clearPose();
-    const targets = new Map();
-    for (const [n, q] of Object.entries(bones)) {
-      if (Array.isArray(q) && q.length === 4) targets.set(n, new THREE.Quaternion(q[0], q[1], q[2], q[3]).normalize());
+    const targets = new Map(), raw = [];
+    let hipsT = null;
+    const h = this.vrm.humanoid;
+    for (const [n, v] of Object.entries(bones)) {
+      const c = poseChannels(v);
+      if (!c) continue;
+      const norm = h?.getNormalizedBoneNode?.(n);
+      if (norm) {
+        if (c.q) targets.set(n, new THREE.Quaternion(c.q[0], c.q[1], c.q[2], c.q[3]).normalize());
+        if (n === 'hips' && c.t) hipsT = new THREE.Vector3(c.t[0], c.t[1], c.t[2]);
+        const t = n === 'hips' ? null : c.t;
+        if (t || c.s) { const node = h.getRawBoneNode?.(n); if (node) raw.push({ node, q: null, t, s: c.s }); }
+        continue;
+      }
+      const node = this._rawBone(n);
+      if (node) raw.push({ node, q: c.q && new THREE.Quaternion(c.q[0], c.q[1], c.q[2], c.q[3]).normalize(), t: c.t, s: c.s });
     }
-    if (!targets.size) return;
+    if (!targets.size && !raw.length && !hipsT) return;
     this._override = {
       kind: 'pose', nodes: this._resolveBones([...targets.keys()]),
+      raw, hipsT, hipsNode: hipsT ? h.getNormalizedBoneNode('hips') : null,
       // A tumble starts at FULL weight. The ramp is right for a held pose
       // arriving over the wire, but the ragdoll's first frame is by
       // construction the pose the body is already in — easing into it from
@@ -1345,6 +1418,28 @@ export class Avatar {
 
   clearPose() { if (this._override) this._override.wantWeight = 0; }
 
+  /** Move a held pose's hips translation onto the ROOT, leaving every joint
+   *  where it is in the world. For the moment a sim takes the body: its first
+   *  step replaces this pose with a rotations-only one, so a lowered hips
+   *  (kneeling) snapped back to standing height while the sim — which had
+   *  measured the lowered hips — went on placing the root under them: the body
+   *  rendered a hips-drop above its own physics. A clip-lowered body (sit)
+   *  never showed it because the clip keeps playing under the sim. Baked into
+   *  the root, the skeleton is standard again and the root carries the drop,
+   *  which is also what remotes see. True when something moved. */
+  bakeHipsIntoRoot() {
+    const o = this._override;
+    if (o?.kind !== 'pose' || !o.hipsT || !o.hipsNode) return false;
+    o.hipsNode.parent.updateWorldMatrix(true, false);
+    _hv.copy(o.hipsT).multiplyScalar(o.weight)
+      .applyMatrix3(new THREE.Matrix3().setFromMatrix4(o.hipsNode.parent.matrixWorld));
+    this._rawRelease(o.hipsNode);
+    o.hipsT = null; o.hipsNode = null;
+    this.root.position.add(_hv);
+    this.root.updateMatrixWorld(true);
+    return true;
+  }
+
   /** Go limp, or stand back up.
    *
    *  A ragdoll writes twelve bones. The locomotion mixer writes every bone the
@@ -1468,6 +1563,68 @@ export class Avatar {
   }
   _composeEnd(node, r) { r.out.copy(node.quaternion); r.live = true; }
 
+  // The same guard over all three channels, for writers that also move and
+  // scale: each channel that still holds exactly what we left was not
+  // rewritten by its owner (clip, springs, wings, vrm.update), so its base is
+  // restored before composing again. Per channel, because owners differ —
+  // vrm.update rewrites a humanoid bone's rotation every frame and never
+  // touches its scale.
+  _rawBegin(node) {
+    this._rawComposed ??= new Map();
+    let r = this._rawComposed.get(node);
+    if (!r) {
+      r = { bq: new THREE.Quaternion(), bp: new THREE.Vector3(), bs: new THREE.Vector3(),
+        oq: new THREE.Quaternion(), op: new THREE.Vector3(), os: new THREE.Vector3(), live: false };
+      this._rawComposed.set(node, r);
+    }
+    if (r.live) {
+      if (node.quaternion.equals(r.oq)) node.quaternion.copy(r.bq);
+      if (node.position.equals(r.op)) node.position.copy(r.bp);
+      if (node.scale.equals(r.os)) node.scale.copy(r.bs);
+    }
+    r.bq.copy(node.quaternion); r.bp.copy(node.position); r.bs.copy(node.scale);
+    return r;
+  }
+  _rawEnd(node, r) { r.oq.copy(node.quaternion); r.op.copy(node.position); r.os.copy(node.scale); r.live = true; }
+  /** Hand a raw-posed bone back: every channel we still own returns to its base. */
+  _rawRelease(node) {
+    const r = this._rawComposed?.get(node);
+    if (!r?.live) return;
+    if (node.quaternion.equals(r.oq)) node.quaternion.copy(r.bq);
+    if (node.position.equals(r.op)) node.position.copy(r.bp);
+    if (node.scale.equals(r.os)) node.scale.copy(r.bs);
+    if (!node.matrixAutoUpdate) node.updateMatrix();
+    r.live = false;
+  }
+
+  /** The raw half of a held pose: rotation of non-humanoid bones, and
+   *  translation/scale of any bone. AFTER vrm.update and after the wings,
+   *  because those are this bone's other authors — springs rewrite the hair
+   *  inside vrm.update, _flap rewrites the wings after it, the blink rewrites
+   *  the lids before it — and a bone the pose names is the pose's. Not while
+   *  limp: then the sim owns the hair and wings. */
+  _applyRawPose() {
+    const o = this._override;
+    if (o?.kind !== 'pose' || !o.raw?.length || this._limp) return;
+    const w = o.weight;
+    for (const e of o.raw) {
+      const rest = this._rawRest(e.node);
+      if (!rest) continue;
+      const r = this._rawBegin(e.node);
+      if (e.q) {   // local = P⁻¹ · q · P · rest
+        _hq.copy(rest.pqInv).multiply(e.q).multiply(rest.pq).multiply(rest.rq);
+        e.node.quaternion.slerp(_hq, w);
+      }
+      if (e.t) e.node.position.addScaledVector(_hv.set(e.t[0], e.t[1], e.t[2]).applyMatrix3(rest.pinv), w);
+      if (e.s) e.node.scale.multiply(_hs.set(e.s[0], e.s[1], e.s[2]).lerp(_ONE, 1 - w));
+      // Spring joints (hair, wings) run with matrixAutoUpdate off — three-vrm
+      // and _flap rebuild their matrices by hand — so a TRS write alone would
+      // never reach the skin.
+      if (!e.node.matrixAutoUpdate) e.node.updateMatrix();
+      this._rawEnd(e.node, r);
+    }
+  }
+
   _humanoidBones() { return Object.keys(this.vrm.humanoid?.humanBones ?? {}); }
 
   /** World positions of the humanoid bones in the NEUTRAL rest pose — every
@@ -1530,8 +1687,21 @@ export class Avatar {
         const r = this._composed.get(node);
         if (r?.live && node.quaternion.equals(r.out)) { node.quaternion.copy(r.base); r.live = false; }
       }
+      if (o.hipsNode) this._rawRelease(o.hipsNode);
+      for (const e of o.raw ?? []) this._rawRelease(e.node);
       this._override = null;
       return;
+    }
+
+    // Hips translation, on the NORMALIZED hips: three-vrm carries its world
+    // position to the raw hips inside vrm.update, so the springs and the
+    // wings hang off the body where it now is. Same compose rule as rotation
+    // — a clip with no hips track never rewrites the position, and adding to
+    // what we left last frame would sink the body a little more each frame.
+    if (o.kind === 'pose' && o.hipsNode && o.hipsT) {
+      const r = this._rawBegin(o.hipsNode);
+      o.hipsNode.position.addScaledVector(o.hipsT, o.weight);
+      this._rawEnd(o.hipsNode, r);
     }
 
     if (o.kind === 'pose') {
@@ -1859,6 +2029,8 @@ export class Avatar {
     // is decided by whichever runs second.
     if (this._wings === undefined) this._findWings();
     if (this._wings && !this._limp) this._flap(dt);
+    // the held pose's raw bones — last, so it wins every bone it names
+    if (this._override) this._applyRawPose();
 
     // THE LAMP BREATHES, on the same 3.4s period as the wings and the leaf.
     //

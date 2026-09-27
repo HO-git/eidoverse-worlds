@@ -40,6 +40,7 @@
 
 import { plugin } from "bun";
 import { fileURLToPath } from "node:url";
+import { poseChannels } from "../shared/humanoid.js";
 import { isFiniteVec3 } from "./shape.ts";
 // pure shared geometry — no client import cone, safe to load eagerly
 import { CONTACT_POINTS, contactSeed } from "../shared/contact.js";
@@ -330,9 +331,9 @@ export class HeadlessBody {
     this.av.root.rotation.y = yaw;
     for (const n of Object.values(this.av.nodes) as any[]) n.quaternion.identity();
     if (pose) {
-      for (const [j, q] of Object.entries(pose)) {
-        const n = this.av.nodes[j];
-        if (n && Array.isArray(q) && q.length === 4) n.quaternion.set(q[0], q[1], q[2], q[3]);
+      for (const [j, v] of Object.entries(pose)) {
+        const n = this.av.nodes[j], q = poseChannels(v)?.q;   // rotation only: this stand-in has no t/s
+        if (n && q) n.quaternion.set(q[0], q[1], q[2], q[3]);
       }
     }
     this.av.root.updateMatrixWorld(true);
@@ -566,9 +567,9 @@ export class ReachBody {
     this.av.root.rotation.y = yaw ?? 0;
     for (const [name, n] of Object.entries(this.av.nodes) as [string, any][]) { n.quaternion.identity(); n.position.copy(this.restPositions.get(name)); }
     if (pose) {
-      for (const [j, q] of Object.entries(pose)) {
-        const n = this.av.nodes[j];
-        if (n && Array.isArray(q) && q.length === 4) n.quaternion.set(q[0], q[1], q[2], q[3]);
+      for (const [j, v] of Object.entries(pose)) {
+        const n = this.av.nodes[j], q = poseChannels(v)?.q;   // rotation only: this stand-in has no t/s
+        if (n && q) n.quaternion.set(q[0], q[1], q[2], q[3]);
       }
     }
     this.av.root.updateMatrixWorld(true);

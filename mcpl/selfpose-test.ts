@@ -14,7 +14,7 @@
 
 import {
   HUMANOID_BONES, REQUIRED_BONES, FINGER_BONES,
-  canonicalBone, suggestBone, validatePose, validateTracks, tracksSpan, poseReport,
+  canonicalBone, suggestBone, validatePose, validateTracks, tracksSpan, poseReport, poseChannels,
 } from "../shared/humanoid.js";
 import { WorldAgent } from "./agent.ts";
 
@@ -77,6 +77,21 @@ console.log("\npose validation");
   check("absence is reported in words", /no jaw/.test(poseReport(v)));
 }
 check("a clean pose reports nothing", poseReport(validatePose({ head: [0, 0, 0, 1] })) === "");
+
+console.log("\npose channels (the {q, t, s} value form)");
+{
+  const c = poseChannels([0, 0, 0, 1]);
+  check("a bare quaternion is still a pose value", !!c && c.q?.[3] === 1 && c.t === null && c.s === null);
+  const h = poseChannels({ t: [0, -0.3, 0] });
+  check("translation alone is enough", !!h && h.q === null && h.t?.[1] === -0.3);
+  const u = poseChannels({ q: [0, 0, 0, 1], s: 1.3 });
+  check("a number scale means uniform", JSON.stringify(u?.s) === "[1.3,1.3,1.3]");
+  check("non-uniform scale passes through", JSON.stringify(poseChannels({ s: [1, 1.5, 1] })?.s) === "[1,1.5,1]");
+  check("a malformed channel is dropped, the good ones kept",
+    (() => { const m = poseChannels({ q: [0, 0, 1], t: [0, 1, 0] }); return m?.q === null && m?.t?.[1] === 1; })());
+  check("nothing usable is null", poseChannels({ q: [0, 0] }) === null && poseChannels("head") === null && poseChannels(null) === null);
+  check("a non-finite component is not usable", poseChannels({ t: [0, NaN, 0] }) === null);
+}
 
 console.log("\ntrack validation");
 {

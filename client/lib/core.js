@@ -11,12 +11,13 @@
 
 import * as THREE from 'three';
 import * as TSL from 'three/tsl';
-import { CONFIG } from './base.js';
+import { CONFIG, tee } from './base.js';
 import { decideBackend } from './backend_choice.js';
 import { headsetSeenRecently as _headsetSeenRecently, migrateHeadsetSeen as _migrateHeadsetSeen } from './headset_seen.js';
 import { guardPixelRatioInXR } from './xrpixelratio.js';
 import { separateXRPass } from './xrpass.js';
 import { patchShadowNodeForXR } from './xrshadow.js';
+import { installSyncGate } from './syncgate.js';
 
 export { THREE, TSL };
 
@@ -180,6 +181,8 @@ if (globalThis.__xrCtx) { const a = _xrGl?.getContextAttributes(); Object.assign
 // VR enter/exit: stereo renders keep their own render objects, so the switch never rebuilds either variant (xrpass.js).
 // Inert without a stereo camera, so every boot gets it — sessions can start from a non-XR boot too.
 globalThis.__xrPassSplit = separateXRPass(renderer);
+// No pipeline links on the render path: a missed warm pops in late instead of freezing the browser (syncgate.js). ?syncgate=0 = census only.
+globalThis.__syncGate = installSyncGate(renderer, { tee, gate: CONFIG.params.get('syncgate') !== '0' });
 // the splash watchdog (index.html) stops worrying: modules resolved and the
 // GPU answered — everything past this point can report its own failures
 globalThis.__ewEngineUp = true;

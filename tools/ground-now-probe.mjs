@@ -1,0 +1,42 @@
+// bun tools/ground-now-probe.mjs — World › ground shows what the world HAS ("now: …") above the composer dials
+// (which default to meadow and read like a report — the owner and I misread galleta_dry as meadow, 09-24). Grows two
+// different plantings through the real grass verb, then mows, and reads the line after each.
+import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
+const { check, done } = checker();
+const world = await ownedWorld({});
+const { browser, page } = await launchBrowser();
+try {
+  const pg = await page();
+  const errs = []; pg.on('pageerror', (e) => errs.push(String(e)));
+  await pg.goto(`${world.origin}/?world=staging&name=groundnow&key=${world.key}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await pg.waitForFunction(() => globalThis.__ewEngineUp && document.querySelector('#sec-ground .head'), null, { timeout: 90000 });
+  const read = () => pg.evaluate(() => document.querySelector('#sec-ground .ground-now')?.textContent ?? null);
+  await pg.evaluate(() => document.querySelector('#sec-ground .head').click());
+  await pg.waitForFunction(() => document.querySelector('#sec-ground .ground-now'), null, { timeout: 20000 });
+  const empty = await read();
+  const grow = async (args) => { await pg.evaluate(async (a) => { const { sendVerb } = await import('./lib/net.js'); sendVerb('grass', a); }, args); await pg.waitForTimeout(2500); return read(); };
+  const tufts = await grow({ species: 'galleta_dry', width: 40, depth: 40, center: [0, 0], height: 0.42, density: 0.5 });
+  const meadow = await grow({ species: 'grass', width: 40, depth: 40, center: [0, 0], height: 0.6, density: 0.8 });
+  // log entries that do not change the grass (a light placed, then removed) must not touch the line: an unchanged write
+  // still swaps its text node, and in VR the World panel re-rasterises on every mutation
+  const quiet = await pg.evaluate(async () => {
+    const el = document.querySelector('#sec-ground .ground-now'); let n = 0;
+    const mo = new MutationObserver((l) => { n += l.length; }); mo.observe(el, { childList: true, characterData: true, subtree: true });
+    const { sendVerb } = await import('./lib/net.js');
+    sendVerb('light', { id: 'gnq1', pos: [3, 1, 3], color: 0xffd9a0, intensity: 4, range: 5 });
+    await new Promise((r) => setTimeout(r, 1200));
+    sendVerb('remove', { id: 'gnq1' });
+    await new Promise((r) => setTimeout(r, 1200));
+    mo.disconnect(); return n;
+  });
+  check('unrelated log entries leave the "now:" line untouched (0 mutations)', quiet === 0, quiet);
+  const mown = await grow({ clear: true });
+  console.log('   ', JSON.stringify({ empty, tufts, meadow, mown }));
+  check('empty world: "now: no grass"', /^now: no grass/.test(empty ?? ''), empty);
+  check('galleta_dry reads as the palette\'s "tufts", with its numbers', /^now: tufts \(galleta_dry\) · density 0\.5 · height 0\.42/.test(tufts ?? ''), tufts);
+  check('the line follows a new planting (meadow)', /^now: meadow \(grass\) · density 0\.8/.test(meadow ?? ''), meadow);
+  check('…and a mow', /^now: no grass/.test(mown ?? ''), mown);
+  check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | ') || 'none');
+} catch (e) { check('probe ran', false, String(e).slice(0, 300)); }
+finally { await browser.close(); await world.close(); }
+done();

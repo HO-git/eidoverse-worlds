@@ -18,10 +18,12 @@ import { defsRegistry } from './defs.js';
 import { sendVerb } from './net.js';
 import { flashHint } from './ui.js';
 import { selectRow, btn, btnRow } from './rows.js';
+import { state, onWorldChange } from './state.js';
 
 // panel state, OUTSIDE the paint: a defs push repaints the rows and must not
 // forget what the author had dialed in
 const st = { tint: null, shape: null, seed: 7, density: null, grass: false, plant: null, height: null };
+let offNow = null;   // the "now:" readout's world subscription — one per paint
 
 export function paintGround(body) {
   if (body.dataset.init) return;
@@ -66,6 +68,25 @@ export function paintGround(body) {
     body.appendChild(btnRow(...Object.keys(pal.shapes).map((k) =>
       btn(k, () => { st.shape = k; growTerrain(); flashHint(`terrain: ${k}`); }))));
     body.appendChild(btnRow(btn('↻ reshuffle', () => { st.seed = Math.floor(Math.random() * 9999); growTerrain(); })));
+
+    // WHAT THE WORLD HAS NOW. The dials below are a COMPOSER — what 🌱 grow will plant — and they default to meadow,
+    // so on their own they read like a report of the field (the owner and I both took galleta_dry for meadow, 09-24).
+    // One read-only line from the folded state, named by the palette planting whose species matches when there is one.
+    const now = document.createElement('div');
+    now.className = 'ground-now';
+    now.style.cssText = 'font-size:11px;color:var(--dim);padding:2px 2px 6px';
+    const readNow = () => {
+      const g = state.st?.grass;
+      const named = g && !g.clear ? Object.entries(pal.plantings).find(([, v]) => v?.args?.species && v.args.species === g.species)?.[0] : null;
+      const s = !g || g.clear ? 'now: no grass'
+        : `now: ${named ?? g.species ?? 'grass'}${named && named !== g.species ? ` (${g.species})` : ''}`
+          + `${g.density != null ? ` · density ${g.density}` : ''}${g.height != null ? ` · height ${g.height}` : ''} — the rows below are what 🌱 grow plants`;
+      // every log entry calls this; an unchanged write still swaps the text node, and a VR panel re-rasterises on it
+      if (now.textContent !== s) now.textContent = s;
+    };
+    readNow();
+    offNow?.(); offNow = onWorldChange(readNow);
+    body.appendChild(now);
 
     // what to plant
     const plant = selectRow('plant', Object.keys(pal.plantings), st.plant, (v) => {

@@ -36,6 +36,7 @@
 
 import { THREE, TSL, scene, camera, renderer } from './core.js';
 import { warm, P_AMBIENT } from './warmqueue.js';
+import { bandCuts } from './sky_bands.js';
 
 let dome = null;
 let mat = null;
@@ -154,6 +155,47 @@ let cfg = {
   cloudPasses: 8,
 };
 
+
+export { bandCuts } from './sky_bands.js';   // pure maths, its own module so a unit test can load it
+
+/** The BOOT bake as bands (owner's machine, 2026-09-23: `[load] sky bake — 89951ms over 1 frame` on WebGL, then
+ *  CONTEXT_LOST_WEBGL — one 4096x2048 8-pass full-screen draw is past what a GPU watchdog tolerates). Renders the bake
+ *  scene's single full-screen quad into `target` as cost-weighted strips, one per frame, with the SAME material and
+ *  global uvs as the quad — so the same texels, just not in one draw. The band pipeline is compiled off the render path
+ *  first (a cold band met inside a frame is the 1.5MB-shader stall again). Returns the band count. */
+export async function bandedBakeRender(r, bakeScene, bakeCam, target, { cloudPasses = cfg.cloudPasses, passTexelBudget = cfg.passTexelBudget,
+  nextFrame = () => new Promise((res) => requestAnimationFrame(res)) } = {}) {
+  const bakeMat = bakeScene.children?.[0]?.material;
+  if (!bakeMat) throw new Error('bandedBakeRender: bake scene has no quad');
+  const cuts = bandCuts(target.width, target.height, cloudPasses, passTexelBudget);
+  const bs = new THREE.Scene();
+  const meshes = [], geos = [];
+  for (let i = 0; i < cuts.length - 1; i++) {
+    const v0 = cuts[i], v1 = cuts[i + 1];
+    if (v1 - v0 < 1e-6) continue;
+    const g = new THREE.PlaneGeometry(2, (v1 - v0) * 2);   // same construction as attachBakedDome's bands
+    g.translate(0, -1 + (v0 + v1), 0);
+    const uv = g.attributes.uv;
+    for (let j = 0; j < uv.count; j++) uv.setY(j, v0 + uv.getY(j) * (v1 - v0));
+    const m = new THREE.Mesh(g, bakeMat);
+    m.frustumCulled = false;
+    bs.add(m); meshes.push(m); geos.push(g);
+  }
+  try {
+    { const prev = r.getRenderTarget(); r.setRenderTarget(target);
+      try { await r.compileAsync(bs, bakeCam).catch(() => {}); } finally { r.setRenderTarget(prev ?? null); } }
+    for (let i = 0; i < meshes.length; i++) {
+      for (let j = 0; j < meshes.length; j++) meshes[j].visible = j === i;
+      const prev = r.getRenderTarget(), autoClear = r.autoClear;
+      r.autoClear = false;            // strips abut and each fully overdraws its own texels
+      r.setRenderTarget(target);
+      try { r.render(bs, bakeCam); } finally { r.setRenderTarget(prev ?? null); r.autoClear = autoClear; }
+      if (i < meshes.length - 1) await nextFrame();
+    }
+  } finally { for (const g of geos) g.dispose(); }
+  return meshes.length;
+}
+
 export const bakedActive = () => Boolean(dome);
 
 /** Swap the live march domes for the crossfading baked dome.
@@ -209,30 +251,7 @@ export function attachBakedDome(skyApi, opts = {}) {
   // uniform slices measured 27-48ms frames at the horizon and ~0ms at the
   // nadir. Weight rows by an inverse-elevation chord estimate and cut slices
   // of equal WEIGHT instead, so every band costs about the same few ms.
-  const bands = Math.max(1, Math.ceil((A.width * A.height * cfg.cloudPasses) / cfg.passTexelBudget));
-  const ROWS = 256;                       // weighting resolution in v
-  const w = [];
-  let wSum = 0;
-  for (let r = 0; r < ROWS; r++) {
-    const v = (r + 0.5) / ROWS;
-    const lat = (0.5 - v) * Math.PI;      // the bake's uv→dir convention
-    // chord ∝ 1/max(|sin lat|, eps), clamped like the march's fadeDist is;
-    // below-horizon rows never march clouds — nearly free
-    const chord = lat <= 0 ? 0.05 : Math.min(1 / Math.max(Math.sin(lat), 0.03), 30);
-    w.push(0.05 + chord);                 // small floor: bg gradient is never free
-    wSum += 0.05 + chord;
-  }
-  const cuts = [0];                        // band edges in v, equal weight per band
-  let acc = 0;
-  let nextCut = wSum / bands;
-  for (let r = 0; r < ROWS; r++) {
-    acc += w[r];
-    while (acc >= nextCut - 1e-9 && cuts.length < bands) {
-      cuts.push((r + 1) / ROWS);
-      nextCut += wSum / bands;
-    }
-  }
-  cuts.push(1);
+  const cuts = bandCuts(A.width, A.height, cfg.cloudPasses, cfg.passTexelBudget);
   bandScene = new THREE.Scene();
   bandMeshes = [];
   bandGeos = [];
@@ -281,7 +300,13 @@ export function attachBakedDome(skyApi, opts = {}) {
   ).rgb;
 
   dome = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 24), mat);
-  dome.renderOrder = -100;             // the bg dome's slot: first, behind everything
+  // AFTER the world's opaques, not first (2026-09-24). Opaque, never writes depth, far behind everything: drawn first
+  // it shaded every pixel of a 5920x2960 eye pair (equirect atan/asin + two fetches + mix) only to be overdrawn. At 0.5
+  // it follows every world opaque (renderOrder 0) and depth-rejects each covered pixel; overlays (>= 1 — core's grid 1
+  // and axis 2, which write no depth; the ring, gizmos, landmarks, vignette) still draw after it; transparents are a
+  // later list. Same image (tools/dome-order-probe.mjs). The one thing that WOULD differ: an opaque that writes no
+  // depth at renderOrder 0 — the client has none; keep it that way (a stage line must sit at >= 1).
+  dome.renderOrder = 0.5;
   dome.frustumCulled = false;
   dome.userData.noSupportCheck = true;
   dome.userData.noCamCollide = true;
@@ -303,7 +328,7 @@ export function attachBakedDome(skyApi, opts = {}) {
   pendingForce = false;
   nextAt = performance.now() + cfg.intervalMs;
   console.log(`[sky] baked dome crossfade loop — ${A.width}x${A.height}, `
-    + `${bands} bands/cycle, ${(cfg.intervalMs / 1000).toFixed(1)}s cadence`);
+    + `${bandMeshes.length} bands/cycle, ${(cfg.intervalMs / 1000).toFixed(1)}s cadence`);
   return true;
 }
 

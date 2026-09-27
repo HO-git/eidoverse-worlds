@@ -17,9 +17,10 @@ import { THREE, scene, sun, hemi, renderer, camera } from './core.js';
 // ?shadowdebug=1 — R 09-07 19:17: 'crank it way up to see if it's there at all'. Sun shadows measured ~10 % darker than lit
 // ground (fill light drowns the sun's share); this dims the fill to a fifth so the shadow map's coverage is legible.
 const SHADOW_DEBUG_FILL = new URLSearchParams(globalThis.location?.search ?? '').has('shadowdebug') ? 0.2 : 1;
-import { report, bus, tee } from './base.js';
+import { report, bus, tee, CONFIG } from './base.js';
 import { loadEidoModule, primeFiles, listLibrary, fetchBytes } from './assets.js';
 import { markPhase } from './boot.js';
+import { bandCuts, bandedBakeRender } from './sky_baked.js';
 import { attachBakedDome, detachBakedDome, updateBakedDome, bakedActive, requestBake,
   envTexture, adoptEnvironment, whenBakeReady } from './sky_baked.js';
 import { beginWork } from './loadwork.js';
@@ -115,6 +116,7 @@ const bakeOpts = () => {
   return width ? { width, height, cloudPasses } : {};
 };
 let cloudQuality = localStorage.getItem('ew-cloud-quality') ?? 'medium';
+const BAND_BUDGET = 0.4e6;   // texels x passes per boot-bake band — sky_baked's cadence budget (~a few ms a strip)
 export const getCloudQuality = () => cloudQuality;
 
 // VR CAP: in a headset on the WEBGL backend, clouds never run 'high'. High is the live volumetric march, per pixel
@@ -604,7 +606,23 @@ async function ensureSkyBake() {
   // On baked tiers this same bake IS the visible sky, so it renders at the
   // tier's display resolution and full march quality.
   try {
-    await skyApi.bakeEnv?.(bakeOpts());
+    // The boot bake as BANDS (sky_baked.js bandedBakeRender): bakeEnv's one full-quad renderAsync is intercepted for
+    // this call only and re-issued as cost-weighted strips across frames — same material, same texels. ?skyband=0 = off.
+    const opts = bakeOpts();
+    const outer = renderer.getRenderTarget();
+    const origRA = renderer.renderAsync;
+    const band = CONFIG.params.get('skyband') !== '0' && opts.width
+      && bandCuts(opts.width, opts.height, opts.cloudPasses ?? 8, BAND_BUDGET).length > 3;
+    if (band) renderer.renderAsync = function (sc, cam) {
+      if (sc !== skyInner?._envBake?.scene) return origRA.call(this, sc, cam);
+      renderer.renderAsync = origRA;
+      const target = renderer.getRenderTarget();
+      renderer.setRenderTarget(outer ?? null);   // bakeEnv left the bake target bound; the frames between bands are the world's
+      const t0 = performance.now();
+      return bandedBakeRender(renderer, sc, cam, target, { cloudPasses: opts.cloudPasses ?? 8, passTexelBudget: BAND_BUDGET })
+        .then((n) => { console.log(`[sky] boot bake banded: ${n} bands over ${(performance.now() - t0).toFixed(0)} ms`); renderer.setRenderTarget(target); });
+    };
+    try { await skyApi.bakeEnv?.(opts); } finally { renderer.renderAsync = origRA; }
     lastBakeHours = nowHours();
     lastBakeAt = performance.now();
     skyApi.enableReflections?.({});

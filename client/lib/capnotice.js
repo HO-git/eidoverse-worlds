@@ -3,6 +3,7 @@
 import { backendName } from './core.js';
 import { bus } from './base.js';
 import { getFrame } from './frames.js';
+import { takeGpuRecovered } from './gpulost.js';
 
 const LS = 'ew-capnotice-dismissed';
 export const WEBGL = {
@@ -132,5 +133,8 @@ function show(key, title, body) {
 
 export function initCapNotice() {
   if (backendName() === 'webgl') show('webgl', WEBGL.title, WEBGL.body);
+  const lost = takeGpuRecovered();
+  if (lost) show('gpu-recovered', 'Graphics reset', `Your GPU dropped this page's graphics (${lost}), so it reloaded you back into the world. If it keeps happening, lower the sky or render quality in video settings.`);
+  bus.on('gpu-lost-stop', () => show('gpu-stop', 'Graphics lost again', 'The GPU reset twice in two minutes, so the page stopped reloading on its own. Reload when you are ready, ideally with lower sky or render quality.'));
   bus.on('sky-degraded', ({ msg } = {}) => { if (msg) show('sky', 'Sky simplified', msg); });
 }

@@ -502,6 +502,20 @@ export function updateBakedDome(now = performance.now()) {
 // graph simply has no cloud branch). Rebuild through the engine's own
 // bakeEnv — a one-frame full-quad render plus a recompile, acceptable for a
 // change this dramatic — and re-pin its fresh material.
+let refreshHeldLogged = false;
+let refreshStats = { held: 0, bands: null };
+/** Harness: force the clear→cloudy graph refresh on the next cadence cycle (normally unreachable — sky.js pins the
+ *  cloud graph at boot) and read what it did. tools/sky-refresh-probe.mjs. */
+// ??= : a second instance of this module (a probe's own import at another URL) must not replace the live one's seam
+globalThis.__skyRefresh ??= {
+  force: () => { pinnedCloudsOn = false; refreshStats = { held: 0, bands: null }; requestBake(); },
+  stats: () => ({ ...refreshStats, state, pinnedCloudsOn, pendingForce, xrBakeBroken, dome: !!dome, presenting: !!renderer.xr?.isPresenting }),
+};
+/** A frame to wait for between bake strips that never lands inside a headset session: the strips render
+ *  with plain renderer.render, which must not run while XR owns the frame (see xrPumpTick). */
+export const nextDesktopFrame = () => new Promise(function wait(res) {
+  requestAnimationFrame(() => (renderer.xr?.isPresenting ? setTimeout(() => wait(res), 250) : res()));
+});
 function maybeRefreshGraph() {
   const wantClouds = sys.state?.preset !== 'clear';
   if (wantClouds === pinnedCloudsOn) return false;
@@ -512,11 +526,33 @@ function maybeRefreshGraph() {
   // one) — and the §18b fence in sky.js keeps capable tiers pinned c1
   // from the first bake, so even that direction is normally unreachable.
   if (!wantClouds) return false;
+  // Never inside a headset: this rebuilds the whole cloud graph and re-bakes it, the class of work that
+  // held one XR frame for seconds and tripped the GPU watchdog. The cadence keeps the current (clear)
+  // graph running until the session ends; the flip then happens on the desktop.
+  if (renderer.xr?.isPresenting) {
+    refreshStats.held++;
+    if (!refreshHeldLogged) { refreshHeldLogged = true; tee('[sky] clear→cloudy graph refresh held until VR exit'); }
+    return false;
+  }
+  refreshHeldLogged = false;
   state = 'refreshing';
   const A = targets[0];
+  // bakeEnv's single full-quad renderAsync becomes cost-weighted strips (the boot bake's treatment, sky.js):
+  // one 4096x2048 multi-pass draw is past what a GPU watchdog tolerates. Strips pause while presenting.
+  const origRA = renderer.renderAsync;
+  const outer = renderer.getRenderTarget();
+  renderer.renderAsync = function (sc, cam) {
+    if (sc !== sys?._envBake?.scene) return origRA.call(this, sc, cam);
+    renderer.renderAsync = origRA;
+    const target = renderer.getRenderTarget();
+    renderer.setRenderTarget(outer ?? null);
+    const t0 = performance.now();
+    return bandedBakeRender(renderer, sc, cam, target, { cloudPasses: cfg.cloudPasses, passTexelBudget: cfg.passTexelBudget, nextFrame: nextDesktopFrame })
+      .then((n) => { refreshStats.bands = n; tee(`[sky] graph refresh baked in ${n} bands over ${(performance.now() - t0).toFixed(0)} ms`); renderer.setRenderTarget(target); });
+  };
   Promise.resolve(sys.bakeEnv(renderer, {
     width: A.width, height: A.height, cloudPasses: cfg.cloudPasses,
-  })).then(() => {
+  })).finally(() => { renderer.renderAsync = origRA; }).then(() => {
     const bake = sys._envBake;
     const bakeMat = bake?.scene?.children?.[0]?.material;
     if (!bakeMat) throw new Error('bake graph missing after refresh');

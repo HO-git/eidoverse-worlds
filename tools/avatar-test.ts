@@ -94,11 +94,12 @@ function stand({ constant = false } = {}) {
   // real methods, or setLimp throws and the whole suite stops at test two.
   for (const m of ['setLimp', '_park', '_resolveBones', '_humanoidBones', 'setPose',
                    'clearPose', '_applyOverride', '_reachOwned', '_composeBegin', '_composeEnd',
+                   '_applyPoseSlot', '_applyAnimSlot', '_handBack', '_rawBegin', '_rawEnd', '_rawRelease', 'playAnimation', '_sampleTrack',
                    'setEyes', '_findLids', '_findWings', '_releaseHair', '_combHair']) {
     self[m] = (Avatar.prototype as any)[m];
   }
   // the slice of update() that matters here, in its real order
-  self.tick = function (dt = 1 / 60) {
+  self.tick = function (dt = 1 / 60, now = 0) {
     this.mixer.update(dt);
     if (this._limp) this._park();
     if (this.head && !this._limp) {
@@ -109,7 +110,7 @@ function stand({ constant = false } = {}) {
       }
       this._composeEnd(this.head, r);
     }
-    if (this._override) this._applyOverride(dt, 0);
+    if (this._override || this._anim) this._applyOverride(dt, now);
   };
   return { self, nodes, action };
 }
@@ -380,6 +381,54 @@ function wingStand() {
     return nodes[n].getWorldPosition(new THREE.Vector3());
   };
   return { self, nodes, tipY, tipPos };
+}
+
+console.log('\nan animation over a held pose (wave while crouching):');
+{
+  // A clip that HOLDS STILL is the case that bit: nothing rewrites a bone
+  // the pose tilted, so whatever is left there stays.
+  const { self, nodes } = stand({ constant: true });
+  self.tick();
+  const clipHips = nodes.hips.quaternion.clone(), clipArm = nodes.leftUpperArm.quaternion.clone();
+  const tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.54);
+  const wave = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -1.2);
+  const q = (x: any) => [x.x, x.y, x.z, x.w];
+  self.setPose({ hips: q(tilt) });
+  for (let i = 0; i < 60; i++) self.tick();
+  check('the pose holds the hips', nodes.hips.quaternion.angleTo(tilt) < 1e-3);
+
+  self.playAnimation({ dur: 1, tracks: { leftUpperArm: [{ t: 0, q: q(wave) }, { t: 1, q: q(wave) }] } });
+  self._anim.start = 0;
+  let now = 0;
+  for (let i = 0; i < 40; i++) self.tick(1 / 60, now += 1000 / 60);   // past the ~120ms ease-in, inside the 1s
+  check('while the wave plays, the crouch keeps its hips', nodes.hips.quaternion.angleTo(tilt) < 1e-3,
+    `${nodes.hips.quaternion.angleTo(tilt).toFixed(3)} rad off`);
+  check('...and the arm is the wave\'s', nodes.leftUpperArm.quaternion.angleTo(wave) < 1e-2,
+    `${nodes.leftUpperArm.quaternion.angleTo(wave).toFixed(3)} rad off`);
+  check('...in its own slot — the pose was not displaced', self._override?.kind === 'pose' && self._anim?.kind === 'anim');
+
+  for (let i = 0; i < 120; i++) self.tick(1 / 60, now += 1000 / 60);
+  check('when the wave ends it lets go', self._anim === null);
+  check('...the arm goes back to the clip, not the last frame of the wave', nodes.leftUpperArm.quaternion.angleTo(clipArm) < 1e-3,
+    `${nodes.leftUpperArm.quaternion.angleTo(clipArm).toFixed(3)} rad off`);
+  check('...and the crouch is still held', nodes.hips.quaternion.angleTo(tilt) < 1e-3);
+
+  self.clearPose();
+  for (let i = 0; i < 90; i++) self.tick(1 / 60, now += 1000 / 60);
+  check('releasing the pose leaves NO tilt on a still clip', nodes.hips.quaternion.angleTo(clipHips) < 1e-3,
+    `${nodes.hips.quaternion.angleTo(clipHips).toFixed(3)} rad off`);
+}
+{
+  const { self, nodes } = stand({ constant: true });
+  self.tick();
+  const clipHips = nodes.hips.quaternion.clone();
+  const tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.54);
+  self.setPose({ hips: [tilt.x, tilt.y, tilt.z, tilt.w] });
+  for (let i = 0; i < 60; i++) self.tick();
+  self.setPose({ leftUpperArm: [0, 0, 0.38, 0.92] });
+  for (let i = 0; i < 5; i++) self.tick();
+  check('a pose REPLACED by one without hips hands the hips back (the tilt that outlived the crouch)',
+    nodes.hips.quaternion.angleTo(clipHips) < 1e-3, `${nodes.hips.quaternion.angleTo(clipHips).toFixed(3)} rad off`);
 }
 
 console.log('\nwings:');

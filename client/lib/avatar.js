@@ -1243,8 +1243,14 @@ export class Avatar {
       if (node) raw.push({ node, q: c.q && new THREE.Quaternion(c.q[0], c.q[1], c.q[2], c.q[3]).normalize(), t: c.t, s: c.s });
     }
     if (!targets.size && !raw.length && !hipsT) return;
+    const nodes = this._resolveBones([...targets.keys()]);
+    // A pose REPLACING a pose (remotes do it every frame, a ragdoll on its
+    // first step) must hand back what only the old one covered. Left alone,
+    // a bone whose clip track holds still keeps the old pose forever: a
+    // crouch's 31° hips tilt outlived the crouch and rode every walk after.
+    if (this._override) this._handBack(this._override, nodes, raw, hipsT);
     this._override = {
-      kind: 'pose', nodes: this._resolveBones([...targets.keys()]),
+      kind: 'pose', nodes,
       raw, hipsT, hipsNode: hipsT ? h.getNormalizedBoneNode('hips') : null,
       // A tumble starts at FULL weight. The ramp is right for a held pose
       // arriving over the wire, but the ragdoll's first frame is by
@@ -1255,7 +1261,13 @@ export class Avatar {
     };
   }
 
-  /** Play a one-off animation. data = { dur, loop?, tracks: {bone:[{t,q:[x,y,z,w]}]} }. */
+  /** Play a one-off animation. data = { dur, loop?, tracks: {bone:[{t,q:[x,y,z,w]}]} }.
+   *
+   *  Its OWN slot, layered over the held pose rather than replacing it: a
+   *  wave while crouching keeps the crouch, and only the bones the wave
+   *  animates are the wave's while it plays. Sharing the pose's slot, it
+   *  displaced the whole pose — the body stood up to wave, and a crouch's
+   *  hips tilt was left behind on a bone nothing handed back. */
   playAnimation(data) {
     if (!data?.tracks) return;
     const tracks = new Map();
@@ -1268,11 +1280,32 @@ export class Avatar {
     }
     if (!tracks.size) return;
     const dur = Math.max(0.1, Math.min(30, Number(data.dur) || 2));
-    this._override = {
-      kind: 'anim', nodes: this._resolveBones([...tracks.keys()]),
+    const nodes = this._resolveBones([...tracks.keys()]);
+    if (this._anim) this._handBack(this._anim, nodes);
+    this._anim = {
+      kind: 'anim', nodes,
       tracks, dur, loop: !!data.loop, start: performance.now(),
-      weight: this._override?.weight ?? 0, wantWeight: 1, _scratch: new THREE.Quaternion(),
+      weight: this._anim?.weight ?? 0, wantWeight: 1, _scratch: new THREE.Quaternion(),
     };
+  }
+
+  /** Return an outgoing override's bones to their owners — the clip, or the
+   *  pose underneath — except those the incoming one (`nodes` [name, node]
+   *  pairs, `raw` entries, `hipsT`) goes on writing. Only bones still
+   *  holding exactly what we left are touched; anything rewritten since has
+   *  an owner already. */
+  _handBack(o, nodes = [], raw = [], hipsT = null) {
+    const keep = new Set(nodes.map(([, n]) => n));
+    // an outgoing ANIMATION's bones under the held pose stay the pose's
+    if (o !== this._override) for (const [, n] of this._override?.nodes ?? []) keep.add(n);
+    for (const [, node] of o.nodes ?? []) {
+      if (keep.has(node)) continue;
+      const r = this._composed.get(node);
+      if (r?.live && node.quaternion.equals(r.out)) { node.quaternion.copy(r.base); r.live = false; }
+    }
+    const keepRaw = new Set(raw.map((e) => e.node));
+    for (const e of o.raw ?? []) if (!keepRaw.has(e.node)) this._rawRelease(e.node);
+    if (o.hipsNode && !hipsT) this._rawRelease(o.hipsNode);
   }
 
   // ---- reaching: IK that re-solves every frame ------------------------------
@@ -1520,6 +1553,7 @@ export class Avatar {
       return;
     }
     if (this.emote) this.cancelEmote();
+    if (this._anim) { this._handBack(this._anim); this._anim = null; }   // a falling body stops waving
     const driven = new Set(DRIVEN_BONES);
     this._parked = this._resolveBones(
       this._humanoidBones().filter((n) => !driven.has(n)))
@@ -1670,13 +1704,19 @@ export class Avatar {
   }
 
   _applyOverride(dt, now) {
-    const o = this._override;
-    if (!o) return;
     // A live reach owns its two bones outright this frame. Letting the held
     // pose write them too would put two authors on one bone, and the compose
     // guard cannot tell them apart: each would read the other's output as the
     // clip's value and both would integrate.
     const taken = this._reachOwned();
+    const posed = this._override ? this._applyPoseSlot(dt, taken) : null;
+    if (this._anim) this._applyAnimSlot(dt, now, taken, posed);
+  }
+
+  /** The held pose. Returns the set of bones it wrote this frame. */
+  _applyPoseSlot(dt, taken) {
+    const o = this._override;
+    const posed = new Set();
     // ramp toward the wanted weight (ease ~120ms)
     o.weight += (o.wantWeight - o.weight) * Math.min(1, 12 * dt);
     if (o.wantWeight === 0 && o.weight < 0.02) {
@@ -1690,7 +1730,7 @@ export class Avatar {
       if (o.hipsNode) this._rawRelease(o.hipsNode);
       for (const e of o.raw ?? []) this._rawRelease(e.node);
       this._override = null;
-      return;
+      return posed;
     }
 
     // Hips translation, on the NORMALIZED hips: three-vrm carries its world
@@ -1715,18 +1755,41 @@ export class Avatar {
         const r = this._composeBegin(node);
         node.quaternion.slerp(target, o.weight);
         this._composeEnd(node, r);
+        posed.add(node);
       }
     }
-    if (o.kind === 'anim') {
-      let tt = (now - o.start) / 1000;
-      if (tt >= o.dur) {
-        if (o.loop) tt %= o.dur; else { o.wantWeight = 0; tt = o.dur; }
+    return posed;
+  }
+
+  /** The one-off animation, over whatever the clip and the pose left. A bone
+   *  the pose wrote THIS frame is composed onto the pose's output rather
+   *  than begun afresh — beginning would read the pose's value as the clip's
+   *  and throw the pose away; ending records the combined value, so next
+   *  frame the pose's begin still restores the clip underneath. Composed at
+   *  all (the old path slerped in place), so a still clip track gets its
+   *  value back when the animation ends instead of keeping the last frame. */
+  _applyAnimSlot(dt, now, taken, posed) {
+    const o = this._anim;
+    o.weight += (o.wantWeight - o.weight) * Math.min(1, 12 * dt);
+    if (o.wantWeight === 0 && o.weight < 0.02) {
+      for (const [, node] of o.nodes) {
+        if (posed?.has(node)) continue;          // the pose goes on owning it
+        const r = this._composed.get(node);
+        if (r?.live && node.quaternion.equals(r.out)) { node.quaternion.copy(r.base); r.live = false; }
       }
-      for (const [name, node] of o.nodes) {
-        if (taken?.has(node)) continue;
-        this._sampleTrack(o.tracks.get(name), tt, o._scratch);
-        node.quaternion.slerp(o._scratch, o.weight);
-      }
+      this._anim = null;
+      return;
+    }
+    let tt = (now - o.start) / 1000;
+    if (tt >= o.dur) {
+      if (o.loop) tt %= o.dur; else { o.wantWeight = 0; tt = o.dur; }
+    }
+    for (const [name, node] of o.nodes) {
+      if (taken?.has(node)) continue;
+      const r = posed?.has(node) ? this._composed.get(node) : this._composeBegin(node);
+      this._sampleTrack(o.tracks.get(name), tt, o._scratch);
+      node.quaternion.slerp(o._scratch, o.weight);
+      this._composeEnd(node, r);
     }
   }
 
@@ -1857,7 +1920,7 @@ export class Avatar {
       this._composeEnd(this.head, r);
     }
     BC('av:override');
-    if (this._override) this._applyOverride(dt, now);
+    if (this._override || this._anim) this._applyOverride(dt, now);
 
     // ---- reach: solved fresh every frame, so it TRACKS. After the held pose
     // (which yields any bone a reach owns) and before vrm.update, same as

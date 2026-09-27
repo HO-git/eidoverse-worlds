@@ -3,6 +3,7 @@ import { THREE, renderer, scene, camera } from './core.js';
 import { CONFIG, bus, tee } from './base.js';
 import { DrawBatches } from './draw_batches.js';
 import { warm, warmDepth, P_AMBIENT } from './warmqueue.js';
+import { gpuBegin, gpuEnd } from './gputime.js';
 
 const batches = new DrawBatches({ warm: async (mesh, live) => {
   let error;
@@ -89,7 +90,11 @@ export function setXRCurtain(on) {
 }
 export const xrCurtainOn = () => curtainOn;
 let healed = 0;
+// EW.overdraw holds the live frame while it swaps every material for a counting clone (overdraw.js)
+let worldHold = false;
+export function setWorldHold(on) { worldHold = !!on; }
 export function renderWorld() {
+  if (worldHold) return;
   mainPassCam = camera;
   // SELF-HEAL (09-07 00:30, the black desktop's second half): three captures `outputRenderTarget = _renderTarget || …`
   // at the top of every render. A frame that aborts between binding its frame-buffer target and restoring leaves
@@ -109,7 +114,8 @@ export function renderWorld() {
   }
   const before = { ...renderer.info.render };
   if (renderer.xr?.isPresenting) renderer.xr.updateCamera(camera);   // WE build the eyes (cameraAutoUpdate is false while presenting — xr.js); whatever rendered aside this frame, the eye pass starts from the rig
-  batches.render(renderer, scene, camera);
+  gpuBegin();                     // Debug › gpu timer: brackets the world pass (no-op while the timer is off)
+  try { batches.render(renderer, scene, camera); } finally { gpuEnd(); }
   const after = renderer.info.render;
   // Count this render and its nested shadow/output passes, independently of
   // sky bakes or earlier captures in the same animation frame. Never reset the

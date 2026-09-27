@@ -16,6 +16,7 @@
 import { THREE, scene } from './core.js';
 import { bus } from './base.js';
 import { registerXRPanel, xrPanelOpen } from './xrpanels.js';
+import { gpuLine, shadowPassLine, setGpuTimer, gpuTimerOn, gpuTimerState, measureShadowPass } from './gputime.js';
 import { perf } from './perf.js';
 import { drawStats } from './render.js';
 import { MODES, setMode, activeMode, setSolid, isSolid } from './perfscope.js';
@@ -618,6 +619,22 @@ export function initDebug(p = {}) {
   // perfscope mounts itself when its module is present; without it this is a silent no-op
   import('./perfscope.js').then((m) => m.mountPerfPanel(stack, { toast: toastLike, section: dbgSection })).catch(() => {});
 
+  // GPU time, measured by the GPU (gputime.js): the number a headless probe cannot give us
+  dbgSection(stack, 'gpu timer', (body) => {
+    const row = document.createElement('label'); row.style.cssText = 'display:flex;gap:6px;align-items:center';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = gpuTimerOn();
+    row.append(cb, document.createTextNode('time the world pass on the GPU'));
+    const btn = document.createElement('button'); btn.textContent = 'measure shadow pass';
+    const out = document.createElement('pre'); out.className = 'dbg-stats';
+    const paint = () => { out.textContent = [gpuLine(), shadowPassLine()].join('\n'); };
+    cb.onchange = () => { setGpuTimer(cb.checked); paint(); };
+    btn.onclick = () => { measureShadowPass().then((r) => { if (r?.error) toastLike(`gpu timer: ${r.error}`); cb.checked = gpuTimerOn(); paint(); }); paint(); };
+    body.append(row, btn, out);
+    setInterval(() => { if (body.isConnected && body.offsetParent) paint(); }, 1000);
+    if (!gpuTimerState().supported) { cb.disabled = true; btn.disabled = true; }
+    paint();
+  });
+
   // the live bone readout gets its own collapsible section: loose in the stack
   // it sat between 'joint limits' and 'performance' as a scrollable sliver
   // that no section's open/close could account for (live, 09-04)
@@ -704,6 +721,7 @@ export function updateDebug(now = performance.now()) {
     framePre.textContent = [
       `frame  ${String(p.fps).padStart(4)} fps  ${p.ms.toFixed(1)}ms  worst ${Math.round(p.worst)}ms`,
       ...bill.map((s) => `  ${s.name.padEnd(12)} ${s.ms.toFixed(2).padStart(6)}ms${s.every > 1 ? ` /${s.every}f` : ''}`),
+      ...(gpuTimerOn() ? [gpuLine()] : []),
     ].join('\n');
   }
   const lines = [
@@ -776,11 +794,16 @@ function debugFields() {
     { t: 'info', label: 'draws', value: `${r.drawCalls ?? '—'} calls · ${((r.triangles ?? 0) / 1000).toFixed(0)}k tris` },
     { t: 'list', label: 'perfscope', rows: Object.entries(MODES).map(([k, m]) => ({ id: k, label: m.label, active: k === cur, actions: k === cur ? [] : [{ k: 'mode', label: 'use' }] })) },
     { t: 'check', k: 'solid', label: 'solid tint', value: isSolid() },
+    { t: 'check', k: 'gputimer', label: 'gpu timer', value: gpuTimerOn() },
+    { t: 'info', label: 'gpu', value: gpuLine().replace(/^gpu:? ?/, '') },
+    { t: 'list', label: 'shadow pass', rows: [{ id: 'shadowab', label: shadowPassLine().replace(/^shadow pass:? ?/, ''), actions: [{ k: 'shadowab', label: 'measure' }] }] },
   ];
 }
 function debugDispatch(k, v) {
   if (k === 'mode') setMode(v);
   else if (k === 'solid') setSolid(!!v);
+  else if (k === 'gputimer') setGpuTimer(!!v);
+  else if (k === 'shadowab') measureShadowPass().then(() => bus.emit('xr:repaint'));
   else return;
   bus.emit('xr:repaint');
 }

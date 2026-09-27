@@ -307,6 +307,7 @@ export function attachBakedDome(skyApi, opts = {}) {
   // later list. Same image (tools/dome-order-probe.mjs). The one thing that WOULD differ: an opaque that writes no
   // depth at renderOrder 0 — the client has none; keep it that way (a stage line must sit at >= 1).
   dome.renderOrder = 0.5;
+  dome.userData.odTag = 'sky';   // overdraw.js category
   dome.frustumCulled = false;
   dome.userData.noSupportCheck = true;
   dome.userData.noCamCollide = true;

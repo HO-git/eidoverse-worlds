@@ -308,8 +308,17 @@ sun.castShadow = shadowsOn();
 const RES_KEY = 'ew-shadow-res';
 export const SHADOW_RES = [1024, 2048, 4096];
 export const shadowRes = () => { const v = +stored(RES_KEY); return SHADOW_RES.includes(v) ? v : 2048; };
-export function setShadowRes(n) { localStorage.setItem(RES_KEY, String(n)); sun.shadow.mapSize.set(n, n); }
+// ONE dial for EVERY shadow-casting light (owner, 09-24: 'it should apply to all shadows anywhere'): the sun takes n, the
+// lamp slot scales with it from its hand-tuned SHADOW_MAP — at the default 2048 the lamp stays exactly SHADOW_MAP,
+// so the default look is unchanged. setLampShadow re-derives the lamp's bias from its new size (the look holds).
+const lampMapFor = (n) => Math.round(SHADOW_MAP * (n / 2048));
+export function setShadowRes(n) {
+  localStorage.setItem(RES_KEY, String(n));
+  sun.shadow.mapSize.set(n, n);
+  if (slots[SHADOW_SLOT] && slots[SHADOW_SLOT].shadow.mapSize.x !== lampMapFor(n)) setLampShadow({ map: lampMapFor(n) });
+}
 sun.shadow.mapSize.set(shadowRes(), shadowRes());
+if (lampMapFor(shadowRes()) !== SHADOW_MAP) setLampShadow({ map: lampMapFor(shadowRes()) });
 // ?csm=2|3|4 — cascaded shadow maps (bench probe, owner 09-07 21:32: 'better performance in VR'; Basis ships 4
 // cascades over 150 m, first split at 12%). three's CSMShadowNode fits one ortho camera per cascade around the
 // VIEW frustum every frame, with lightMargin m of room behind the light — the follow-box below is replaced by

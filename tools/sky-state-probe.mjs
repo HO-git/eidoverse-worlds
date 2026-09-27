@@ -54,6 +54,15 @@ try {
     mo.disconnect(); return n;
   });
   check('unrelated log entries leave the readout untouched (0 mutations)', quiet === 0, quiet);
+  // a real clock: time and rate grey out and say why; back to the authored clock, they come back
+  const clockUi = async (clock) => { await log({ hours: 12, rate: 0, clouds: 'clear', weather: 'clear', ...clock }); return pg.evaluate(() => {
+    const row = (k) => { const i = [...document.querySelectorAll('#sec-sky input[type=range]')][k === 'hours' ? 0 : 1]; return { dis: i.disabled, op: i.parentNode.style.opacity, why: i.parentNode.title }; };
+    return { hours: row('hours'), rate: row('rate') }; }); };
+  const realUi = await clockUi({ clock: 'real', tz: 'America/Los_Angeles' });
+  const backUi = await clockUi({ clock: undefined, tz: undefined });
+  console.log('   ', JSON.stringify({ realUi, backUi }));
+  check('a real clock greys out time and rate, and says why', realUi.hours.dis && realUi.rate.dis && parseFloat(realUi.hours.op) === 0.45 && /real time/.test(realUi.hours.why), JSON.stringify(realUi));
+  check('…and the authored clock brings them back', !backUi.hours.dis && !backUi.rate.dis && backUi.hours.op === '' && backUi.rate.why === '', JSON.stringify(backUi));
   check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | ') || 'none');
 } catch (e) { check('probe ran', false, String(e).slice(0, 300)); }
 finally { await browser.close(); await world.close(); }

@@ -315,7 +315,19 @@ export function paintSky(body) {
   }).catch((e) => report('sky clocks', e));
   fillClocks();
   bus.on('defs-updated', fillClocks);
-  const syncClockUi = () => { inputs.hours.disabled = ck.value !== ''; };
+  // Under a real clock the world's hour IS that city's time, so time and rate do nothing: greyed like the basic-only
+  // rows, and they say why (owner, 09-27: 'gray out time and whatever other sliders are inoperable'). The presets
+  // still set weather/clouds/light, but not their hour.
+  const syncClockUi = () => {
+    const real = ck.value !== '';
+    for (const k of ['hours', 'rate']) {
+      const input = inputs[k], row = input?.parentNode; if (!input || !row) continue;
+      input.disabled = real;
+      row.style.opacity = real ? '.45' : '';
+      row.title = real ? `the clock follows real time (${ck.value}); set clock to the authored option to use ${k === 'hours' ? 'time' : 'rate'}` : '';
+    }
+    presetWrap.title = real ? 'under a real clock the presets set the look, not the hour' : '';
+  };
   ck.onchange = () => {
     if (ck.value !== '') { local.clock = 'real'; local.tz = ck.value; }
     else {

@@ -517,7 +517,9 @@ export function makeRadial(entries) {   // exported for the headless ring screen
     if (s.spacer) m.visible = false;   // the balance spacer keeps the verticals true but must not read as a broken icon (ring screenshot 23:40)
     group.add(m); return m;
   });
-  const label = ringLabel(); label.mesh.position.set(0, -R - 0.03, 0); group.add(label.mesh);
+  // the focus label sits in the ring's empty centre and draws AFTER every slot (it was at -R-3 cm, on the 6 o'clock
+  // icon, with renderOrder 1000 under slots 1001+: 'labels drawn under their icon circles', the owner, 09-27)
+  const label = ringLabel(); label.mesh.position.set(0, 0, 0.001); label.mesh.renderOrder = 1001 + N; group.add(label.mesh);
   return { group, slots, entries, sel: -1, label };
 }
 function disposeRadial() {

@@ -181,7 +181,7 @@ export function domQuadsPick(handRay, click = false) {
 // with the laser, release without dragging and it clicks where it was pressed.
 const INTERACTIVE = 'a[href],button,input,select,textarea,label,summary,[role=button],[role=checkbox],[role=switch],'
   + '[role=slider],[role=tab],[role=option],[role=menuitem],[contenteditable=""],[contenteditable="true"],[onclick]';
-const DRAG_PX = 8;
+const DRAG_PX = 20;   // from the press point, not summed per frame: hand tremor wanders a few px each way (review 09-27, P1)
 function aim(handRay) {
   _m.identity().extractRotation(handRay.matrixWorld);
   _rc.ray.origin.setFromMatrixPosition(handRay.matrixWorld);
@@ -212,7 +212,7 @@ export function domQuadsDrag(handRay, press) {
   const y = 1 - hit.uv.y, h = map.dom?.getBoundingClientRect().height ?? 0;
   const dPx = (y - press.lastY) * h;
   press.lastY = y;
-  press.travel += Math.abs(dPx);
+  press.travel = Math.max(press.travel, Math.abs(y - press.data.y) * h);   // farthest from where it was pressed
   if (!press.dragging && press.travel >= DRAG_PX) press.dragging = true;
   if (press.dragging && dPx) map.scrollAt?.(press.data.x, press.data.y, -dPx);   // content follows the laser
 }

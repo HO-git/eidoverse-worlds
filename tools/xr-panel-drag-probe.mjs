@@ -85,7 +85,8 @@ try {
     box.scrollTop = 0; await new Promise((res) => setTimeout(res, 50));
     const sTap = box.scrollTop;
     const pr2 = dq.domQuadsPress(rayAt(id, spot.x, spot.y));
-    dq.domQuadsDrag(rayAt(id, spot.x, spot.y + 2), pr2.press);   // hand jitter under the threshold
+    // hand tremor: 30 frames wandering ±6 px around the press point (summed per frame that's ~180 px of travel)
+    for (let i = 0; i < 30; i++) dq.domQuadsDrag(rayAt(id, spot.x, spot.y + (i % 2 ? 6 : -6)), pr2.press);
     dq.domQuadsRelease(pr2.press);
     const s2 = box.scrollTop - sTap, clicksAfterTap = clicks;
     // 3. a grab that takes over a press cancels it: no click

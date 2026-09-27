@@ -1155,7 +1155,7 @@ export function updateXR(dtSec = 1 / 72) {
     // button). Either hand can aim, select, and take a panel; one thing held at a time. The ring stays on the right.
     for (const side of ['right', 'left']) {
       const G = side === 'right' ? R : L; const hand = hands[side];
-      if (!G || !hand) continue;
+      if (!G || !hand) { panelPress[side] = null; continue; }   // a controller dropped mid-press: forget it (P3)
       const grip = !!G.buttons[1]?.pressed, trig = !!G.buttons[0]?.pressed;
       // the laser also shows, with no button held, while it rests on a panel (Resonite's always-there pointer): that is
       // what makes the panel under it scrollable with the stick, and shows where a trigger will land
@@ -1388,3 +1388,6 @@ function xrVeilShow(on, phase = 'leaving VR') {
   exitVeil.classList.toggle('on', !!on);
 }
 function exitVeilShow(on) { if (!on && entering) return; xrVeilShow(on, 'leaving VR'); }   // an after-exit probe never hides the veil of an enter #2 already in flight (round 1 S6)
+
+// a press still pending when a session ends must not click a hidden panel on the next entry (review 09-27, P3)
+bus.on('xr:state', (on) => { if (!on) { panelPress.left = null; panelPress.right = null; } });

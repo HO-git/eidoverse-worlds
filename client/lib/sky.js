@@ -740,10 +740,13 @@ async function ensureSkyBake() {
     const { cloudPasses, intervalMs } = BAKED_TIERS[cloudQuality];
     if (!attachBakedDome(skyApi, { cloudPasses, intervalMs })) {
       // engine internals moved (or the bake failed) — the live march is
-      // still in the scene, so the sky stays correct, just expensive
+      // still in the scene, so the sky stays correct, just expensive. Domes held out in a headset come back too:
+      // a costly sky beats no clouds for the whole session (review 09-27, P4).
+      releaseLiveDomes();
       console.warn('[sky] baked dome could not attach — staying on the live cloud march');
+      tee('[sky] baked dome could not attach — the live cloud march stays (in a headset too)');
     }
-  }
+  } else releaseLiveDomes();
 }
 
 // Re-baking the environment map.

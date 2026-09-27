@@ -28,6 +28,8 @@ try {
     // teardown while held: detachBakedDome puts them back so the disposal pass can find them
     sb.holdLiveDomesInXR(api); sb.detachBakedDome();
     out.backAfterTeardown = domes.every((d) => d.parent === parent);
+    // a baked tier whose dome fails to attach: whoever handles that calls release, and the live sky comes back
+    sb.holdLiveDomesInXR(api); sb.releaseLiveDomes(); out.backAfterFailedAttach = domes.every((d) => d.parent === parent);
     parent.removeFromParent();
     return out;
   });

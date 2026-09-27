@@ -21,9 +21,12 @@ import { report, bus, tee, CONFIG } from './base.js';
 import { loadEidoModule, primeFiles, listLibrary, fetchBytes } from './assets.js';
 import { markPhase } from './boot.js';
 import { bandCuts, bandedBakeRender, bakeGeneration } from './sky_baked.js';
-import { attachBakedDome, detachBakedDome, updateBakedDome, bakedActive, requestBake, holdLiveDomesInXR, releaseLiveDomes,
+import { attachBakedDome, detachBakedDome, updateBakedDome, bakedActive, requestBake, holdLiveDomes, releaseLiveDomes,
   envTexture, adoptEnvironment, whenBakeReady } from './sky_baked.js';
 import { beginWork } from './loadwork.js';
+import { showInterimSky, updateInterimSky, hideInterimSky } from './sky_interim.js';
+import { busy as loadingBusy } from './framebudget.js';
+import { bootDone } from './boot.js';
 import { setDayness, releaseForeignLights } from './lightrig.js';
 import { warm, P_AMBIENT } from './warmqueue.js';
 import { WEATHERS, effectiveSky, hoursAt } from '../../shared/forecast.js';
@@ -143,11 +146,11 @@ export const skyHeld = () => (heldQuality || heldRebuild ? { quality: heldQualit
 // In a headset the live cloud march never shows when a baked dome is on its way: held out until it attaches
 // (sky_baked.holdLiveDomesInXR). A tier with no baked dome (high, where the VR cap doesn't apply) keeps its march.
 function holdLiveInHeadset() {
-  if (xrPresenting && BAKED_TIERS[cloudQuality] && cloudQuality !== 'off' && !bakedActive()) holdLiveDomesInXR(skyApi);
+  if (xrPresenting && BAKED_TIERS[cloudQuality] && cloudQuality !== 'off' && !bakedActive()) holdLiveDomes(skyApi, 'in a headset until the baked dome is ready');
 }
 bus.on('xr:state', (on) => {
   xrPresenting = !!on;
-  if (on) holdLiveInHeadset(); else releaseLiveDomes();   // the desktop shows the live march until its bake lands
+  if (on) holdLiveInHeadset(); else if (!interimFor) releaseLiveDomes();   // the desktop shows the live march until its bake lands (unless the boot hold is still waiting for the real sky)
   // At exit, ONE rebuild covers whatever was held: a held quality rebuilds at that level (and picks up a held world
   // switch, since the rebuild reads the latest sky args); the cap's own restore below rebuilds too, so when the cap is
   // active it carries the held world switch and nothing extra runs. (A quality held while capped cannot exist: the
@@ -468,6 +471,7 @@ function claimSkyAdditions(snap) {
   autoSystemsOwned = claimUnowned(snap.autos);
 }
 function teardownSky() {
+  interimFor = null; hideInterimSky();   // a rebuild shows its own stand-in; a pending finishSky sees skyApi change and stops
   // The adopted lightning first: the scene diff below cannot see it (the
   // rig's seam kept it OUT of the scene), and on teardowns that never
   // build a replacement weather system its registry-eviction release never
@@ -521,23 +525,68 @@ async function renderEidoverse(a) {
     applyLive(a);
     return;
   }
-  if (!skyApi || currentWorld !== world) {
+  const fresh = !skyApi || currentWorld !== world;
+  if (fresh) {
     const work = beginWork('sky build'); // names the module-eval + system-construction frame gaps
     building = buildSky(a, world, wantAudio).finally(() => work.end());
     try { await building; } finally { building = null; }
   }
   applyLive(a);
+  // THE WORLD FIRST, THE SKY LAST (owner, 09-27). After a fresh build the real sky's domes stay out of the scene and
+  // one plain gradient in the hour's own colours stands in; the curtain no longer waits on the sky (§19a's gate hid a
+  // render-path stall that syncgate and this deferral now remove). The cloud programs start compiling only once the
+  // world near you has loaded, and never inside the serial warm conductor. Detached, so later sky verbs (a preview, a
+  // rated sky's 1 Hz re-render) apply at once instead of queueing behind minutes of compile.
+  if (fresh && holdLiveDomes(skyApi, 'until the real sky is ready')) {
+    interimFor = skyApi;
+    showInterimSky(skyInner?.uniforms);
+    resolveSkyWarm();
+    finishSky(skyApi).catch((e) => report('sky finish', e));
+    return;
+  }
+  if (interimFor) return;                // the real sky is still on its way: finishSky owns the bake
   holdLiveInHeadset();                   // a build in a headset: no live march on screen while its bake is coming
   const bake = beginWork('sky bake');    // names the env-bake + reflections gaps
   phase('apply');
   try { await ensureSkyBake(); } finally { bake.end(); }
   phase('bake');
-  // §19a: on baked tiers the curtain waits for the first bake's band
-  // pipeline too — the one big cloud-graph compile lands behind the splash
-  // (tel0s's call), not in the first visible minute. Non-baked tiers and
-  // degraded paths resolve through renderSkyMesh/dome-warm as before.
   if (bakedActive()) await whenBakeReady();
   resolveSkyWarm();
+}
+
+async function finishSky(api) {
+  phase('apply');
+  await worldSettled();
+  if (skyApi !== api) return;            // torn down / rebuilt while we waited: the newer build owns the sky
+  const bake = beginWork('sky bake');
+  try { await ensureSkyBake(); } finally { bake.end(); }
+  phase('bake');
+  if (bakedActive()) await whenBakeReady();
+  // No baked dome (the high tier, a failed attach): the live domes ARE the sky. Compile them off the render path,
+  // then show them. (A baked tier parks them unseen, so their programs are never built at all.)
+  if (!bakedActive() && skyApi === api) await compileLiveDomes();
+  if (skyApi !== api) return;
+  if (!bakedActive()) releaseLiveDomes();   // compiled above: safe to show, headset or not
+  interimFor = null;
+  hideInterimSky();
+  tee(`[sky] the real sky is up (${bakedActive() ? 'baked dome' : 'live domes'}); the interim gradient is gone`);
+}
+
+let interimFor = null;    // the sky build the interim gradient is standing in for
+/** Nearby world first: boot finished and no loading work queued, for a second in a row (at most 60 s). */
+async function worldSettled() {
+  const t0 = performance.now(); let calm = 0;
+  while (performance.now() - t0 < 60000) {
+    if (bootDone() && !loadingBusy()) { if (++calm >= 4) break; } else calm = 0;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  tee(`[sky] world settled after ${((performance.now() - t0) / 1000).toFixed(1)} s: compiling the sky now`);
+}
+async function compileLiveDomes() {
+  const domes = skyInner?.domes ?? [];
+  const t0 = performance.now();
+  await Promise.all(domes.map((d) => renderer.compileAsync(d, camera, scene).catch(() => {})));
+  tee(`[sky] live domes compiled in ${(performance.now() - t0).toFixed(0)} ms (off the render path)`);
 }
 
 async function buildSky(a, world, wantAudio) {
@@ -644,7 +693,15 @@ async function buildSky(a, world, wantAudio) {
     // longer invalidates the rest of the scene. During initial hydration
     // the curtain waits for this loop (whenSkyWarm below) — measured 3.1s
     // that used to land squarely in the visible window (§16.1g).
+    // THE DOMES DO NOT GO THROUGH THE CONDUCTOR. It runs one item at a time, and on a cold GPU cache the cloud dome's
+    // link takes minutes on WebGL (owner's rig, 09-27: 125 s), so every model pipeline queued behind it waited: the
+    // world sat unloaded while the sky compiled ("backwards", the owner). They stay out of the scene now, under the
+    // interim sky, and compile after the world near you has loaded (renderEidoverse). Everything else still warms here.
+    const bigDomes = new Set(skyInner?.domes ?? []);
+    const warmed = new Set();
     for (const o of skyOwned) {
+      if (bigDomes.has(o)) continue;
+      warmed.add(o);
       // P_AMBIENT: dome warmth never queues ahead of the ground/models a
       // person is actually waiting for (the 16s-boot lesson, warmqueue.js)
       await warm(`sky warm ${(o.name || o.type || 'dome').slice(0, 24)}`, async () => {
@@ -653,6 +710,7 @@ async function buildSky(a, world, wantAudio) {
         finally { scene.add(o); }
       }, { p: P_AMBIENT });
     }
+    tee(`[sky] build owns ${skyOwned.length}: ${skyOwned.map((o) => `${o.geometry?.type ?? o.type}${warmed.has(o) ? '=warmed' : '=later'}`).join(' ')}`);
     // resolveSkyWarm moved to renderEidoverse (§19a): the gate now waits
     // for the first BAKE too, not just the dome warms
     phase('dome-warm');
@@ -1001,6 +1059,7 @@ export function updateSky(nowMs, t) {
       if (a.ambient != null && a.ambient !== 1) hemi.intensity *= a.ambient;
     }
     updateBakedDome(nowMs);   // camera-follow + the band-bake/crossfade cycle
+    updateInterimSky();
   }
   // A rated sky advances everyone's sun in lockstep, and a forecast needs the
   // same heartbeat to notice its segment boundaries. ~1Hz is plenty — even at

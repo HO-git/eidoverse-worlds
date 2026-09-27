@@ -138,6 +138,44 @@ function liteDock(entries) {
   return dock;
 }
 
+// A DEMOTION says so where it can't scroll away. The chat line above is logged before the
+// join snapshot replays the room's history, so on a busy world it is gone before anyone
+// reads it — and a desktop that lands here after a hung load (the tripwire can't tell a
+// reload-mid-hang from a crash) otherwise looks like it simply booted the wrong client.
+// Only for the reasons we inferred; someone who ASKED for lite (url, saved) already knows.
+const BANNER_TEXT = {
+  crash: "Your last visit to this world didn't finish loading, so you're in the light version: chat, emotes and who's here. Tap \u{1F30D} (bottom right) to try the full world again.",
+  ram: "This device reports too little memory for the full world, so you're in the light version. Tap \u{1F30D} (bottom right) to try it anyway.",
+  'no-gpu': "This browser has no 3D support, so you're in the light version.",
+};
+// The same card as the full client's capability notice (capnotice.js: .panel.capnotice >
+// .cn-item > b, p, .cn-btns) so the two reduced paths read as one family. Built here, not
+// imported: capnotice.js pulls core.js, and core.js is the engine lite exists to avoid.
+export function liteBanner(why) {
+  const text = BANNER_TEXT[why];
+  if (!text || document.getElementById('lite-banner')) return null;
+  const card = document.createElement('div');
+  card.id = 'lite-banner';
+  card.className = 'panel capnotice';
+  card.setAttribute('role', 'status');
+  const item = document.createElement('div');
+  item.className = 'cn-item';
+  item.innerHTML = '<b></b><p></p><div class="cn-btns"><button type="button" class="cn-ok">got it</button></div>';
+  item.querySelector('b').textContent = 'Light version';
+  item.querySelector('p').textContent = text;
+  let ro = null;
+  item.querySelector('.cn-ok').addEventListener('click', () => { ro?.disconnect(); card.remove(); });
+  card.appendChild(item);
+  document.body.appendChild(card);
+  // Under the emote row, never over it: that row is fixed to the top and its height
+  // depends on how many emotes wrap, so follow it instead of guessing a number.
+  const host = document.getElementById('lite-emote-host');
+  const place = () => { card.style.top = `${Math.round((host?.getBoundingClientRect().bottom ?? 0) + 8)}px`; };
+  place();
+  if (host && globalThis.ResizeObserver) (ro = new ResizeObserver(place)).observe(host);
+  return card;
+}
+
 /** The key door, renderer-free.
  *
  *  A key-gated world refuses an unknown visitor with close code 4003, and net.js turns
@@ -262,6 +300,7 @@ async function main() {
   globalThis.__ewTryFullWorld = tryFullWorld;   // also reachable from the console
 
   logChat('', WHY_TEXT[WHY] ?? WHY_TEXT.default, 'sys');
+  liteBanner(WHY);
 
   // No door screen: openDoor lives in ui.js, and the door's job (pick a body, see who is
   // here before you commit) is mostly about a world this client does not render, so a

@@ -75,7 +75,8 @@ function build(q) {
   const scale = (PX_PER_M * W) / cssW;   // device px per CSS px so the quad reads at 900 px/m
   const mesh = new HTMLMesh(el, { scale, minInterval: LIVE_MIN_MS[q.id] ?? 16 });
   builds++;
-  mesh.material.transparent = false;
+  mesh.material.transparent = false;   // stays in the opaque pass (no sorting, no blending)…
+  mesh.material.alphaTest = 0.5;       // …while the raster's clear corners (a frame's border-radius) cut out instead of drawing black
   const k = W / (cssW * 0.001);   // HTMLMesh geometry = CSS px × 1 mm; rescale to W metres
   mesh.scale.setScalar(k);
   const a = (q.i - (q.n - 1) / 2) * 0.55;

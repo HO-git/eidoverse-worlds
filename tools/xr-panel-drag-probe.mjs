@@ -105,7 +105,10 @@ try {
       cbFlip = cb.c.checked !== was; cbPress = p4?.press ?? null;
       if (cbFlip) cb.c.click();
     }
-    return { dbg: globalThis.__dbg, id, spot, s0, s1, s2, clicksAfterDrag, clicksAfterTap, clicksAfterCancel, cb: !!cb, cbFlip, cbPressNull: cbPress === null, dragging: pr.press?.dragging };
+    // rounded corners: the raster leaves a frame's border-radius corners clear, and the material cuts them out
+    let corner = null;
+    { const t = dq.domQuadTexture(id), c = t.image; try { corner = { a: c.getContext('2d').getImageData(1, 1, 1, 1).data[3], test: meshOf(id).material.alphaTest, radius: getComputedStyle(t.dom).borderTopLeftRadius }; } catch (e) { corner = { err: String(e) }; } }
+    return { corner, dbg: globalThis.__dbg, id, spot, s0, s1, s2, clicksAfterDrag, clicksAfterTap, clicksAfterCancel, cb: !!cb, cbFlip, cbPressNull: cbPress === null, dragging: pr.press?.dragging };
   });
   console.log('  ·', JSON.stringify(r));
   check('a VR panel has a scrollable box to test', !r.none && !r.nospot, JSON.stringify(r));
@@ -114,6 +117,7 @@ try {
   check('a tap (jitter under the threshold) is a click, and does not scroll', r.clicksAfterTap === 1 && r.s2 === 0, JSON.stringify({ clicks: r.clicksAfterTap, moved: r.s2 }));
   check('a grab that takes over a press cancels its click', r.clicksAfterCancel === 1, r.clicksAfterCancel);
   check('a trigger on a checkbox toggles it on the press, exactly once, with no drag pending', r.cb && r.cbFlip === true && r.cbPressNull, JSON.stringify({ cb: r.cb, cbFlip: r.cbFlip, pressNull: r.cbPressNull }));
+  check('rounded corners: the corner texel is clear and the material cuts it out (not black)', r.corner?.a === 0 && r.corner?.test > 0, JSON.stringify(r.corner));
   check('no page errors', errs.length === 0, errs.slice(0, 3).join(' | '));
 } catch (e) { check('probe ran', false, e.message); }
 finally { try { await browser.close(); } catch {} try { await world.close(); } catch {} }

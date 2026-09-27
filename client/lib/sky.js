@@ -146,6 +146,35 @@ export const getCloudChoice = () => xrCappedFrom ?? cloudQuality;
 
 /** Change the local cloud budget. Rebuilds the sky, since passes are baked in
  *  at construction. */
+// Where a sky rebuild's main-thread time goes (owner, 09-24 night: 4-5 s hitch on every cloud-quality flip). One line per
+// rebuild: each phase's wall time + the long tasks (>50 ms, Chrome's longtask entries) that landed inside it — the
+// hitch IS the long tasks. Teed so the owner's flips report to the server with no console.
+let phaseLog = null;
+function phase(name) {
+  if (!phaseLog) return;
+  const now = performance.now();
+  phaseLog.marks.push([name, now]);
+}
+function beginPhases(why) {
+  const obs = typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')
+    ? new PerformanceObserver((l) => { for (const e of l.getEntries()) phaseLog?.long.push([e.startTime, e.duration]); }) : null;
+  try { obs?.observe({ type: 'longtask', buffered: false }); } catch { /* unsupported */ }
+  phaseLog = { why, t0: performance.now(), marks: [], long: [], obs };
+}
+function endPhases() {
+  const L = phaseLog; if (!L) return; phaseLog = null;
+  L.obs?.disconnect();
+  const pts = [['start', L.t0], ...L.marks, ['end', performance.now()]];
+  const parts = [];
+  for (let i = 1; i < pts.length; i++) {
+    const [name, t] = pts[i], t0 = pts[i - 1][1];
+    const lt = L.long.filter(([s0]) => s0 >= t0 && s0 < t);
+    const blk = lt.reduce((a, [, d]) => a + d, 0), mx = lt.reduce((a, [, d]) => Math.max(a, d), 0);
+    parts.push(`${name} ${(t - t0).toFixed(0)}ms${lt.length ? ` (long ${lt.length}×, ${blk.toFixed(0)}ms, max ${mx.toFixed(0)})` : ''}`);
+  }
+  const all = L.long.reduce((a, [, d]) => a + d, 0);
+  tee(`[sky] rebuild (${L.why}): ${parts.join(' | ')} — main thread blocked ${all.toFixed(0)}ms total${L.obs ? '' : ' (no longtask API)'}`);
+}
 
 export async function setCloudQuality(level, { persist = true } = {}) {
   if (!CLOUD_QUALITY.includes(level)) return;
@@ -160,10 +189,11 @@ export async function setCloudQuality(level, { persist = true } = {}) {
   else if (persist && xrPresenting) xrCappedFrom = null;   // a deliberate non-high choice in the headset replaces the cap's memory
   if (persist) localStorage.setItem('ew-cloud-quality', level);   // before the no-op return: choosing the level already running is still a choice
   if (level === cloudQuality) return;
+  beginPhases(`clouds ${cloudQuality}→${level}`);
   cloudQuality = level;
   currentWorld = null;          // force a rebuild at the new budget
   skyBuilds = 0;
-  if (clock) await render();
+  try { if (clock) await render(); } finally { endPhases(); }
 }
 
 // sky_system.js ASSIGNS globalThis.makeSkySystem when sky_worlds evals it, and
@@ -455,7 +485,9 @@ async function renderEidoverse(a) {
   }
   applyLive(a);
   const bake = beginWork('sky bake');    // names the env-bake + reflections gaps
+  phase('apply');
   try { await ensureSkyBake(); } finally { bake.end(); }
+  phase('bake');
   // §19a: on baked tiers the curtain waits for the first bake's band
   // pipeline too — the one big cloud-graph compile lands behind the splash
   // (tel0s's call), not in the first visible minute. Non-baked tiers and
@@ -504,8 +536,11 @@ async function buildSky(a, world, wantAudio) {
     // boot waits for the sky is a splash that never lifts. The gating order
     // itself provides what the wait was for — the sky is no longer
     // competing with boot-critical work, it IS boot work.)
+    phase('teardown');
     await primeFor(world, wantAudio);
+    phase('prime');
     await loadEidoModule('sky_worlds.js');
+    phase('module');
     if (typeof globalThis.makeSky !== 'function') throw new Error('sky_worlds.js exposed no makeSky');
     if (skyMesh) { scene.remove(skyMesh); skyMesh = null; }
     // A fresh build asserts state rather than easing into it — reset the
@@ -527,6 +562,7 @@ async function buildSky(a, world, wantAudio) {
       sun, hemi,
       audio: wantAudio,
     });
+    phase('makeSky');
     claimSkyAdditions(ownership);
     // ---- the clear↔cloudy fence (§18b, pre-paid §19a) ----------------------
     // The baked tier's graph cache keys on preset !== 'clear' (sky_system
@@ -575,6 +611,7 @@ async function buildSky(a, world, wantAudio) {
     }
     // resolveSkyWarm moved to renderEidoverse (§19a): the gate now waits
     // for the first BAKE too, not just the dome warms
+    phase('dome-warm');
     currentWorld = world;
     impl = 'eidoverse';
     scene.background = null;
@@ -613,14 +650,31 @@ async function ensureSkyBake() {
     const origRA = renderer.renderAsync;
     const band = CONFIG.params.get('skyband') !== '0' && opts.width
       && bandCuts(opts.width, opts.height, opts.cloudPasses ?? 8, BAND_BUDGET).length > 3;
-    if (band) renderer.renderAsync = function (sc, cam) {
-      if (sc !== skyInner?._envBake?.scene) return origRA.call(this, sc, cam);
+    // the decision, teed: on the owner's GPU (09-24 night) the banded line never appeared — say WHICH gate refused
+    const strips = opts.width ? bandCuts(opts.width, opts.height, opts.cloudPasses ?? 8, BAND_BUDGET).length - 1 : 0;
+    tee(`[sky] boot bake: ${band ? 'banding' : CONFIG.params.get('skyband') !== '0' ? 'one-shot, precompiled' : 'ONE-SHOT'} (skyband=${CONFIG.params.get('skyband') ?? 'default'}, ${opts.width}x${opts.height}, passes ${opts.cloudPasses ?? 8}, ${strips} strips, inner ${skyInner ? 'yes' : 'NO'})`);
+    let seen = 0;
+    // ONE-SHOT bakes (a tier with no baked dome — 'high' bakes only the env, at bakeEnv's default size — or a bake too
+    // small to band) still compile their pipeline OFF the render path first: the owner's GPU, 09-24, switch → high:
+    // "render-path build 1295 ms (BLOCKING) NodeMaterial fs 925288 chars". Same bytes, same single draw — only the
+    // compile moves earlier (compileAsync, as the banded path already does). ?skyband=0 keeps the old path untouched.
+    const precompile = !band && CONFIG.params.get('skyband') !== '0';
+    if (band || precompile) renderer.renderAsync = function (sc, cam) {
+      if (sc !== skyInner?._envBake?.scene) { if (seen++ < 2) tee(`[sky] boot bake: a renderAsync passed through (not the bake scene: ${sc?.type ?? typeof sc}, envBake ${skyInner?._envBake ? 'set' : 'unset'})`); return origRA.call(this, sc, cam); }
       renderer.renderAsync = origRA;
+      if (precompile) {
+        // the bake target is bound on entry (bakeEnv) — capture it: during the await, frames run and render.js's
+        // self-heal UNBINDS any target left bound at frame start, so the draw must re-bind it or it lands on the canvas
+        const target = renderer.getRenderTarget();
+        const t0 = performance.now();
+        return renderer.compileAsync(sc, cam).catch(() => {})
+          .then(() => { tee(`[sky] one-shot bake precompiled in ${(performance.now() - t0).toFixed(0)} ms`); renderer.setRenderTarget(target); return origRA.call(renderer, sc, cam); });
+      }
       const target = renderer.getRenderTarget();
       renderer.setRenderTarget(outer ?? null);   // bakeEnv left the bake target bound; the frames between bands are the world's
       const t0 = performance.now();
       return bandedBakeRender(renderer, sc, cam, target, { cloudPasses: opts.cloudPasses ?? 8, passTexelBudget: BAND_BUDGET })
-        .then((n) => { console.log(`[sky] boot bake banded: ${n} bands over ${(performance.now() - t0).toFixed(0)} ms`); renderer.setRenderTarget(target); });
+        .then((n) => { const l = `[sky] boot bake banded: ${n} bands over ${(performance.now() - t0).toFixed(0)} ms`; console.log(l); tee(l); renderer.setRenderTarget(target); });
     };
     try { await skyApi.bakeEnv?.(opts); } finally { renderer.renderAsync = origRA; }
     lastBakeHours = nowHours();

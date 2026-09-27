@@ -35,6 +35,7 @@
 // degraded performance, never a broken sky.
 
 import { THREE, TSL, scene, camera, renderer } from './core.js';
+import { tee } from './base.js';
 import { warm, P_AMBIENT } from './warmqueue.js';
 import { bandCuts } from './sky_bands.js';
 
@@ -565,9 +566,12 @@ function renderBand(i) {
   const autoClear = renderer.autoClear;
   renderer.autoClear = false;          // bands accumulate; each strip fully overdraws its own texels
   renderer.setRenderTarget(back);
-  renderer.render(bandScene, bakeCam);
-  renderer.setRenderTarget(prev ?? null);
-  renderer.autoClear = autoClear;
+  // try/finally: a throw inside the band render used to leave BOTH the 4096x2048 back target bound (render.js's
+  // self-heal then logs "unbound a stale target … frame aborted mid-render" — seen once per boot on the owner's GPU,
+  // 09-24) AND autoClear off for the main pass. The error still propagates; now it is also named.
+  try { renderer.render(bandScene, bakeCam); }
+  catch (e) { tee(`[sky] dome band ${i}/${bandMeshes.length} render threw: ${String(e?.message ?? e).slice(0, 300)}`); throw e; }
+  finally { renderer.setRenderTarget(prev ?? null); renderer.autoClear = autoClear; }
 }
 
 function finishBake(now) {

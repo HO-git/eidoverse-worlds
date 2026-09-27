@@ -21,7 +21,7 @@ import { report, bus, tee, CONFIG } from './base.js';
 import { loadEidoModule, primeFiles, listLibrary, fetchBytes } from './assets.js';
 import { markPhase } from './boot.js';
 import { bandCuts, bandedBakeRender, bakeGeneration } from './sky_baked.js';
-import { attachBakedDome, detachBakedDome, updateBakedDome, bakedActive, requestBake, holdLiveDomes, releaseLiveDomes,
+import { attachBakedDome, detachBakedDome, updateBakedDome, bakedActive, requestBake, holdLiveDomes, releaseLiveDomes, liveDomesHeld,
   envTexture, adoptEnvironment, whenBakeReady } from './sky_baked.js';
 import { beginWork } from './loadwork.js';
 import { showInterimSky, updateInterimSky, hideInterimSky } from './sky_interim.js';
@@ -245,10 +245,24 @@ Object.defineProperty(globalThis, 'makeSkySystem', {
   configurable: true,
   get() {
     if (!_realMakeSkySystem) return undefined;
-    return (args = {}) => _realMakeSkySystem({
-      ...args,
-      opts: { ...(args.opts ?? {}), ...QUALITY_OPTS[cloudQuality] },
-    });
+    return (args = {}) => {
+      const sys = _realMakeSkySystem({
+        ...args,
+        opts: { ...(args.opts ?? {}), ...QUALITY_OPTS[cloudQuality] },
+      });
+      // AT BIRTH: the system adds its domes to the scene synchronously here, and makeSky then awaits more work, so
+      // frames ran with the domes in the scene and the ~1 MB cloud program went to the render path on the very next
+      // frame (the owner's reloads, 16:32/16:33: GPU process busy, Chrome and devtools frozen). Pull them out in the
+      // same tick, before any frame; the interim gradient stands in and finishSky decides when (and whether) they
+      // are ever built.
+      // makeSkySystem is async with no await before its scene.add calls, so it resolves in a microtask: this .then runs
+      // before sky_worlds' own await continues, and no frame can run in between.
+      const hold = (sy) => {
+        if (sy?.domes?.length && holdLiveDomes({ _internals: { sky: sy } }, 'from birth until the real sky is ready')) showInterimSky(sy.uniforms);
+        return sy;
+      };
+      return typeof sys?.then === 'function' ? sys.then(hold) : hold(sys);
+    };
   },
   set(fn) { _realMakeSkySystem = fn; },
 });
@@ -537,7 +551,7 @@ async function renderEidoverse(a) {
   // render-path stall that syncgate and this deferral now remove). The cloud programs start compiling only once the
   // world near you has loaded, and never inside the serial warm conductor. Detached, so later sky verbs (a preview, a
   // rated sky's 1 Hz re-render) apply at once instead of queueing behind minutes of compile.
-  if (fresh && holdLiveDomes(skyApi, 'until the real sky is ready')) {
+  if (fresh && (holdLiveDomes(skyApi, 'until the real sky is ready') || liveDomesHeld())) {
     interimFor = skyApi;
     showInterimSky(skyInner?.uniforms);
     resolveSkyWarm();
@@ -676,6 +690,9 @@ async function buildSky(a, world, wantAudio) {
     // per-bakeKey cache / authoritative includeClouds), this whole fence
     // shrinks to one option flag.
     skyInner = skyApi?._internals?.sky ?? null;
+    // held from birth, the domes were never in the scene for the diff above: claim them by identity, so a teardown
+    // (which puts held domes back first) still finds and frees them
+    for (const d of skyInner?.domes ?? []) if (d && !skyOwned.includes(d)) skyOwned.push(d);
     if (skyInner?.setClouds && cloudQuality !== 'off') {
       const orig = skyInner.setClouds.bind(skyInner);
       skyInner.setClouds = (kind, over) => (kind === 'clear'

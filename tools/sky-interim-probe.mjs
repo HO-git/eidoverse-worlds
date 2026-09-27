@@ -10,8 +10,8 @@ const world = await ownedWorld({});
 const { browser, page } = await launchBrowser(); const pg = await page();
 const errs = []; pg.on('pageerror', (e) => errs.push(String(e)));
 const lines = []; const T0 = Date.now();
-pg.on('console', (m) => { const t = m.text(); if (/sky/.test(t)) lines.push(`${((Date.now() - T0) / 1000).toFixed(1)} ${t.slice(0, 160)}`); });
-pg.on('request', (r) => { const b = r.postData(); if (b && /\[sky\]/.test(b)) for (const x of b.match(/\[sky\][^"\\]*/g) ?? []) lines.push(`${((Date.now() - T0) / 1000).toFixed(1)} ${x.slice(0, 160)}`); });
+pg.on('console', (m) => { const t = m.text(); if (/sky/.test(t)) lines.push(`${((Date.now() - T0) / 1000).toFixed(1)} ${t.slice(0, 900)}`); });
+pg.on('request', (r) => { const b = r.postData(); if (b && /\[sky\]/.test(b)) for (const x of b.match(/\[sky\][^"\\]*/g) ?? []) lines.push(`${((Date.now() - T0) / 1000).toFixed(1)} ${x.slice(0, 900)}`); });
 try {
   // a world whose log already has a cloudy sky, so boot builds it
   await pg.goto(`${world.origin}/`, { waitUntil: 'domcontentloaded' });
@@ -43,10 +43,13 @@ try {
   console.log(lines.filter((l) => /held out|settled|real sky|build owns|compiled/.test(l)).map((l) => '      ' + l).join('\n'));
   check('a fresh build holds the domes out and shows the interim gradient', seen.interim && seen.interimWithDomesOut, JSON.stringify(seen));
   check('…painted in the sky system\'s own colours (not black, not a flat default)', !!seen.colours && seen.colours.some((v) => v > 0.02), JSON.stringify(seen.colours));
+  // held AT BIRTH (the makeSkySystem wrapper), before the build's first await lets a frame draw them
+  const heldAt = order(/held out from birth/), ownsAt = order(/build owns/);
+  check('the domes are held at birth, before the build lets any frame run', heldAt >= 0 && heldAt < ownsAt, `held@${heldAt} owns@${ownsAt}`);
   check('the sky compiles only after the world settled', order(/world settled/) >= 0 && order(/world settled/) < order(/the real sky is up/), '');
   const owns = lines.find((l) => /build owns/.test(l)) ?? '';
-  const spheres = owns.match(/SphereGeometry=\w+/g) ?? [];
-  check('the big domes (the spheres) skip the warm conductor, for later', spheres.length >= 2 && spheres.every((x) => /later/.test(x)), owns.slice(0, 200));
+  const later = owns.match(/\w+=later/g) ?? [];
+  check('exactly the two big domes (spheres) skip the warm conductor, for later', later.length === 2 && later.every((x) => /^SphereGeometry/.test(x)), owns.match(/\w+=later/g)?.join(' ') ?? owns.slice(0, 200));
   check('the real sky replaces it: gradient gone, nothing left held', up && !after.interim && !after.held, JSON.stringify(after));
   check('no page errors', errs.length === 0, errs.slice(0, 3).join(' | '));
 } catch (e) { check('probe ran', false, e.message); }

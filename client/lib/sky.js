@@ -384,14 +384,24 @@ export async function applySky(args = {}, ts) {
   // folded args carry their own ts (the shared fold stamps it); the param
   // stays as a fallback for un-folded callers like the tuner's preview path
   clock = { args: { ...args }, t0: args.ts ?? ts ?? Date.now() };
+  logged = { args: clock.args, t0: clock.t0 };
+  previewing = false;
   await render();
 }
 
 /** Local preview (the tuner) — same path, no new epoch. */
 export async function previewSky(args) {
   clock = { args: { ...args }, t0: clock?.t0 ?? Date.now() };
+  previewing = true;
   await render();
 }
+
+// What the LOG says, apart from what this client draws: a preview replaces `clock` but never `logged`.
+let logged = null, previewing = false, rendering = 0;
+export const loggedSky = () => logged;
+export const skyPreviewing = () => previewing;
+export const skyRendering = () => rendering > 0;
+export const skyDegraded = () => degrade >= 2;
 
 function nowHours() {
   // the shared formula — the fold's hours-rebase on weather verbs uses the
@@ -420,7 +430,11 @@ const MAX_SKY_BUILDS = 2;
 // its own idea of how degraded things are, and each building its own sky.
 let renderChain = Promise.resolve();
 function render() {
+  rendering++;
+  bus.emit('sky-state');
   renderChain = renderChain.then(renderOnce, renderOnce);
+  const done = () => { rendering--; bus.emit('sky-state'); };
+  renderChain.then(done, done);
   return renderChain;
 }
 

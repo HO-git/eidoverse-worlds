@@ -18,6 +18,9 @@ import { previewSky, skyArgs, skyImpl, WEATHERS, CLOUDS, SKY_WORLDS,
 import { GRASS_QUALITY, getGrassQuality, setGrassQuality,
   getGrassDensity, getGrassShed, getGrassApplied } from './terrain.js';
 import { MODEL_QUALITY } from './lod_policy.js';
+import { loggedSky, skyPreviewing, skyRendering, skyDegraded } from './sky.js';
+import { hoursAt } from '../../shared/forecast.js';
+import { stateLines } from './statelines.js';
 import { modelQuality, dialModelQuality } from './realize/models.js';
 
 const SLIDERS = [
@@ -42,6 +45,42 @@ export function paintSky(body) {
   body.innerHTML = '';
   const inputs = {};
   const commit = document.createElement('button');
+
+  // what the log says, and what you're seeing instead (only while those differ)
+  const lines = stateLines();
+  lines.el.classList.add('sky-state');
+  body.appendChild(lines.el);
+  let lastLogged = null;
+  const readState = () => {
+    const L = loggedSky();
+    if (!L) { lines.set('no sky logged yet', skyRendering() ? 'loading…' : null); return; }
+    const a = L.args;
+    if (L !== lastLogged) {
+      // someone (maybe you) logged a sky: follow it, unless you're mid-edit
+      const first = lastLogged === null;
+      lastLogged = L;
+      if (!first && !commit.classList.contains('dirty')) body._sync?.();
+    }
+    const parts = [];
+    if (a.system === 'skymesh') parts.push('basic sky');
+    if (a.clock === 'real') parts.push(`real clock${a.tz ? ` (${a.tz})` : ''}`);
+    else {
+      const h = ((hoursAt({ ...a, ts: L.t0 }, Date.now()) % 24) + 24) % 24;
+      parts.push(`${String(Math.floor(h)).padStart(2, '0')}:${String(Math.floor((h % 1) * 60)).padStart(2, '0')}${a.rate ? ' (running)' : ''}`);
+    }
+    if (a.weather) parts.push(a.weather);
+    if (a.clouds) parts.push(`clouds ${a.clouds}`);
+    if (a.world && a.world !== 'earth') parts.push(a.world);
+    const you = [];
+    if (skyRendering()) you.push('loading…');
+    if (skyPreviewing()) you.push('previewing (not logged)');
+    if (getCloudQuality() === 'off' && a.clouds && a.clouds !== 'clear') you.push('no clouds (your clouds⚙ is off)');
+    if (skyDegraded() && a.system !== 'skymesh') you.push("the basic sky (this GPU can't run the full one)");
+    lines.set(parts.join(' · '), you.join(' · '));
+  };
+  bus.on('sky-state', readState);
+  bus.on('sky-degraded', readState);
+  setInterval(() => { if (body.isConnected) readState(); }, 30000);   // the sun moves; writes only on change
 
   const local = {};
   const preview = (patch) => {
@@ -328,4 +367,5 @@ export function paintSky(body) {
     syncGrassRow();
   };
   body._sync();
+  readState();
 }

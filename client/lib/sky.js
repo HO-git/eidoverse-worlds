@@ -727,7 +727,7 @@ async function ensureSkyBake() {
     // the engine just pointed scene.environment at ITS target — copy the
     // content into the persistent texture and put it back (see module top)
     adoptEnvironment();
-  } catch (e) { console.warn('sky reflections unavailable', e); }
+  } catch (e) { console.warn('sky reflections unavailable', e); tee(`[sky] boot bake failed: ${e?.message ?? e}`); }
   if (bakeGeneration() !== gen) return;   // torn down while baking: a newer build owns the sky now
   if (BAKED_TIERS[cloudQuality]) {
     const { cloudPasses, intervalMs } = BAKED_TIERS[cloudQuality];

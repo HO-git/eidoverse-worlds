@@ -199,7 +199,9 @@ export async function bandedBakeRender(r, bakeScene, bakeCam, target, { cloudPas
   }
   try {
     { const prev = r.getRenderTarget(); r.setRenderTarget(target);
-      try { await r.compileAsync(bs, bakeCam).catch(() => {}); } finally { r.setRenderTarget(prev ?? null); } }
+      const tc = performance.now();
+      try { await r.compileAsync(bs, bakeCam).catch((e) => tee(`[sky] band bake: compileAsync rejected: ${e?.message ?? e}`)); } finally { r.setRenderTarget(prev ?? null); }
+      tee(`[sky] band bake: compiled in ${(performance.now() - tc).toFixed(0)} ms, ${meshes.length} bands to draw`); }
     for (let i = 0; i < meshes.length; i++) {
       // budget: each band is a gpu unit of the shared per-frame budget (the client's callers; the probe paces itself).
       // Nothing is bound across this wait: other frames render meanwhile.
@@ -218,6 +220,7 @@ export async function bandedBakeRender(r, bakeScene, bakeCam, target, { cloudPas
       // a bake that runs into a headset session (the VR cap's high→medium rebuild; a desktop bake still banding at
       // entry) must not render INSIDE an XR frame: that corrupts the per-eye render list (see xrPumpTick)
       if (r.xr?.isPresenting) await renderBetweenXRFrames(r, draw); else draw();
+      if (i === 0 || i % 40 === 39) tee(`[sky] band bake: band ${i + 1}/${meshes.length} drawn`);
       if (i < meshes.length - 1) await nextFrame();
     }
   } finally { for (const g of geos) g.dispose(); }

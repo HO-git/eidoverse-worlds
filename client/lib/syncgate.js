@@ -43,8 +43,8 @@ export function installSyncGate(renderer, { tee = () => {}, gate = true } = {}) 
     // bands with compileAsync first).
     const deferring = gate && !!be.parallel && isWorldPass(renderer.getRenderTarget());
     let ret;
+    const mine = [];
     if (deferring) {
-      const mine = [];
       ret = orig(renderObject, mine);
       if (mine.length) stats.deferred++;
     } else {
@@ -63,6 +63,10 @@ export function installSyncGate(renderer, { tee = () => {}, gate = true } = {}) 
       };
       if (ms >= SLOW_MS) stats.slow.push(row);
       if (ms >= SLOW_MS || row.fs > 60000) tee(`[syncgate] render-path build ${row.ms} ms${deferring ? ' (deferred link)' : ' (BLOCKING)'} ${row.object} ${row.material} vs ${row.vs} fs ${row.fs} chars skinned=${row.skinned} morphs=${row.morphs} lights=${row.lights}`);
+      // how long a big deferred program took to link, i.e. how long its object stayed off screen
+      if (deferring && row.fs > 60000 && mine.length) Promise.all(mine).then(
+        () => tee(`[syncgate] linked after ${(performance.now() - t0).toFixed(0)} ms: ${row.object} ${row.material} fs ${row.fs} chars`),
+        (e) => tee(`[syncgate] link FAILED after ${(performance.now() - t0).toFixed(0)} ms: ${row.object} fs ${row.fs}: ${e?.message ?? e}`));
     }
     return ret;
   };

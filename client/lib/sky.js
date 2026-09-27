@@ -128,12 +128,37 @@ export const getCloudQuality = () => cloudQuality;
 let xrPresenting = false;
 let xrCappedFrom = null;          // the level the cap replaced, restored on exit
 const vrCapApplies = () => xrPresenting && !!renderer.backend?.isWebGLBackend;
+// NO SKY REBUILD WHILE PRESENTING: a cloud-quality flip in VR rebuilt the sky system — the ~1.7MB cloud graph linked on
+// the render path (100 s BLOCKING on one build in a live session), then a 4096x2048 boot bake whose frame held the GPU
+// 4.3 s and tripped the driver watchdog: context lost, session gone. A rebuild is the single most expensive thing the
+// client does and nothing about it is urgent inside a headset, so it waits for the exit. The dropdown keeps the choice
+// (saved as usual); the world's own sky changes — time, weather, cloud kind — are uniform writes plus the cadence
+// re-bake, which already paces itself between XR frames (sky_baked xrPumpTick), so everyone still sees the same sky.
+// What waits is only what would REBUILD: a quality flip, or a switch of sky world.
+let heldQuality = null;           // a quality chosen in the headset, applied at exit
+let heldRebuild = false;          // a sky-world switch that arrived in the headset
+let rebuildInXR = false;          // the VR cap's own flip at entry is allowed through (it exists to make VR cheaper)
+/** What the headset is holding back, for the probe and the debug panel: { quality, rebuild } or null. */
+export const skyHeld = () => (heldQuality || heldRebuild ? { quality: heldQuality, rebuild: heldRebuild } : null);
 bus.on('xr:state', (on) => {
   xrPresenting = !!on;
+  // At exit, ONE rebuild covers whatever was held: a held quality rebuilds at that level (and picks up a held world
+  // switch, since the rebuild reads the latest sky args); the cap's own restore below rebuilds too, so when the cap is
+  // active it carries the held world switch and nothing extra runs. (A quality held while capped cannot exist: the
+  // cap turns a 'high' choice into medium before the hold, and a non-high choice clears the cap.)
+  if (!on && (heldQuality || heldRebuild) && !xrCappedFrom) {
+    const q = heldQuality; heldQuality = null; heldRebuild = false;
+    tee(`[sky] VR exit: applying the sky change held during the session (${q ? `clouds → ${q}` : 'sky world'})`);
+    if (q) setCloudQuality(q, { persist: false }).catch((e) => report('sky held change (exit)', e));
+    else { currentWorld = null; skyBuilds = 0; if (clock) render(); }
+    return;
+  }
+  if (!on) { heldQuality = null; heldRebuild = false; }
   if (on && vrCapApplies() && cloudQuality === 'high') {
     xrCappedFrom = 'high';
     tee('[sky] VR on WebGL: clouds capped high → medium for the session (the saved choice stays high)');
-    setCloudQuality('medium', { persist: false }).catch((e) => report('sky VR cap', e));
+    rebuildInXR = true;
+    setCloudQuality('medium', { persist: false }).catch((e) => report('sky VR cap', e)).finally(() => { rebuildInXR = false; });
   } else if (!on && xrCappedFrom) {
     const back = xrCappedFrom; xrCappedFrom = null;
     tee(`[sky] VR exit: clouds back to ${back}`);
@@ -188,7 +213,13 @@ export async function setCloudQuality(level, { persist = true } = {}) {
   }
   else if (persist && xrPresenting) xrCappedFrom = null;   // a deliberate non-high choice in the headset replaces the cap's memory
   if (persist) localStorage.setItem('ew-cloud-quality', level);   // before the no-op return: choosing the level already running is still a choice
-  if (level === cloudQuality) return;
+  if (level === cloudQuality) { heldQuality = null; return; }
+  if (xrPresenting && !rebuildInXR) {
+    heldQuality = level;
+    tee(`[sky] clouds ${cloudQuality}→${level} held until VR exit (a rebuild in the headset stalls it for seconds)`);
+    bus.emit('sky-held', { quality: level });
+    return;
+  }
   beginPhases(`clouds ${cloudQuality}→${level}`);
   cloudQuality = level;
   currentWorld = null;          // force a rebuild at the new budget
@@ -477,6 +508,12 @@ async function renderEidoverse(a) {
 
   if (building) {
     await building.catch(() => {});   // whoever is already building wins
+  }
+  if (skyApi && currentWorld !== world && currentWorld !== null && xrPresenting && !rebuildInXR) {
+    heldRebuild = true;
+    tee(`[sky] sky world ${currentWorld}→${world} held until VR exit`);
+    applyLive(a);
+    return;
   }
   if (!skyApi || currentWorld !== world) {
     const work = beginWork('sky build'); // names the module-eval + system-construction frame gaps

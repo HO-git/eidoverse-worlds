@@ -14,7 +14,7 @@
 
 import {
   HUMANOID_BONES, REQUIRED_BONES, FINGER_BONES,
-  canonicalBone, suggestBone, validatePose, validateTracks, tracksSpan, poseReport, poseChannels,
+  canonicalBone, suggestBone, validatePose, validateTracks, tracksSpan, poseReport, poseChannels, mergePose,
 } from "../shared/humanoid.js";
 import { WorldAgent } from "./agent.ts";
 import { rigFromGltf } from "./rigbones.ts";
@@ -135,6 +135,23 @@ console.log("\nposes over any bone (rig-checked)");
   check("zero scale is refused", /above 0/.test(validatePose({ head: { s: 0 } }, { rig }).rejected[0]?.why ?? ""));
   check("an unknown channel is named", /unknown channel "r"/.test(validatePose({ head: { r: [0, 0, 0, 1] } }, { rig }).rejected[0]?.why ?? ""));
   check("a bad q inside the object says which channel", /^q: /.test(validatePose({ head: { q: [0, 0, 1] } }, { rig }).rejected[0]?.why ?? ""));
+}
+
+console.log("\nmerge and release");
+{
+  const kneel = { hips: { t: [0, -0.58, 0] }, leftLowerLeg: [0.7, 0, 0, 0.7] };
+  const m = mergePose(kneel, { leftUpperArm: [0, 0, 0.38, 0.92] })!;
+  check("merging an arm keeps the kneel", !!m.hips && !!m.leftLowerLeg && !!m.leftUpperArm);
+  check("...without touching the pose it merged into", !("leftUpperArm" in kneel));
+  const r = mergePose(m, { leftLowerLeg: null })!;
+  check("a null releases just that bone", !("leftLowerLeg" in r) && !!r.hips && !!r.leftUpperArm);
+  check("a bone given again is replaced whole, not blended", JSON.stringify(mergePose(kneel, { hips: [0, 0, 0, 1] })!.hips) === "[0,0,0,1]");
+  check("releasing the last bone leaves nothing held", mergePose({ head: [0, 0, 0, 1] }, { head: null }) === null);
+  check("merging into nothing is just the delta", JSON.stringify(mergePose(null, { head: [0, 0, 0, 1] })) === '{"head":[0,0,0,1]}');
+  const v = validatePose({ leftUpperArm: null, forearm_left: null });
+  check("the validator takes null as a release", v.released.includes("leftUpperArm") && v.pose.leftUpperArm === null);
+  const t = validatePose({ spien: null });
+  check("...and still catches a typo in one", !t.released.length && t.rejected[0]?.suggest === "spine");
 }
 
 console.log("\ntrack validation");

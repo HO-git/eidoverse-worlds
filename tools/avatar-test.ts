@@ -110,7 +110,7 @@ function stand({ constant = false } = {}) {
       }
       this._composeEnd(this.head, r);
     }
-    if (this._override || this._anim) this._applyOverride(dt, now);
+    if (this._override || this._anims?.length) this._applyOverride(dt, now);
   };
   return { self, nodes, action };
 }
@@ -398,17 +398,17 @@ console.log('\nan animation over a held pose (wave while crouching):');
   check('the pose holds the hips', nodes.hips.quaternion.angleTo(tilt) < 1e-3);
 
   self.playAnimation({ dur: 1, tracks: { leftUpperArm: [{ t: 0, q: q(wave) }, { t: 1, q: q(wave) }] } });
-  self._anim.start = 0;
+  self._anims[0].start = 0;
   let now = 0;
   for (let i = 0; i < 40; i++) self.tick(1 / 60, now += 1000 / 60);   // past the ~120ms ease-in, inside the 1s
   check('while the wave plays, the crouch keeps its hips', nodes.hips.quaternion.angleTo(tilt) < 1e-3,
     `${nodes.hips.quaternion.angleTo(tilt).toFixed(3)} rad off`);
   check('...and the arm is the wave\'s', nodes.leftUpperArm.quaternion.angleTo(wave) < 1e-2,
     `${nodes.leftUpperArm.quaternion.angleTo(wave).toFixed(3)} rad off`);
-  check('...in its own slot — the pose was not displaced', self._override?.kind === 'pose' && self._anim?.kind === 'anim');
+  check('...in its own slot — the pose was not displaced', self._override?.kind === 'pose' && self._anims?.[0]?.kind === 'anim');
 
   for (let i = 0; i < 120; i++) self.tick(1 / 60, now += 1000 / 60);
-  check('when the wave ends it lets go', self._anim === null);
+  check('when the wave ends it lets go', self._anims.length === 0);
   check('...the arm goes back to the clip, not the last frame of the wave', nodes.leftUpperArm.quaternion.angleTo(clipArm) < 1e-3,
     `${nodes.leftUpperArm.quaternion.angleTo(clipArm).toFixed(3)} rad off`);
   check('...and the crouch is still held', nodes.hips.quaternion.angleTo(tilt) < 1e-3);
@@ -429,6 +429,37 @@ console.log('\nan animation over a held pose (wave while crouching):');
   for (let i = 0; i < 5; i++) self.tick();
   check('a pose REPLACED by one without hips hands the hips back (the tilt that outlived the crouch)',
     nodes.hips.quaternion.angleTo(clipHips) < 1e-3, `${nodes.hips.quaternion.angleTo(clipHips).toFixed(3)} rad off`);
+}
+
+console.log('\nanimation layers (merge) and replace:');
+{
+  const { self, nodes } = stand({ constant: true });
+  self.tick();
+  const clipHead = nodes.head.quaternion.clone();
+  const A = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -1.0);
+  const B = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.8);
+  const q = (x: any) => [x.x, x.y, x.z, x.w];
+  const hold = (x: any, d = 3) => [{ t: 0, q: q(x) }, { t: d, q: q(x) }];
+  let now = 0;
+  const run = (n: number) => { for (let i = 0; i < n; i++) self.tick(1 / 60, now += 1000 / 60); };
+  self.playAnimation({ dur: 3, tracks: { leftUpperArm: hold(A), head: hold(B) } });
+  self._anims[0].start = now;
+  run(30);
+  const C = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 1.0);
+  self.playAnimation({ dur: 3, tracks: { leftUpperArm: hold(C) } });
+  self._anims.at(-1).start = now;
+  run(30);
+  check('a second animation takes only its bones: the arm is the new one', nodes.leftUpperArm.quaternion.angleTo(C) < 1e-2,
+    `${nodes.leftUpperArm.quaternion.angleTo(C).toFixed(3)} rad off`);
+  check('...and the first keeps playing on the rest (head)', nodes.head.quaternion.angleTo(B) < 1e-2,
+    `${nodes.head.quaternion.angleTo(B).toFixed(3)} rad off`);
+  check('...as two layers', self._anims.length === 2);
+  self.playAnimation({ dur: 3, replace: true, tracks: { leftUpperArm: hold(A) } });
+  self._anims.at(-1).start = now;
+  run(30);
+  check('replace ends every other layer', self._anims.length === 1);
+  check('...and hands the head back to the clip', nodes.head.quaternion.angleTo(clipHead) < 1e-3,
+    `${nodes.head.quaternion.angleTo(clipHead).toFixed(3)} rad off`);
 }
 
 console.log('\nwings:');

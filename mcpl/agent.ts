@@ -6,6 +6,7 @@
 
 import { BodyStateReader, type BodyObservation, type PublicPose } from "./body-state.ts";
 import { mentionRegex } from "./mention.ts";
+import { mergePose } from "../shared/humanoid.js";
 import * as THREE_W from "three/webgpu";
 import * as TSL from "three/tsl";
 import { NoiseGate, SHORT_STINT_MS, APPROACH_REFRACT_MS, APPROACH_RADIUS, REARM_RADIUS,
@@ -724,8 +725,18 @@ export class WorldAgent {
                 (msg.ragdoll as { lean?: number[] })?.lean ?? null,
                 `(${msg.by} knocks you over)`);
             }
-            if (msg.pose) { this.heldPose = msg.pose; this.heldPoseAuthored = true; } // posed BY someone = authored
-            if (msg.anim) this.ws?.send(JSON.stringify({ type: "anim", ...msg.anim }));
+            // posed BY someone = authored. merge: only the bones sent, over an
+            // authored held pose (null releases one); otherwise the pose is
+            // theirs whole, and an empty one releases.
+            if (msg.pose) {
+              const next = msg.merge ? mergePose(this.heldPoseAuthored ? this.heldPose : null, msg.pose)
+                : (Object.keys(msg.pose).length ? msg.pose : null);
+              this.heldPose = next; this.heldPoseAuthored = next != null;
+            }
+            if (msg.anim) {
+              if ((msg.anim as { replace?: boolean }).replace) { this.heldPose = null; this.heldPoseAuthored = false; }
+              this.ws?.send(JSON.stringify({ type: "anim", ...msg.anim }));
+            }
             this.onEvent?.({ ts: Date.now(), kind: "say", who: msg.by,
               text: `(posed you${msg.anim ? " with an animation" : ""})` } as any);
             break;
@@ -2873,20 +2884,23 @@ export class WorldAgent {
     }
   }
 
-  /** Play a one-off animation on yourself — relayed once, never logged. */
-  animate(data: { dur: number; loop?: boolean; tracks: Record<string, { t: number; q: number[] }[]> }) {
+  /** Play a one-off animation on yourself — relayed once, never logged.
+   *  Over your held pose and other animations; `replace` ends them first. */
+  animate(data: { dur: number; loop?: boolean; replace?: boolean; tracks: Record<string, { t: number; q: number[] }[]> }) {
+    if (data.replace) this.setPose(null);
     if (this.joined && this.ws?.readyState === 1) {
-      this.ws.send(JSON.stringify({ type: "anim", dur: data.dur, loop: !!data.loop, tracks: data.tracks }));
+      this.ws.send(JSON.stringify({ type: "anim", dur: data.dur, loop: !!data.loop, tracks: data.tracks,
+        ...(data.replace ? { replace: true } : {}) }));
     }
   }
 
   /** Ask another body to hold a pose or play an animation. It decides.
    *  `ragdoll: true` asks it to go limp; `{lean:[x,y,z]}` (m/s) says which
    *  way the shove sends it — the receiver simulates and caps for itself. */
-  puppet(target: string, spec: { pose?: Record<string, PoseValue>; anim?: unknown; ragdoll?: boolean | { lean: number[] } }) {
+  puppet(target: string, spec: { pose?: Record<string, PoseValue | null>; merge?: boolean; anim?: unknown; ragdoll?: boolean | { lean: number[] } }) {
     if (this.joined && this.ws?.readyState === 1) {
       this.ws.send(JSON.stringify({ type: "puppet", target,
-        pose: spec.pose ?? null, anim: spec.anim ?? null, ragdoll: spec.ragdoll ?? null }));
+        pose: spec.pose ?? null, ...(spec.merge ? { merge: true } : {}), anim: spec.anim ?? null, ragdoll: spec.ragdoll ?? null }));
     }
   }
 

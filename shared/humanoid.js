@@ -149,6 +149,23 @@ export function poseChannels(v) {
   return q || t || s ? { q, t, s } : null;
 }
 
+/**
+ * Posing only the bones you name. `base` is the pose being held (or null),
+ * `delta` the new bones; a bone whose value is null in `delta` is RELEASED
+ * back to the clip. Returns a new object, or null when nothing is left held.
+ *
+ * Merge is what sitting already did for free — a sit is a clip, and a pose
+ * composes over a clip — and what a held pose did not: posing an arm while
+ * kneeling replaced the kneel, and the body stood up.
+ */
+export function mergePose(base, delta) {
+  const out = { ...(base && typeof base === 'object' ? base : {}) };
+  for (const [k, v] of Object.entries(delta ?? {})) {
+    if (v == null) delete out[k]; else out[k] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 /** Check and clean one pose value: a bare quaternion, or {q?, t?, s?}.
  *  Returns {value, renormalized} or {why}. The value comes back in the
  *  smallest form that says it — a bare array when only q was given. */
@@ -210,14 +227,18 @@ function nearest(name, names) {
  *        `known` = the humanoid bones THIS rig has (a valid name it lacks is
  *        `absent`); `rig` = every bone it has. Without a rig, a name that is
  *        no humanoid bone and no likely typo of one is kept but `unchecked`.
- * @returns {{pose: Record<string, number[]|object>, accepted: string[], custom: string[],
+ * A null value RELEASES that bone (listed in `released`, kept as null in
+ * `pose` for mergePose), after the same name checks — a typo'd release is
+ * as silent a failure as a typo'd pose.
+ *
+ * @returns {{pose: Record<string, number[]|object|null>, accepted: string[], released: string[], custom: string[],
  *            unchecked: string[], renamed: Array<{from: string, to: string}>,
  *            renormalized: string[], absent: string[],
  *            rejected: Array<{name: string, why: string, suggest?: string}>}}
  */
 export function validatePose(bones, opts = {}) {
   const out = {
-    pose: {}, accepted: [], custom: [], unchecked: [], renamed: [], renormalized: [], absent: [], rejected: [],
+    pose: {}, accepted: [], released: [], custom: [], unchecked: [], renamed: [], renormalized: [], absent: [], rejected: [],
   };
   if (!bones || typeof bones !== 'object' || Array.isArray(bones)) {
     out.rejected.push({ name: '(whole pose)', why: 'want an object mapping bone name to [x,y,z,w] or {q, t, s}' });
@@ -248,6 +269,12 @@ export function validatePose(bones, opts = {}) {
         continue;
       }
       name = raw; isCustom = true; isUnchecked = true;   // no rig to check against
+    }
+    if (v === null) {                  // release this bone (a merge — shared/humanoid.js mergePose)
+      if (name in out.pose) { out.rejected.push({ name: raw, why: `also names ${name}, already set here — one bone, one value` }); continue; }
+      if (name !== raw) out.renamed.push({ from: raw, to: name });
+      out.pose[name] = null; out.released.push(name);
+      continue;
     }
     const pv = normalizePoseValue(v);
     if (pv.why) { out.rejected.push({ name: raw, why: pv.why }); continue; }

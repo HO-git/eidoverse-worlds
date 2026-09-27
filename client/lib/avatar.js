@@ -1261,13 +1261,17 @@ export class Avatar {
     };
   }
 
-  /** Play a one-off animation. data = { dur, loop?, tracks: {bone:[{t,q:[x,y,z,w]}]} }.
+  /** Play a one-off animation. data = { dur, loop?, replace?, tracks: {bone:[{t,q:[x,y,z,w]}]} }.
    *
-   *  Its OWN slot, layered over the held pose rather than replacing it: a
-   *  wave while crouching keeps the crouch, and only the bones the wave
-   *  animates are the wave's while it plays. Sharing the pose's slot, it
+   *  Animations are LAYERS over the held pose rather than a replacement for
+   *  it: a wave while crouching keeps the crouch, and only the bones the wave
+   *  animates are the wave's while it plays. (Sharing the pose's slot, it
    *  displaced the whole pose — the body stood up to wave, and a crouch's
-   *  hips tilt was left behind on a bone nothing handed back. */
+   *  hips tilt was left behind on a bone nothing handed back.) A new
+   *  animation takes only ITS bones from the layers already playing; the
+   *  rest of them play on. `replace` ends every other layer instead. Ending
+   *  the held pose is the AUTHOR's half of a replace — it lives in presence
+   *  (myState.pose, an agent's heldPose), which this body only renders. */
   playAnimation(data) {
     if (!data?.tracks) return;
     const tracks = new Map();
@@ -1281,12 +1285,21 @@ export class Avatar {
     if (!tracks.size) return;
     const dur = Math.max(0.1, Math.min(30, Number(data.dur) || 2));
     const nodes = this._resolveBones([...tracks.keys()]);
-    if (this._anim) this._handBack(this._anim, nodes);
-    this._anim = {
+    const mine = new Set(nodes.map(([, n]) => n));
+    let from = 0;   // a bone taken over mid-play continues from where it was
+    this._anims ??= [];
+    for (const l of this._anims) {
+      const lose = l.nodes.filter(([, n]) => mine.has(n));
+      if (lose.length) from = Math.max(from, l.weight);
+      if (data.replace) this._handBack(l, nodes);
+      else l.nodes = l.nodes.filter(([, n]) => !mine.has(n));
+    }
+    this._anims = data.replace ? [] : this._anims.filter((l) => l.nodes.length);
+    this._anims.push({
       kind: 'anim', nodes,
       tracks, dur, loop: !!data.loop, start: performance.now(),
-      weight: this._anim?.weight ?? 0, wantWeight: 1, _scratch: new THREE.Quaternion(),
-    };
+      weight: from, wantWeight: 1, _scratch: new THREE.Quaternion(),
+    });
   }
 
   /** Return an outgoing override's bones to their owners — the clip, or the
@@ -1553,7 +1566,8 @@ export class Avatar {
       return;
     }
     if (this.emote) this.cancelEmote();
-    if (this._anim) { this._handBack(this._anim); this._anim = null; }   // a falling body stops waving
+    for (const l of this._anims ?? []) this._handBack(l);   // a falling body stops waving
+    this._anims = null;
     const driven = new Set(DRIVEN_BONES);
     this._parked = this._resolveBones(
       this._humanoidBones().filter((n) => !driven.has(n)))
@@ -1710,7 +1724,10 @@ export class Avatar {
     // clip's value and both would integrate.
     const taken = this._reachOwned();
     const posed = this._override ? this._applyPoseSlot(dt, taken) : null;
-    if (this._anim) this._applyAnimSlot(dt, now, taken, posed);
+    if (this._anims?.length) {
+      for (const l of this._anims) this._applyAnimSlot(l, dt, now, taken, posed);
+      this._anims = this._anims.filter((l) => !l.done);
+    }
   }
 
   /** The held pose. Returns the set of bones it wrote this frame. */
@@ -1768,8 +1785,7 @@ export class Avatar {
    *  frame the pose's begin still restores the clip underneath. Composed at
    *  all (the old path slerped in place), so a still clip track gets its
    *  value back when the animation ends instead of keeping the last frame. */
-  _applyAnimSlot(dt, now, taken, posed) {
-    const o = this._anim;
+  _applyAnimSlot(o, dt, now, taken, posed) {
     o.weight += (o.wantWeight - o.weight) * Math.min(1, 12 * dt);
     if (o.wantWeight === 0 && o.weight < 0.02) {
       for (const [, node] of o.nodes) {
@@ -1777,7 +1793,7 @@ export class Avatar {
         const r = this._composed.get(node);
         if (r?.live && node.quaternion.equals(r.out)) { node.quaternion.copy(r.base); r.live = false; }
       }
-      this._anim = null;
+      o.done = true;
       return;
     }
     let tt = (now - o.start) / 1000;
@@ -1920,7 +1936,7 @@ export class Avatar {
       this._composeEnd(this.head, r);
     }
     BC('av:override');
-    if (this._override || this._anim) this._applyOverride(dt, now);
+    if (this._override || this._anims?.length) this._applyOverride(dt, now);
 
     // ---- reach: solved fresh every frame, so it TRACKS. After the held pose
     // (which yields any bone a reach owns) and before vrm.update, same as

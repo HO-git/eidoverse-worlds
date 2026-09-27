@@ -292,7 +292,7 @@ export const isPresenting = () => presenting;
 // turn: 'snap' | 'smooth' · vignette: comfort tunnel on move/turn · mirror:
 // what the desktop window shows while presenting — 'off' | 'first' | 'third'.
 const PREF_XR = 'ew-xr-prefs';
-export const xrPrefs = (() => { try { return { turn: 'smooth', vignette: false, mirror: 'off', seated: false, res: 'auto', ...JSON.parse(localStorage.getItem(PREF_XR) || '{}') }; } catch { return { turn: 'smooth', vignette: false, mirror: 'off', seated: false, res: 'auto' }; } })();
+export const xrPrefs = (() => { try { return { turn: 'smooth', vignette: false, mirror: 'first', seated: false, res: 'auto', ...JSON.parse(localStorage.getItem(PREF_XR) || '{}') }; } catch { return { turn: 'smooth', vignette: false, mirror: 'first', seated: false, res: 'auto' }; } })();
 { const m = new URLSearchParams(location.search).get('mirror'); if (m === 'off' || m === 'first' || m === 'third') xrPrefs.mirror = m; }   // URL override for A/B (the 'pop to origin' hunt, 09-05 21:46)
 // Eye resolution, as WebXR's framebufferScaleFactor: a per-axis scale of the size the runtime recommends. 'auto' (1.0)
 // is that size — SteamVR's resolution slider sets it, and it is deliberately LARGER than the panel because the lens

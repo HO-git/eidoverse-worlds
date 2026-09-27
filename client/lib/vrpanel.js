@@ -52,6 +52,15 @@ export function initVRPanel() {
       (on) => { setXrPref('seated', !!on); flashHint(`VR seated ${on ? 'on' : 'off'}`); if (isPresenting()) recentreXR('seated'); });
     seated.title = 'playing from a chair: the body stands at its own height under your head, and your real height is not measured. Recentres when toggled.';
     body.appendChild(seated);
+    // the automatic cloud cap, said where VR's settings live (owner, 09-27: 'leave a little explainer in the VR menu')
+    const clouds = document.createElement('div');
+    clouds.className = 'row';
+    const cs = document.createElement('span'); cs.className = 'note vr-cloud-note'; clouds.appendChild(cs);
+    cs.textContent = 'Clouds: in VR they run at medium at most (high draws the full cloud march for each eye, which '
+      + 'halves the headset\'s frame rate). Your own choice comes back when you leave VR. The first time a cloud '
+      + 'setting is used, the clouds can take a while to appear while your GPU compiles them; the world stays smooth meanwhile.';
+    body.appendChild(clouds);
+
     const rc = btn('recentre now', () => { if (!recentreXR('settings')) flashHint('recentre: enter VR first'); else flashHint('recentred'); });
     rc.title = 'body under your head, facing where you face. Also on the VR ring (right-stick press).';
     body.appendChild(rc);

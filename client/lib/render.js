@@ -89,6 +89,8 @@ export function setXRCurtain(on) {
   }
 }
 export const xrCurtainOn = () => curtainOn;
+/** Render the world from another camera the way the main pass does (draw batches included): the desktop mirror. */
+export const renderWorldFrom = (cam) => batches.render(renderer, scene, cam);
 let healed = 0;
 // EW.overdraw holds the live frame while it swaps every material for a counting clone (overdraw.js)
 let worldHold = false;

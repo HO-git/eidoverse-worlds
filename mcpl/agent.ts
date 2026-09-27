@@ -734,8 +734,9 @@ export class WorldAgent {
               this.heldPose = next; this.heldPoseAuthored = next != null;
             }
             if (msg.anim) {
-              if ((msg.anim as { replace?: boolean }).replace) { this.heldPose = null; this.heldPoseAuthored = false; }
-              this.ws?.send(JSON.stringify({ type: "anim", ...msg.anim }));
+              const anim = { ...msg.anim, replace: (msg.anim as { replace?: boolean }).replace !== false };
+              if (anim.replace) { this.heldPose = null; this.heldPoseAuthored = false; }
+              this.ws?.send(JSON.stringify({ type: "anim", ...anim }));
             }
             this.onEvent?.({ ts: Date.now(), kind: "say", who: msg.by,
               text: `(posed you${msg.anim ? " with an animation" : ""})` } as any);
@@ -2890,7 +2891,7 @@ export class WorldAgent {
     if (data.replace) this.setPose(null);
     if (this.joined && this.ws?.readyState === 1) {
       this.ws.send(JSON.stringify({ type: "anim", dur: data.dur, loop: !!data.loop, tracks: data.tracks,
-        ...(data.replace ? { replace: true } : {}) }));
+        replace: data.replace === true }));
     }
   }
 

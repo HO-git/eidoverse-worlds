@@ -1286,15 +1286,18 @@ export class Avatar {
     const dur = Math.max(0.1, Math.min(30, Number(data.dur) || 2));
     const nodes = this._resolveBones([...tracks.keys()]);
     const mine = new Set(nodes.map(([, n]) => n));
+    // Omitted on legacy wire packets: those always replaced the previous clip.
+    // Modern authoring surfaces send false explicitly to request a merge.
+    const replace = data.replace !== false;
     let from = 0;   // a bone taken over mid-play continues from where it was
     this._anims ??= [];
     for (const l of this._anims) {
       const lose = l.nodes.filter(([, n]) => mine.has(n));
       if (lose.length) from = Math.max(from, l.weight);
-      if (data.replace) this._handBack(l, nodes);
+      if (replace) this._handBack(l, nodes);
       else l.nodes = l.nodes.filter(([, n]) => !mine.has(n));
     }
-    this._anims = data.replace ? [] : this._anims.filter((l) => l.nodes.length);
+    this._anims = replace ? [] : this._anims.filter((l) => l.nodes.length);
     this._anims.push({
       kind: 'anim', nodes,
       tracks, dur, loop: !!data.loop, start: performance.now(),
@@ -1853,6 +1856,8 @@ export class Avatar {
     this.speakUntil = 0;
     this.voiceLevel = null;
     this.clearPose();
+    for (const l of this._anims ?? []) this._handBack(l);
+    this._anims = null;
     this.clearReach();      // a transplanted body must not keep reaching at the predecessor's target
     this.setLimp(false);
     this.setGazeTarget(null);
@@ -2271,6 +2276,11 @@ export class Avatar {
     if (this.bubble) disposeSprite(this.bubble);
     if (this.typing) disposeSprite(this.typing);
     disposeSprite(this.label);
+    // The pool resets humanoid rotations/positions, but knows nothing about
+    // custom-bone transforms or scale. Return every raw channel we still own
+    // before dropping the compose records and handing this VRM to a new wearer.
+    for (const node of this._rawComposed?.keys() ?? []) this._rawRelease(node);
+    this._rawComposed?.clear();
     this.mixer.stopAllAction();
     this._composed.clear();
     releaseVRM(this.vrm);

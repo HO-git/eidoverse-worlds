@@ -387,8 +387,9 @@ export function initLocalBody({ logChat: logChatFn }) {
       flashHint(myState.pose ? `${by} posed you` : `${by} released your pose`);
     }
     if (anim) {
-      if (anim.replace) myState.pose = null;          // a replacing animation ends the held pose too
-      getMe()?.playAnimation(anim); sendAnim(anim);
+      const data = { ...anim, replace: anim.replace !== false }; // legacy puppets replace
+      if (data.replace) myState.pose = null;          // a replacing animation ends the held pose too
+      getMe()?.playAnimation(data); sendAnim(data);
     }
   });
 

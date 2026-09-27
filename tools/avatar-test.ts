@@ -442,11 +442,11 @@ console.log('\nanimation layers (merge) and replace:');
   const hold = (x: any, d = 3) => [{ t: 0, q: q(x) }, { t: d, q: q(x) }];
   let now = 0;
   const run = (n: number) => { for (let i = 0; i < n; i++) self.tick(1 / 60, now += 1000 / 60); };
-  self.playAnimation({ dur: 3, tracks: { leftUpperArm: hold(A), head: hold(B) } });
+  self.playAnimation({ dur: 3, replace: false, tracks: { leftUpperArm: hold(A), head: hold(B) } });
   self._anims[0].start = now;
   run(30);
   const C = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 1.0);
-  self.playAnimation({ dur: 3, tracks: { leftUpperArm: hold(C) } });
+  self.playAnimation({ dur: 3, replace: false, tracks: { leftUpperArm: hold(C) } });
   self._anims.at(-1).start = now;
   run(30);
   check('a second animation takes only its bones: the arm is the new one', nodes.leftUpperArm.quaternion.angleTo(C) < 1e-2,
@@ -460,6 +460,68 @@ console.log('\nanimation layers (merge) and replace:');
   check('replace ends every other layer', self._anims.length === 1);
   check('...and hands the head back to the clip', nodes.head.quaternion.angleTo(clipHead) < 1e-3,
     `${nodes.head.quaternion.angleTo(clipHead).toFixed(3)} rad off`);
+}
+
+console.log('\npose teardown and legacy animation compatibility:');
+{
+  const { self, nodes } = stand({ constant: true });
+  self.tick();
+  const idle = nodes.leftUpperArm.quaternion.clone();
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 1).toArray();
+  self.playAnimation({ dur: 1, loop: true, replace: false, tracks: { leftUpperArm: [{ t: 0, q }] } });
+  self._anims[0].start = 0;
+  for (let i = 0; i < 60; i++) self.tick(1 / 60, i * 1000 / 60);
+  // The mesh survives a same-avatar takeover; only unrelated UI seams are stubbed.
+  for (const name of ['setTyping', 'clearReach', 'setGazeTarget', 'setClip']) self[name] = () => {};
+  Avatar.prototype.resetTransients.call(self);
+  for (let i = 60; i < 300; i++) self.tick(1 / 60, i * 1000 / 60);
+  check('a takeover ends the predecessor’s looping animation', !self._anims?.length);
+  check('...and hands its bones back to the idle clip', nodes.leftUpperArm.quaternion.angleTo(idle) < 1e-3);
+}
+{
+  const { self, nodes } = stand({ constant: true });
+  self.tick();
+  const idle = nodes.leftUpperArm.quaternion.clone();
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 1).toArray();
+  const tracks = { leftUpperArm: [{ t: 0, q }] };
+  self.playAnimation({ dur: 1, loop: true, tracks }); // legacy wire: no replace flag
+  self._anims[0].start = 0;
+  for (let i = 0; i < 60; i++) self.tick(1 / 60, i * 1000 / 60);
+  self.playAnimation({ dur: 1, tracks: { head: [{ t: 0, q }] } });
+  check('an omitted wire replace flag ends older animation layers', self._anims.length === 1);
+  check('...including bones absent from the new animation', nodes.leftUpperArm.quaternion.angleTo(idle) < 1e-3);
+}
+{
+  // Drive setPose -> raw writes -> REAL dispose -> another wearer on the same
+  // nodes. Pool reset only knows humanoid rotations/positions, not these TRS.
+  const scene = new THREE.Group(), head = new THREE.Bone(), custom = new THREE.Bone();
+  head.name = 'Head'; custom.name = 'Custom'; scene.add(head); head.add(custom);
+  head.scale.set(1.2, 1.2, 1.2); custom.position.set(0, .2, 0);
+  custom.matrixAutoUpdate = false; custom.updateMatrix();
+  const rest = {};
+  scene.traverse((n: any) => { if (n.isBone) rest[n.name] = { p: n.position.toArray(), q: n.quaternion.toArray(), s: n.scale.toArray() }; });
+  const vrm = { scene, userData: { boneRest: rest }, humanoid: {
+    getNormalizedBoneNode: (n: string) => n === 'head' ? head : null,
+    getRawBoneNode: (n: string) => n === 'head' ? head : null,
+  } };
+  const wearer = () => Object.assign(Object.create(Avatar.prototype), {
+    vrm, root: scene, gaze: new THREE.Object3D(), label: new THREE.Sprite(),
+    mixer: new THREE.AnimationMixer(scene), _composed: new Map(),
+  });
+  const first = wearer();
+  first.setPose({ head: { s: 2 }, Custom: { q: [0, 0, Math.sin(.3), Math.cos(.3)], t: [.25, 0, 0] } });
+  first._override.weight = 1; first._applyRawPose();
+  check('fixture really scales and moves the raw bones', head.scale.x > 2 && custom.position.x > .1);
+  first.dispose();
+  check('dispose restores the authored scale before pooling', Math.abs(head.scale.x - 1.2) < 1e-9);
+  check('dispose restores custom translation and rotation', custom.position.distanceTo(new THREE.Vector3(0, .2, 0)) < 1e-9 && custom.quaternion.angleTo(new THREE.Quaternion()) < 1e-6);
+  check('dispose rebuilds manually updated bone matrices', new THREE.Vector3().setFromMatrixPosition(custom.matrix).distanceTo(custom.position) < 1e-9);
+  const second = wearer();
+  second.setPose({ head: { s: 2 } }); second._override.weight = 1; second._applyRawPose();
+  check('the next wearer scales from rest, without compounding the previous pose', Math.abs(head.scale.x - 2.4) < 1e-9);
+  first.dispose();
+  check('repeated disposal cannot clear the next wearer’s pose', Math.abs(head.scale.x - 2.4) < 1e-9);
+  second.dispose();
 }
 
 console.log('\nwings:');

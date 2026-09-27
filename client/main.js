@@ -804,7 +804,7 @@ const EW = globalThis.EW = {
   },
   clearPose: (target = null) => { if (target) sendPuppet(target, { pose: {} }); else myState.pose = null; },
   animate: (data, { replace = data?.replace === true, target = null } = {}) => {   // replace may ride in the data too
-    const a = replace ? { ...data, replace: true } : data;
+    const a = { ...data, replace: !!replace };
     if (target) return sendPuppet(target, { anim: a });
     if (replace) myState.pose = null;
     getMe()?.playAnimation(a);

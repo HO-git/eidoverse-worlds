@@ -523,7 +523,7 @@ export const HANDLERS: Record<string, ToolHandler> = {
       if (!Number.isFinite(dur) || dur <= 0) return text("pass `dur`: the length in seconds, greater than 0");
       const span = tracksSpan(v.tracks);
       const cut = span > dur ? ` — note dur ${dur}s cuts keyframes that run to ${span}s` : "";
-      const spec = { dur, loop: !!a.loop, tracks: v.tracks, ...(a.replace ? { replace: true } : {}) };
+      const spec = { dur, loop: !!a.loop, tracks: v.tracks, replace: !!a.replace };
       if (a.target) {
         ag.puppet(String(a.target), { anim: spec });
         return text(`sent a ${dur}s animation over ${v.accepted.length} bone(s) to ${a.target}`

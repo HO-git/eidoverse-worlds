@@ -167,7 +167,7 @@ bus.on('xr:state', (on) => {
 });
 
 /** What the person CHOSE — a settings row shows this, not the level the VR cap is running meanwhile. */
-export const getCloudChoice = () => xrCappedFrom ?? cloudQuality;
+export const getCloudChoice = () => heldQuality ?? xrCappedFrom ?? cloudQuality;   // a choice made in the headset shows at once
 
 /** Change the local cloud budget. Rebuilds the sky, since passes are baked in
  *  at construction. */
@@ -711,8 +711,14 @@ async function ensureSkyBake() {
       const target = renderer.getRenderTarget();
       renderer.setRenderTarget(outer ?? null);   // bakeEnv left the bake target bound; the frames between bands are the world's
       const t0 = performance.now();
+      // In a headset the live domes are the full per-eye cloud march (the ~12 fps double vision the VR cap exists to
+      // avoid), on screen for every frame of the bake: out of the scene while it bands, back before the baked dome
+      // attaches (which parks them properly). On the desktop they stay: correct, just slower for a couple of seconds.
+      const hidden = renderer.xr?.isPresenting ? (skyApi?._internals?.sky?.domes ?? []).filter((d) => d?.parent).map((d) => [d, d.parent]) : [];
+      for (const [d, p] of hidden) p.remove(d);
       return bandedBakeRender(renderer, sc, cam, target, { cloudPasses: opts.cloudPasses ?? 8, passTexelBudget: BAND_BUDGET, budget: true, alive: () => bakeGeneration() === gen })
-        .then((n) => { const l = `[sky] boot bake banded: ${n} bands over ${(performance.now() - t0).toFixed(0)} ms`; console.log(l); tee(l); renderer.setRenderTarget(target); });
+        .then((n) => { const l = `[sky] boot bake banded: ${n} bands over ${(performance.now() - t0).toFixed(0)} ms`; console.log(l); tee(l); renderer.setRenderTarget(target); })
+        .finally(() => { if (bakeGeneration() === gen) for (const [d, p] of hidden) if (!d.parent) p.add(d); });   // torn down: those domes were disposed
     };
     try { await skyApi.bakeEnv?.(opts); } finally { renderer.renderAsync = origRA; }
     lastBakeHours = nowHours();

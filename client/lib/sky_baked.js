@@ -35,7 +35,7 @@
 // degraded performance, never a broken sky.
 
 import { THREE, TSL, scene, camera, renderer } from './core.js';
-import { tee } from './base.js';
+import { tee, bus } from './base.js';
 import { warm, P_AMBIENT } from './warmqueue.js';
 import { bandCuts } from './sky_bands.js';
 import { ask, spent, turn } from './framebudget.js';
@@ -418,6 +418,8 @@ const XR_BAKE_SPACING_MS = 40;
 let skyWaited = 0;   // band asks age like any waiter (the pump asks last in a frame; it must not starve)
 let xrPumpId = 0;
 let xrBakeBroken = false;
+// 'frozen for this session' means THIS session: a new one gets the pump back (a lasting fault latches again at once)
+bus.on('xr:state', (on) => { if (on) xrBakeBroken = false; });
 
 function xrPumpDue() {
   return state === 'baking'

@@ -138,32 +138,32 @@ export function initVideoPanel() {
     body.appendChild(selectRow('render scale',
       'Resolution the world is drawn at, as a share of your screen. The single biggest lever on a pixel-bound machine. auto lets the engine step it down when the frame rate sags and back up when it recovers; a pinned value is yours and the engine leaves it alone.',
       RENDER_SCALES.map((v) => [v, pct(v)]), getRenderScale(),
-      (v) => { setRenderScale(v); flashHint(`render scale: ${pct(v)} (yours only)`); }));
+      (v) => { setRenderScale(v); flashHint(`render scale: ${pct(v)}`); }));
 
     const resRow = selectRow('shadow resolution',
       'Detail of every cast shadow — the sun’s map (the size shown) and the lamp shadow, which scales with it. 2048 is the default; 4096 sharpens edges at four times the memory and fill; 1024 is the cheap tier the engine also drops to under load. Changes live.',
       SHADOW_RES.map((v) => [v, `${v}²`]), shadowRes(),
-      (v) => { setShadowRes(+v); flashHint(`shadow resolution: ${v}² (yours only)`); });
+      (v) => { setShadowRes(+v); flashHint(`shadow resolution: ${v}²`); });
     resRow.hidden = !shadowsOn();
     body.appendChild(checkRow('shadows',
       'All cast shadows — the sun’s and the lamp shadow. Off is the cheapest single change on a weak GPU; flipping it may recompile materials once.',
-      shadowsOn(), (on) => { setShadows(on); resRow.hidden = !on; flashHint(`shadows ${on ? 'on' : 'off'} (yours only)`); }));
+      shadowsOn(), (on) => { setShadows(on); resRow.hidden = !on; flashHint(`shadows ${on ? 'on' : 'off'}`); }));
     body.appendChild(resRow);
 
     body.appendChild(selectRow('particles',
       'How many sprites particle effects draw. auto lets the engine thin them under load and restore them after.',
       PARTICLE_TIERS.map((v) => [v, v]), getParticleTier(),
-      (v) => { setParticleTier(v); flashHint(`particles: ${v} (yours only)`); }));
+      (v) => { setParticleTier(v); flashHint(`particles: ${v}`); }));
 
     body.appendChild(selectRow('textured transparency',
       'How surfaces that are see-through because of their TEXTURE are drawn — leaves, fronds, fences, lace, decals; anything blended whose texture carries the holes. (Glass and tinted panels, see-through by a single opacity, are not affected.) soft: one blended pass, the smoothest edges. fast: the solid part of each surface is drawn opaque first, so layers hidden behind it are skipped — about half the cost on a dense palm, with a few crisper pixels where many layers stack. auto: fast in a headset, soft on the desktop.',
       FOLIAGE_MODES.map((v) => [v, v]), getFoliageMode(),
-      (v) => { setFoliageMode(v); flashHint(`textured transparency: ${v} (yours only)`); }));
+      (v) => { setFoliageMode(v); flashHint(`textured transparency: ${v}`); }));
 
     body.appendChild(selectRow('avatar detail',
       'How often other people’s bodies update as they get farther away. Lower spends less on a crowded world.',
       Object.keys(AVATAR_DETAILS).map((v) => [v, v]), getAvatarDetail(),
-      (v) => { setAvatarDetail(v); flashHint(`avatar detail: ${v} (yours only)`); }));
+      (v) => { setAvatarDetail(v); flashHint(`avatar detail: ${v}`); }));
 
     const msaaOn = (CONFIG.params.get('msaa') ?? lsGet(PREF_MSAA)) !== '0';
     body.appendChild(checkRow('antialiasing',

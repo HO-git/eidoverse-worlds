@@ -1,6 +1,6 @@
 // sky-busy-probe — the sky panel's 'you: loading…' line follows sky.js's busy signal (UI review 3, L1: 691e84e had no
 // committed probe). NEEDS PR 1 (vr-heavy: 'sky-busy', skyBusy()); run it on the merge. Off tier, cloudless: headless-safe.
-// Shows the stand-in gradient by hand: 'loading…' must appear once past the panel's 400 ms debounce, and clear after.
+// Shows the stand-in gradient by hand: 'loading…' must appear at once (an arrival isn't debounced; a render is), and clear after.
 //   bun tools/sky-busy-probe.mjs
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
 const { check, done } = checker();
@@ -26,7 +26,8 @@ try {
   });
   console.log('   ', JSON.stringify(r));
   check("the stand-in gradient shows 'loading…' in the sky panel, and skyBusy() agrees", /loading/.test(r.during) && r.busy === true, JSON.stringify(r));
-  check('…not before the debounce (a 1 Hz rated render never flashes it)', !/loading/.test(r.early), r.early);
+  // the ARRIVAL shows at once (the stand-in lasts minutes); only render calls wait LOAD_SHOW_MS (sky-state-probe binds that)
+  check('…at once: the arrival is not debounced like a render', /loading/.test(r.early), r.early);
   check('…and it goes away after', !/loading/.test(r.after), r.after);
   check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | '));
 } catch (e) { check('probe ran', false, e.message); }

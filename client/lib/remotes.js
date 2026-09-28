@@ -358,8 +358,12 @@ export function setLodBias(v) { lodBias = v; }
 // owns root and bones; springs/expressions still tick.
 export const draggedLocal = new Set();
 
+const _eye = new THREE.Vector3();
 export function updateRemotes(dt, now = performance.now()) {
   const renderAt = serverNow() - INTERP_MS;
+  // animation LOD by distance from the camera's WORLD position (in XR camera.position is the head's offset inside the
+  // rig: remotes near the world origin animated at full rate, the ones beside you at a quarter; review 10a M4)
+  const eye = camera.getWorldPosition(_eye);
 
   for (const r of remotes.values()) {
     if (!r.avatar) continue;
@@ -404,7 +408,7 @@ export function updateRemotes(dt, now = performance.now()) {
         if (r.lastClip !== sw.pose) { r.lastClip = sw.pose; }
         r.avatar.setClip(sw.pose, 0);   // emote-aware: no-ops while a gesture owns the body
         if ((s?.clipTimeSlot ?? s?.clip) === sw.pose) syncClipPhase(r.avatar, s, r.clipPhaseStamp ??= {});
-        const d = r.avatar.root.position.distanceTo(camera.position);
+        const d = r.avatar.root.position.distanceTo(eye);
         const every = Math.round((d < LOD_NEAR ? 1 : d < LOD_MID ? 2 : 4) * lodBias);
         r.lodAcc += dt;
         r.lodTick = (r.lodTick + 1) % Math.max(1, every);
@@ -446,7 +450,7 @@ export function updateRemotes(dt, now = performance.now()) {
       applyPresenceExtras(r, buf[0]);
     }
 
-    const d = r.avatar.root.position.distanceTo(camera.position);
+    const d = r.avatar.root.position.distanceTo(eye);
     const every = Math.round((d < LOD_NEAR ? 1 : d < LOD_MID ? 2 : 4) * lodBias);
     r.lodAcc += dt;
     r.lodTick = (r.lodTick + 1) % Math.max(1, every);

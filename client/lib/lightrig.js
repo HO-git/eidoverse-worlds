@@ -599,12 +599,16 @@ const _q = new THREE.Quaternion();
 const _s = new THREE.Vector3();
 const _p = new THREE.Vector3();
 
+// the camera's WORLD position: in XR the camera is a child of the rig and camera.position is only the head's offset in
+// it, so lights near the world origin won the slots and walking never triggered a re-assign (review 10a M4; 41406ed)
+const _eye = new THREE.Vector3();
 function assign(now) {
   lastAssign = now;
-  _lastCam.copy(camera.position);
+  camera.getWorldPosition(_eye);
+  _lastCam.copy(_eye);
   assignDirty = false;
   const ranked = [...requests.values()].map((r) => {
-    const d = worldPosOf(r, _p).distanceTo(camera.position);
+    const d = worldPosOf(r, _p).distanceTo(_eye);
     return {
       r,
       tier: r.keep ? 0 : r.authored ? 1 : 2,
@@ -817,7 +821,7 @@ function trackShadowFar(pl) {
 export function updateRig(now) {
   updateShadow();
   if (now - lastCasterPass > 300) { lastCasterPass = now; casterPass(); }
-  if (assignDirty || now - lastAssign > 600 || _lastCam.distanceToSquared(camera.position) > 2.25) {
+  if (assignDirty || now - lastAssign > 600 || _lastCam.distanceToSquared(camera.getWorldPosition(_eye)) > 2.25) {
     assign(now);
   }
   const lit = new Array(N_SLOTS).fill(null);

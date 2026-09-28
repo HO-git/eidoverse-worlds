@@ -20,7 +20,9 @@ try {
   });
   const settle = async () => {
     const t0 = Date.now();
-    try { await pg.waitForFunction(async () => { const s = await import('./lib/sky.js'); return !s.skyRendering(); }, null, { timeout: 120000 }); }
+    // polled inside one evaluate: waitForFunction(async fn) resolves at once on the returned Promise (review 3, M2)
+    try { await pg.evaluate(async () => { const s = await import('./lib/sky.js'); const t0 = performance.now();
+      while (s.skyRendering() && performance.now() - t0 < 120000) await new Promise((r) => setTimeout(r, 200)); }); }
     catch (e) { console.log('    unsettled after 120 s:', JSON.stringify(await read())); throw e; }
     console.log(`    settled in ${Date.now() - t0} ms`);
   };
@@ -71,6 +73,21 @@ try {
   });
   console.log('    basic-only rows:', JSON.stringify(basic));
   check('on the detailed sky, azimuth and fill are hidden', basic.impl === 'eidoverse' && basic.n === 2 && basic.shown === 0, JSON.stringify(basic));
+  // M1: with the panel left open, switching to the basic sky brings them back (and back again hides them)
+  const rowsNow = () => pg.evaluate(async () => { const impl = (await import('./lib/sky.js')).skyImpl?.();
+    const rows = [...document.querySelectorAll('#sec-sky input[type=range]')].map((i) => i.parentNode).filter((r) => /azim|fill/i.test(r.textContent));
+    return { impl, shown: rows.filter((r) => getComputedStyle(r).display !== 'none').length }; });
+  await log({ hours: 12, rate: 0, clouds: 'clear', weather: 'clear', system: 'skymesh' });
+  for (let i = 0; i < 40 && (await rowsNow()).impl !== 'skymesh'; i++) await pg.waitForTimeout(500);
+  await pg.waitForTimeout(500);
+  const onBasic = await rowsNow();
+  await log({ hours: 12, rate: 0, clouds: 'clear', weather: 'clear', system: undefined });
+  for (let i = 0; i < 60 && (await rowsNow()).impl !== 'eidoverse'; i++) await pg.waitForTimeout(500);
+  await pg.waitForTimeout(500);
+  const backDetailed = await rowsNow();
+  console.log('    basic-only follow:', JSON.stringify({ onBasic, backDetailed }));
+  check('panel left open: on the basic sky azimuth and fill come back', onBasic.impl === 'skymesh' && onBasic.shown === 2, JSON.stringify(onBasic));
+  check('…and back on the detailed sky they hide again', backDetailed.impl === 'eidoverse' && backDetailed.shown === 0, JSON.stringify(backDetailed));
   check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | ') || 'none');
 } catch (e) { check('probe ran', false, String(e).slice(0, 300)); }
 finally { await browser.close(); await world.close(); }

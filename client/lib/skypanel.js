@@ -261,7 +261,7 @@ export function paintSky(body) {
   const syncBasicOnly = () => {
     const dead = skyImpl() === 'eidoverse';
     for (const { row, input } of basicRows) {
-      input.disabled = dead;
+      if (input.disabled !== dead) input.disabled = dead;
       const d = dead ? 'none' : '';
       if (row.style.display !== d) row.style.display = d;   // style, not [hidden]: a .row display rule would beat the attribute
     }
@@ -286,6 +286,10 @@ export function paintSky(body) {
     body.appendChild(row);
   }
   syncBasicOnly();
+  // follow the sky that's actually built, while the panel stays open: a logged system switch or the first sky arriving
+  // changes skyImpl() after the repaint that last synced these rows (review 3, M1)
+  bus.on('sky-ready', syncBasicOnly);
+  bus.on('sky-state', syncBasicOnly);
 
   // The sun can follow a REAL clock: `clock: real` makes the world's hour BE
   // the named timezone's wall hour (DST included, hoursAt owns the formula)

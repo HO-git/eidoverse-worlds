@@ -630,6 +630,12 @@ console.log("\n  the library arm — the sweep queues LODs, and mutable sources 
         const cat2: { path: string; opt?: { lod?: { state: string; reason: string | null } } }[] = await fetch(`${S.base}/library-models?q=lod_probe_light`).then((r) => r.json());
         const card = cat2.find((h) => h.path === REL2)?.opt?.lod;
         check("…and the catalog card says `stale` for it too, never `not needed` over a provisional wire", card?.state === "stale", card);
+        // review 1 M1: a variant OLDER than the mutated source, whose re-measure will be refused (light). Planted with
+        // real LOD bytes (the heavy model's, built above) and an mtime before the mutation — the next boot must
+        // remove it, or it sits beside a fresh standing verdict forever (card `stale`, sweep skipping it for good)
+        const planted = join(OPT, `${REL2}.lod.${LOD_RECIPE}.glb`);
+        writeFileSync(planted, readFileSync(lodPath));
+        const tOld = new Date(t2.getTime() - 5000); utimesSync(planted, tOld, tOld);
       }
       // the catalog humans pick from must not show the variant as a model. The
       // store section asserts this for a store hash — where OPT_DIR is never
@@ -670,6 +676,13 @@ console.log("\n  the library arm — the sweep queues LODs, and mutable sources 
           const f3 = await S.get(withLod(negotiate(REL2, S.key), S.lod));
           check("…and the mutated light prop was re-measured: its verdict stands again, newer than the source — final",
             remeasured && f3.cc === VARIANT_CC && f3.lod === "refused=light", `remeasured=${remeasured} cc=${f3.cc} lod=${f3.lod}`);
+          // the refused re-measure removed the variant it outlived — so the card reads the verdict, not `stale`
+          const plantedGone = await until(() => !existsSync(join(OPT, `${REL2}.lod.${LOD_RECIPE}.glb`)), 10_000);
+          const cat3: { path: string; opt?: { lod?: { state: string } } }[] = await fetch(`${S.base}/library-models?q=lod_probe_light`).then((r) => r.json());
+          const card3 = cat3.find((h) => h.path === REL2)?.opt?.lod;
+          check("…and the refused re-measure REMOVED the stale variant it outlived (not left beside a fresh verdict)", plantedGone,
+            S.log().split("\n").filter((l) => l.includes("lod_probe_light")).slice(-3).join(" | "));
+          check("…so its card reads the standing verdict (not needed), never `stale` forever", card3?.state === "not-needed", card3);
           // a FRESH verdict over a STALE ktx2 variant (the source re-exported, the ktx2 rebuild not yet run — or refused):
           // the unflagged answer tolerates that window; a FINAL answer must not serve yesterday's bytes for a day
           if (remeasured) {
@@ -679,6 +692,10 @@ console.log("\n  the library arm — the sweep queues LODs, and mutable sources 
             const f4 = await S.get(withLod(negotiate(REL2, S.key), S.lod));
             check("a fresh verdict over a STALE ktx2 variant is NOT final: provisional, and the header names the stale arm",
               f4.cc === "no-cache" && f4.lod === "provisional; verdict=light; ktx2=stale", `cc=${f4.cc} lod=${f4.lod}`);
+            // the card names the same arm the header does: the lod verdict stands (fresh), the ktx2 variant is stale
+            const cat4: { path: string; opt?: { lod?: { state: string }; ktx2?: { state: string } } }[] = await fetch(`${S.base}/library-models?q=lod_probe_light`).then((r) => r.json());
+            const o4 = cat4.find((h) => h.path === REL2)?.opt;
+            check("…and the catalog card agrees arm by arm: LOD not needed, ktx2 stale", o4?.lod?.state === "not-needed" && o4?.ktx2?.state === "stale", o4);
           }
         }
       }

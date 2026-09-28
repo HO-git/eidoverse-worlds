@@ -215,7 +215,21 @@ async function pumpOptimize() {
         // stops re-measuring it. For --lod the marker's content is READ at
         // serve time too (store-variants.ts lodVerdictFinal: a standing
         // typed verdict makes the original this tier's final answer).
-        writeFileSync(failed, err.slice(0, 2000) || "not-smaller"); undefer(dest);
+        // the TAIL: the verdict line (and its recipe= stamp) is the LAST
+        // [optimize] line, and per-texture notes before it can run long
+        writeFileSync(failed, err.slice(-2000) || "not-smaller"); undefer(dest);
+        // a variant OLDER than its source was built from content that is gone
+        // (a re-exported library model): beside a fresh standing verdict the
+        // sweep never revisits it, so it would serve the old model's bytes
+        // (ktx2) and read "stale" forever. Equal mtimes are ambiguous — a
+        // forced re-ask refused on unchanged content keeps the variant that
+        // still serves (store-variants.ts classifyVariant).
+        try {
+          if (existsSync(dest) && statSync(dest).mtimeMs < statSync(src).mtimeMs) {
+            rmSync(dest);
+            console.log(`[${mode ? "ktx2" : "store"}] ${base} — removed ${basename(dest)}: older than its source, and the re-measure refused`);
+          }
+        } catch { /* best effort (the source may have vanished mid-run) */ }
         if (mode === "--lod") pruneOldLodGenerations(src, dest);
         console.log(mode ? `[ktx2] ${base} — no variant (${err.split("\n").pop()?.replace(/^\[optimize\]\s*/, "") || "not smaller"})`
           : `[store] ${base} already lean — serving original`);
@@ -252,7 +266,7 @@ async function pumpOptimize() {
         // file — that would permanently skip every upload made before the
         // first successful `bun install`. Only content failures stick.
         const envFail = /cannot find module|cannot resolve|error: script not found/i.test(err);
-        if (!envFail) { writeFileSync(failed, err.slice(0, 2000) || `exit ${code}`); undefer(dest); }
+        if (!envFail) { writeFileSync(failed, err.slice(-2000) || `exit ${code}`); undefer(dest); }
         console.error(`[${mode ? "ktx2" : "store"}] optimize ${envFail ? "unavailable (deps?)" : `FAILED ${base}`}: ${err.split("\n")[0] || `exit ${code}`}`);
         if (envFail) { optQueue.length = 0; break; } // no point grinding the rest
       }

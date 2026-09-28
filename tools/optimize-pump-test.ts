@@ -18,6 +18,8 @@ v=$(cat "$src.verdict" 2>/dev/null || echo 0)
 case "$v" in
   0) mkdir -p "$(dirname "$dest")"; printf 'tiny' > "$dest"; exit 0;;
   sig) kill -SEGV $$;;
+  long) i=0; while [ $i -lt 30 ]; do echo "[optimize] per-texture note $i: no sharp to resize it — a long line padded out to well over one hundred characters of text" >&2; i=$((i+1)); done
+        echo "[optimize] not smaller (1.00x) recipe=texel1024" >&2; exit 2;;
   *) echo "fake verdict $v" >&2; exit "$v";;
 esac
 `); chmodSync(fake, 0o755);
@@ -43,6 +45,11 @@ ok(existsSync(storeDest(s2)) && !existsSync(storeDest(s2) + ".deferred"), "succe
 // 3. exit 2 = not smaller → .failed marker, no .deferred
 const s3 = src("s3.glb", 1000, "2"); queueOptimize(s3); await optIdle();
 ok(existsSync(storeDest(s3) + ".failed") && !existsSync(storeDest(s3)), "exit 2 → .failed marker, no variant");
+// 3b. a long stderr (per-texture notes, then the verdict LAST): the marker keeps the TAIL, so the stamped verdict stands
+const { verdictStands } = await import("../server/store-variants.ts");
+const s3b = src("s3b.glb", 1000, "long"); queueOptimize(s3b); await optIdle();
+const m3b = existsSync(storeDest(s3b) + ".failed") ? readFileSync(storeDest(s3b) + ".failed", "utf8") : "";
+ok(m3b.trim().endsWith("recipe=texel1024") && verdictStands(m3b), `long stderr → the marker keeps the verdict tail (${m3b.length} chars, ends: ${m3b.slice(-50)})`);
 // 4. a variant that exists already (done elsewhere) retires a stale .deferred without spawning
 const s4 = src("s4.glb", 1000, "0"); mkdirSync(STORE_MIN, { recursive: true }); writeFileSync(storeDest(s4), "done-elsewhere"); writeFileSync(storeDest(s4) + ".deferred", "stale");
 queueOptimize(s4); await optIdle();

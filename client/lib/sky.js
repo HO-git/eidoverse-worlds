@@ -24,6 +24,8 @@ import { bandCuts, bandedBakeRender, bakeGeneration } from './sky_baked.js';
 import { BAKE_INTERCEPT, attachBakedDome, detachBakedDome, updateBakedDome, bakedActive, requestBake, holdLiveDomes, releaseLiveDomes, liveDomesHeld, takeHeldDomes,
   envTexture, adoptEnvironment, whenBakeReady, bakedRefreshing } from './sky_baked.js';
 import { beginWork } from './loadwork.js';
+import { makeSwapChain, SHOWN_UNKNOWN } from './sky_swapchain.js';
+import { serializeBakes as serializeBakesWith, BAKE_GUARD, BAKE_AFTER, BAKE_HELD } from './sky_bakelock.js';
 import { showInterimSky, updateInterimSky, hideInterimSky, interimSkyShown } from './sky_interim.js';
 import { busy as loadingBusy } from './framebudget.js';
 import { bootDone } from './boot.js';
@@ -152,17 +154,33 @@ const vrCapApplies = () => xrPresenting && !!renderer.backend?.isWebGLBackend;
 // What waits is only what would REBUILD: a quality flip, or a switch of sky world.
 let heldQuality = null;           // a quality chosen in the headset, applied at exit
 let heldRebuild = false;          // a sky-world switch that arrived in the headset
-let rebuildInXR = false;          // the VR cap's own flip at entry is allowed through (it exists to make VR cheaper)
 /** What the headset is holding back, for the probe and the debug panel: { quality, rebuild } or null. */
 export const skyHeld = () => (heldQuality || heldRebuild ? { quality: heldQuality, rebuild: heldRebuild } : null);
 // In a headset the live cloud march never shows when a baked dome is on its way: held out until it attaches
-// (sky_baked.holdLiveDomesInXR). A tier with no baked dome (high, where the VR cap doesn't apply) keeps its march.
+// (sky_baked.holdLiveDomesInXR), and the gradient stands in (review 10b M1: holding every dome, atmosphere included, with
+// nothing behind the world was a black sky in the headset for the minutes a cold bake takes). A tier with no baked dome
+// (high, where the VR cap doesn't apply) keeps its march; so does a sky build whose baked dome failed to attach (P4:
+// a costly sky beats no clouds; the 1 Hz render re-held them after that release, review 10b M1).
+let attachFailedFor = null;       // the sky build whose baked dome could not attach
+let headsetGradient = false;      // the gradient is up because holdLiveInHeadset put it there
 function holdLiveInHeadset() {
-  if (xrPresenting && BAKED_TIERS[cloudQuality] && cloudQuality !== 'off' && !bakedActive()) holdLiveDomes(skyApi, 'in a headset until the baked dome is ready');
+  if (!xrPresenting || !BAKED_TIERS[cloudQuality] || cloudQuality === 'off' || bakedActive() || attachFailedFor === skyApi) return;
+  if (holdLiveDomes(skyApi, 'in a headset until the baked dome is ready') && !interimSkyShown()) { showInterimSky(skyInner?.uniforms); headsetGradient = true; }
 }
+// The cap's deferred flip at entry (waiting for the entry curtain), cleared at every entry and exit: a quick exit and
+// re-entry left the first session's timer armed into the next one (review 10b L1).
+let capWait = null;
+const clearCapWait = () => { capWait?.off?.(); clearTimeout(capWait?.tm); capWait = null; };
 bus.on('xr:state', (on) => {
   xrPresenting = !!on;
-  if (on) holdLiveInHeadset(); else if (!interimFor) releaseLiveDomes();   // the desktop shows the live march until its bake lands (unless the boot hold is still waiting for the real sky)
+  clearCapWait();
+  if (on) { headsetGradient = false; holdLiveInHeadset(); }
+  else if (!interimFor) {
+    releaseLiveDomes();   // the desktop shows the live march until its bake lands (unless the boot hold is still waiting for the real sky)
+    // the gradient only the headset needed goes with it; a swap in flight or a rebuild keeps its own
+    if (headsetGradient && !swapping && !building) hideInterimSky();
+  }
+  headsetGradient = headsetGradient && !!on;
   // At exit, ONE rebuild covers whatever was held: a held quality rebuilds at that level (and picks up a held world
   // switch, since the rebuild reads the latest sky args); the cap's own restore below rebuilds too, so when the cap is
   // active it carries the held world switch and nothing extra runs. (A quality held while capped cannot exist: the
@@ -175,18 +193,24 @@ bus.on('xr:state', (on) => {
     return;
   }
   if (!on) { heldQuality = null; heldRebuild = false; }
-  if (on && vrCapApplies() && cloudQuality === CAP_FROM) {
+  // the tier the sky is running OR about to arrive as: a 'high' chosen on the desktop while the sky was arriving is
+  // still only pending at entry, and was adopted inside the headset with no cap (review 10b H3: the per-eye live march
+  // for the whole session). The cap takes the pending choice too.
+  if (on && vrCapApplies() && (pendingTier ?? cloudQuality) === CAP_FROM) {
     xrCappedFrom = CAP_FROM;
+    if (pendingTier === CAP_FROM) pendingTier = CAP_TO === cloudQuality ? null : CAP_TO;
     tee(`[sky] VR on WebGL: clouds capped ${CAP_FROM} → ${CAP_TO} (baked) for the session (the saved choice stays ${CAP_FROM})`);
     bus.emit('cloud-cap', { from: CAP_FROM, to: CAP_TO });
-    rebuildInXR = true;
     // after the entry curtain is actually on screen (xr.js emits it), so the swap's bake doesn't take the GPU process
     // before the headset's first frames: that showed black or the runtime's own construct (owner's rig 09-27 22:24)
     // (a session that ended before this fires must not drop the desktop to medium: review 7, M2)
-    const go = () => { off?.(); clearTimeout(tm); if (!xrPresenting || xrCappedFrom !== CAP_FROM) { rebuildInXR = false; return; }
-      setCloudQuality(CAP_TO, { persist: false }).catch((e) => report('sky VR cap', e)).finally(() => { rebuildInXR = false; }); };
-    let off = null, tm = 0;
-    off = bus.on('xr:curtain-shown', go); tm = setTimeout(go, 4000);
+    // The cap's flip is the one quality change let through in the headset, and only this call carries the pass: a
+    // module flag spanning the whole (minutes-long) swap let any pick made meanwhile through too, and 'off' then did a
+    // full rebuild in VR (review 10b M2).
+    const w = capWait = { off: null, tm: 0 };
+    const go = () => { if (capWait !== w) return; clearCapWait(); if (!xrPresenting || xrCappedFrom !== CAP_FROM) return;
+      setCloudQuality(CAP_TO, { persist: false, capFlip: true }).catch((e) => report('sky VR cap', e)); };
+    w.off = bus.on('xr:curtain-shown', go); w.tm = setTimeout(go, 4000);
   } else if (!on && xrCappedFrom) {
     const back = xrCappedFrom; xrCappedFrom = null;
     tee(`[sky] VR exit: clouds back to ${back}`);
@@ -200,7 +224,7 @@ export const cloudCap = () => (xrCappedFrom ? { from: xrCappedFrom, to: CAP_TO }
 /** What the person CHOSE — a settings row shows this, not the level the VR cap is running meanwhile. */
 // the cap's memory first: choosing the capped level in a headset HOLDS its stand-in (high → medium held), and the choice
 // is still high (sky-cap-ui-probe caught the stand-in shown)
-export const getCloudChoice = () => xrCappedFrom ?? heldQuality ?? cloudQuality;   // a choice made in the headset shows at once
+export const getCloudChoice = () => xrCappedFrom ?? heldQuality ?? pendingTier ?? cloudQuality;   // a choice made in the headset (or while the sky arrives: review 10b L3) shows at once
 export const skyInXR = () => xrPresenting;
 
 /** Change the local cloud budget. Rebuilds the sky, since passes are baked in
@@ -235,7 +259,7 @@ function endPhases() {
   tee(`[sky] rebuild (${L.why}): ${parts.join(' | ')} — main thread blocked ${all.toFixed(0)}ms total${L.obs ? '' : ' (no longtask API)'}`);
 }
 
-export async function setCloudQuality(level, { persist = true } = {}) {
+export async function setCloudQuality(level, { persist = true, capFlip = false } = {}) {
   if (!CLOUD_QUALITY.includes(level)) return;
   // asking for 'high' INSIDE a WebGL headset session: remember it for the exit, run the baked 'medium' now
   if (level === CAP_FROM && vrCapApplies()) {
@@ -251,7 +275,7 @@ export async function setCloudQuality(level, { persist = true } = {}) {
   // choosing the running tier again also cancels a tier queued while the sky was arriving (review 7, M1: otherwise the
   // sky arrived as the tier the person had backed out of, e.g. an early VR entry and exit before arrival)
   if (level === cloudQuality) { heldQuality = null; if (pendingTier) { pendingTier = null; tee(`[sky] queued tier cancelled: staying ${level}`); } return; }
-  if (xrPresenting && !rebuildInXR) {
+  if (xrPresenting && !capFlip) {   // capFlip: the VR cap's own entry flip, the one change let through (review 10b M2)
     heldQuality = level;
     tee(`[sky] clouds ${cloudQuality}→${level} held until VR exit (a rebuild in the headset stalls it for seconds)`);
     bus.emit('sky-held', { quality: level });
@@ -543,7 +567,7 @@ function teardownSky({ rebuilding = false } = {}) {
   // A rebuild keeps a gradient up through the teardown and the new build's module/texture loads (audit M2: a black gap on
   // every quality flip, and in the headset). The palette uniforms are plain objects and outlive the system. A teardown
   // to the basic sky drops it. A pending finishSky sees skyApi change and stops.
-  interimFor = null; pendingTier = null; shownTier = null; markSkyUp();   // anyone waiting for the old build: it's gone (they check skyApi)
+  interimFor = null; pendingTier = null; swaps.reset(); markSkyUp();   // anyone waiting for the old build: it's gone (they check skyApi)
   if (rebuilding && skyInner?.uniforms) showInterimSky(skyInner.uniforms); else hideInterimSky();
   // Held domes are taken, not put back (audit M5): never compiled, they must not reach the scene on the way out.
   const held = takeHeldDomes();
@@ -597,7 +621,7 @@ async function renderEidoverse(a) {
   if (building) {
     await building.catch(() => {});   // whoever is already building wins
   }
-  if (skyApi && currentWorld !== world && currentWorld !== null && xrPresenting && !rebuildInXR) {
+  if (skyApi && currentWorld !== world && currentWorld !== null && xrPresenting) {
     heldRebuild = true;
     tee(`[sky] sky world ${currentWorld}→${world} held until VR exit`);
     applyLive(a);
@@ -694,7 +718,10 @@ async function prebuildCapBake(api) {
   if (capPrebuiltFor === api || !(await headsetPresent())) return;
   if (skyApi !== api || BAKED_TIERS[cloudQuality] || xrPresenting) return;
   capPrebuiltFor = api;
-  await prebuildBakeProgram(BAKED_TIERS[CAP_TO].cloudPasses);
+  // the same guards again INSIDE the bake lock: queued behind a minutes-long bake, the prebuild's turn can come after a
+  // VR entry (review 10b H2: its temporary target in a live session, and the cap's attach then read it)
+  const wanted = () => skyApi === api && !BAKED_TIERS[cloudQuality] && !xrPresenting;
+  if (!(await prebuildBakeProgram(BAKED_TIERS[CAP_TO].cloudPasses, {}, wanted)) && capPrebuiltFor === api) capPrebuiltFor = null;
 }
 async function prebuildCapBakeWhenHeadset(api) {
   if (!(await headsetPresent())) return;
@@ -702,21 +729,24 @@ async function prebuildCapBakeWhenHeadset(api) {
   await prebuildCapBake(api);
 }
 /** Compile a bake program (the given pass count) without touching the sky's own env target. Exported for probes. */
-export async function prebuildBakeProgram(cloudPasses, opts = {}) {
+export async function prebuildBakeProgram(cloudPasses, opts = {}, stillWanted = null) {
   const api = skyApi, sys = skyInner;
   if (!api?.bakeEnv || !sys) return false;
   const t0 = performance.now();
   const lock = sys.__withBakeLock ?? ((fn) => fn());
-  const raw = sys.__rawBakeEnv ?? sys.bakeEnv;
   // the whole swap under the bake lock: no other bake may see the temporary target (see serializeBakes)
+  let ran = false;
   await lock(async () => {
     if (sys.__dead) return;
+    if (stillWanted && !stillWanted()) { tee('[sky] the VR cap\'s bake prebuild: no longer wanted when its turn came (skipped)'); return; }
+    ran = true;
     const keepT = sys._envTarget, keepFb = sys._envFbNode?.value;
     sys._envTarget = null;
     try {
-      // through the api (it adds the world's own bake options), with the lock's wrapper stepped aside for this call
-      const wrapped = sys.bakeEnv; sys.bakeEnv = raw;
-      try { await api.bakeEnv({ width: 64, height: 32, cloudPasses, ...opts }); } finally { sys.bakeEnv = wrapped; }
+      // through the api (it adds the world's own bake options); BAKE_HELD tells the lock's wrapper this call already
+      // holds the lock. (It used to step the wrapper aside by swapping sys.bakeEnv for the raw bake for the whole await,
+      // so any bake called meanwhile ran unlocked, straight into this temporary target.)
+      await api.bakeEnv({ width: 64, height: 32, cloudPasses, ...opts, [BAKE_HELD]: true });
     } catch (e) { report('sky prebuild', e); }
     finally {
       // put the real target and reflection fallback back NOW, not after the link wait below: for the minutes a cold
@@ -729,6 +759,7 @@ export async function prebuildBakeProgram(cloudPasses, opts = {}) {
     // still inside the lock: no bake may start until the prebuilt program has linked
     await globalThis.__syncGate?.whenGiantLinked?.();
   });
+  if (!ran) return false;
   tee(`[sky] headset present: the VR cap's bake program (${cloudPasses} passes) prebuilt on the desktop in ${(performance.now() - t0).toFixed(0)} ms`);
   return true;
 }
@@ -753,7 +784,8 @@ async function worldSettled() {
   teeNow(`[sky] world settled after ${((performance.now() - t0) / 1000).toFixed(1)} s: compiling the sky now`);
 }
 // 'sky-busy' (true/false): the sky is still arriving here (the stand-in gradient is up, or a tier swap is compiling or
-// baking). The World › sky panel shows 'loading…' from it; nothing depends on anyone listening.
+// baking). Its one listener today is xr.js's entry curtain, which waits on it (capped at 15 s); no panel shows it
+// (review 10b L2: this comment used to promise a 'loading…' in the World › sky panel that nothing wires).
 let swapping = 0, busyShown = false;
 function announceBusy() {
   const b = interimSkyShown() || swapping > 0 || bakedRefreshing();
@@ -769,27 +801,8 @@ export const skyForProbe = () => ({ api: skyApi, sys: skyInner });
 // back re-created it: a ~3 s GPU-process stall even with Chrome's blob cache. three looks programs up by shader SOURCE
 // and releases one only when no live material uses it, so the evicted graphs are kept (their dispose deferred, one per
 // key) and a rebuild of the same graph is a program-cache hit. All of them go at teardown. Skye's file is untouched.
-// ONE BAKE AT A TIME (owner's rig 09-27 22:24–22:30: the VR sky went black). Every bake shares the engine's single
-// _envTarget and _envBake. The VR prebuild swapped a temporary target in and held it for its whole cold link (11 min);
-// meanwhile the live tier's env bake and then the VR cap's 4096 bake ran INTO that temporary; when the prebuild finished
-// it put the old target back and disposed the temporary, which was the target the cap's bake had just drawn: attach
-// failed, black sky. Now every sys.bakeEnv (all callers go through it) queues behind the one before, and the prebuild
-// holds the queue around its whole swap. A queued bake for a torn-down sky still runs (bakeEnv checks nothing), but
-// the callers already stop on a generation/skyApi change.
-function serializeBakes(sys) {
-  if (!sys?.bakeEnv || sys.__rawBakeEnv) return;
-  const raw = sys.bakeEnv.bind(sys);
-  let tail = Promise.resolve();
-  sys.__rawBakeEnv = raw;
-  sys.__withBakeLock = (fn) => { const run = tail.then(fn, fn); tail = run.catch(() => {}); return run; };
-  // a bake still queued when its sky is torn down is skipped: it would rebuild a target and a giant graph on the dead
-  // system that nothing frees, and on a cold cache the next sky's bake would wait on its link (review 7, H1)
-  sys.bakeEnv = (r, o, ...rest) => sys.__withBakeLock(async () => {
-    if (sys.__dead) { tee('[sky] a bake queued for a torn-down sky: skipped'); return; }
-    const restore = o?.[BAKE_INTERCEPT]?.();
-    try { return await raw(r, o, ...rest); } finally { restore?.(); }
-  });
-}
+// ONE BAKE AT A TIME: sky_bakelock.js (serializeBakes, pure, tested by tools/sky-bakelock-test.mjs).
+const serializeBakes = (sys) => serializeBakesWith(sys, { log: (l) => tee(l), report });
 function retainBakeGraphs(sys) {
   if (!sys || Object.getOwnPropertyDescriptor(sys, '_envBake')?.get) return;
   let cur = sys._envBake ?? null;
@@ -810,29 +823,21 @@ function retainBakeGraphs(sys) {
   sys.__disposeKeptBakes = () => { for (const b of new Set([...kept.values(), cur])) b?.__realDispose?.(); kept.clear(); cur = null; };
 }
 const SAME_SYSTEM = new Set(['low', 'medium', 'high']);
-// ONE SWAP AT A TIME, LATEST CHOICE WINS (review 7 / owner's rig 09-27 23:12: switches made while one was compiling
-// piled up behind the bake lock, and a tier already left still baked). Each run swaps from what's actually SHOWN to the
-// tier chosen NOW; choices made while a run is in flight only queue one more run, and intermediate tiers are skipped.
-let swapChain = Promise.resolve(), shownTier = null;
+// ONE SWAP AT A TIME, LATEST CHOICE WINS: the chain and its SHOWN bookkeeping live in sky_swapchain.js (pure, tested by
+// tools/sky-swapchain-test.mjs). swapTierInner below does the screen work.
+const swaps = makeSwapChain({ inner: (from, to) => swapTierInner(from, to), want: () => cloudQuality, api: () => skyApi, log: (l) => tee(l) });
 function swapTier(from) {
   swapping++; announceBusy();
-  if (shownTier == null) shownTier = from;
-  const api = skyApi;
-  const run = swapChain.then(async () => {
-    if (skyApi !== api) return;
-    const want = cloudQuality;
-    if (want === shownTier) return;
-    const r = await swapTierInner(shownTier, want);
-    if (r) shownTier = want;   // true: arrived; 'superseded': its dome is gone/held, so the next run takes over from it
-    if (r === 'superseded') tee(`[sky] clouds →${want} superseded by →${cloudQuality} mid-bake; the next swap takes over`);
-  });
-  swapChain = run.catch(() => {});
-  return run.finally(() => { swapping--; announceBusy(); });
+  return swaps.swap(from).finally(() => { swapping--; announceBusy(); });
 }
 async function swapTierInner(from, to) {
   const t0 = performance.now(), api = skyApi;
   const F = BAKED_TIERS[from], T = BAKED_TIERS[to];
-  if (F && T) {
+  // from = SHOWN_UNKNOWN (a superseded run left no tier on screen: the gradient up, the domes held or the live march
+  // back): a baked `to` takes the baked→baked path, which assumes nothing about the screen (detach whatever dome, hold
+  // the domes, gradient up, bake, attach); `high` takes !T, which compiles and then shows the live domes from any state
+  // (detachBakedDome releases held domes, hideInterimSky drops the gradient). Review 10b H1.
+  if ((F || from === SHOWN_UNKNOWN) && T) {
     // baked → baked at another size (low ↔ medium): a new bake into a new target. The old dome can't stay up (its
     // texture is the target the new bake re-creates), and detaching it brings back the live march, so the march is held
     // out and the gradient stands in until the new dome attaches (attachBakedDome parks the held domes itself).
@@ -843,9 +848,9 @@ async function swapTierInner(from, to) {
     try { await ensureSkyBake(); } catch (e) { report('sky tier swap', e); }
     if (bakedActive()) await whenBakeReady();
     // a newer choice arrived while this baked: its bake declined to attach (M1), and the queued swap owns the sky now,
-    // so leave the gradient/hold up for it rather than release the live march in between. 'superseded' marks `to` as
-    // what's SHOWN (the old dome is gone or held): the queued run must not read "already there" and leave the sky on the
-    // gradient (final review H1: medium→low→medium stuck cloudless; a cap swap abandoned at VR exit left sky-busy stuck)
+    // so leave the gradient/hold up for it rather than release the live march in between. 'superseded' makes the chain
+    // record NO tier as shown (SHOWN_UNKNOWN): the queued run always acts (final review H1: medium→low→medium stuck
+    // cloudless; review 10b H1: recording `to` stranded A→B→C→B when C's run stood down)
     if (skyApi !== api) return false;
     if (cloudQuality !== to) return 'superseded';
     if (!bakedActive()) releaseLiveDomes();
@@ -865,9 +870,9 @@ async function swapTierInner(from, to) {
     try { await ensureSkyBake(); } catch (e) { report('sky tier swap', e); }
     if (bakedActive()) await whenBakeReady();
     // a newer choice arrived while this baked: its bake declined to attach (M1), and the queued swap owns the sky now,
-    // so leave the gradient/hold up for it rather than release the live march in between. 'superseded' marks `to` as
-    // what's SHOWN (the old dome is gone or held): the queued run must not read "already there" and leave the sky on the
-    // gradient (final review H1: medium→low→medium stuck cloudless; a cap swap abandoned at VR exit left sky-busy stuck)
+    // so leave the gradient/hold up for it rather than release the live march in between. 'superseded' makes the chain
+    // record NO tier as shown (SHOWN_UNKNOWN): the queued run always acts (final review H1: medium→low→medium stuck
+    // cloudless; review 10b H1: recording `to` stranded A→B→C→B when C's run stood down)
     if (skyApi !== api) return false;
     if (cloudQuality !== to) return 'superseded';
     if (!bakedActive()) releaseLiveDomes();
@@ -1053,6 +1058,42 @@ async function ensureSkyBake() {
   // On baked tiers this same bake IS the visible sky, so it renders at the
   // tier's display resolution and full march quality.
   const gen = bakeGeneration();       // a teardown mid-bake bumps it: the strips stop, nothing attaches to a dead sky
+  const api = skyApi;
+  // Everything after the bake that reads the engine's target and graph (adopting the env, the attach), run INSIDE the
+  // bake lock by serializeBakes (BAKE_AFTER): after the lock is released a queued bake can swap in the VR prebuild's
+  // temporary target or resize the target for the live tier, and the dome attached to that (review 10b H2). Once.
+  let posted = false, baked = false;
+  const post = ({ ok }) => {
+    if (posted) return; posted = true;
+    if (ok) {
+      lastBakeHours = nowHours();
+      lastBakeAt = performance.now();
+      if (bakeGeneration() === gen) {
+        api.enableReflections?.({});
+        // the engine just pointed scene.environment at ITS target — copy the
+        // content into the persistent texture and put it back (see module top)
+        adoptEnvironment();
+      }
+    }
+    if (bakeGeneration() !== gen || skyApi !== api) return;   // torn down while baking: a newer build owns the sky now
+    if (tier !== cloudQuality) { tee(`[sky] bake for ${tier} finished after the choice moved to ${cloudQuality}: not attached (its own bake will)`); return; }
+    if (BAKED_TIERS[tier]) {
+      const { cloudPasses, intervalMs } = BAKED_TIERS[tier];
+      if (!attachBakedDome(api, { cloudPasses, intervalMs, noClouds: tier === 'off' })) {
+        // engine internals moved (or the bake failed) — the live march is
+        // still in the scene, so the sky stays correct, just expensive. Domes held out in a headset come back too:
+        // a costly sky beats no clouds for the whole session (review 09-27, P4). The headset hold stands down for this
+        // sky build from here on (review 10b M1: the 1 Hz render re-held them, no dome and no gradient).
+        attachFailedFor = api;
+        releaseLiveDomes();
+        console.warn('[sky] baked dome could not attach — staying on the live cloud march');
+        tee('[sky] baked dome could not attach — the live cloud march stays (in a headset too)');
+      } else {
+        attachFailedFor = null;
+        if (headsetGradient) { headsetGradient = false; hideInterimSky(); }   // the dome it stood in for is up (M1)
+      }
+    } else if (!interimFor) releaseLiveDomes();   // while the sky is arriving, finishSky releases them once COMPILED
+  };
   try {
     // The boot bake as BANDS (sky_baked.js bandedBakeRender): bakeEnv's one full-quad renderAsync is intercepted for
     // this call only and re-issued as cost-weighted strips across frames — same material, same texels. ?skyband=0 = off.
@@ -1099,27 +1140,10 @@ async function ensureSkyBake() {
     // installed inside the bake lock, right before THIS bake runs (review 7, B1)
     const install = interceptor && (() => { origRA = renderer.renderAsync; outer = renderer.getRenderTarget(); renderer.renderAsync = interceptor;
       return () => { if (renderer.renderAsync === interceptor) renderer.renderAsync = origRA; }; });
-    await skyApi.bakeEnv?.({ ...opts, ...(install ? { [BAKE_INTERCEPT]: install } : {}) });
-    lastBakeHours = nowHours();
-    lastBakeAt = performance.now();
-    skyApi.enableReflections?.({});
-    // the engine just pointed scene.environment at ITS target — copy the
-    // content into the persistent texture and put it back (see module top)
-    adoptEnvironment();
+    await api.bakeEnv?.({ ...opts, ...(install ? { [BAKE_INTERCEPT]: install } : {}), [BAKE_AFTER]: post });
+    baked = true;
   } catch (e) { console.warn('sky reflections unavailable', e); tee(`[sky] boot bake failed: ${e?.message ?? e}`); }
-  if (bakeGeneration() !== gen) return;   // torn down while baking: a newer build owns the sky now
-  if (tier !== cloudQuality) { tee(`[sky] bake for ${tier} finished after the choice moved to ${cloudQuality}: not attached (its own bake will)`); return; }
-  if (BAKED_TIERS[tier]) {
-    const { cloudPasses, intervalMs } = BAKED_TIERS[tier];
-    if (!attachBakedDome(skyApi, { cloudPasses, intervalMs, noClouds: tier === 'off' })) {
-      // engine internals moved (or the bake failed) — the live march is
-      // still in the scene, so the sky stays correct, just expensive. Domes held out in a headset come back too:
-      // a costly sky beats no clouds for the whole session (review 09-27, P4).
-      releaseLiveDomes();
-      console.warn('[sky] baked dome could not attach — staying on the live cloud march');
-      tee('[sky] baked dome could not attach — the live cloud march stays (in a headset too)');
-    }
-  } else if (!interimFor) releaseLiveDomes();   // while the sky is arriving, finishSky releases them once COMPILED
+  post({ ok: baked, skipped: false });     // no lock wrapper (engine internals moved): the same work, here
 }
 
 // Re-baking the environment map.
@@ -1160,13 +1184,24 @@ async function runEnvBake() {
   tee(`[sky] env re-bake (${cloudQuality} tier, live env)`);
   lastBakeAt = performance.now();
   lastBakeHours = nowHours();
-  try {
-    // Same opts every time — bakeEnv caches its node graph keyed on them.
-    await skyApi.bakeEnv(bakeOpts());
+  const api = skyApi;
+  // the same checks again INSIDE the bake lock (BAKE_GUARD): queued behind a minutes-long bake (a superseded medium one),
+  // this 512x256 bake resized the target in place and swapped the graph right before medium's dome attached to it: a
+  // 512 mush dome (review 10b H2). And the re-adopt runs inside the lock too (BAKE_AFTER), before anything else bakes.
+  const stillLive = () => skyApi === api && !bakedActive() && !BAKED_TIERS[cloudQuality] && !interimFor;
+  let called = false;
+  const adopt = ({ ok }) => {
+    if (called) return; called = true;
+    if (!ok) return;
     // live tier: the engine rebaked into its own target — re-point (engine
     // reassigns) then re-adopt, so the persistent env picks up the new light
-    skyApi.enableReflections?.({});
+    api.enableReflections?.({});
     adoptEnvironment();
+  };
+  try {
+    // Same opts every time — bakeEnv caches its node graph keyed on them.
+    await api.bakeEnv({ ...bakeOpts(), [BAKE_GUARD]: stillLive, [BAKE_AFTER]: adopt });
+    adopt({ ok: true });   // no lock wrapper (it calls adopt exactly once, skipped or not): here, as before
   } catch (e) {
     console.warn('[sky] env re-bake failed', e?.message ?? e);
   }

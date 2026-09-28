@@ -15,6 +15,7 @@
 // Not measured: renders outside renderWorld (sky bakes, the desktop mirror). WebGPU backend: unavailable (needs the
 // timestamp-query device feature, requested at boot) — the row says so.
 import { renderer, scene } from './core.js';
+import { reassertShadowPref } from './lightrig.js';
 
 const S = { on: false, supported: null, reason: null, gl: null, ext: null, active: null, pending: [], free: [],
   samples: [], ab: null, abResult: null };
@@ -35,7 +36,7 @@ export function setGpuTimer(on) {
   if (!S.on) {
     S.samples.length = 0;
     // an A/B still stepping holds some shadow maps (autoUpdate off): give them back, and answer the caller
-    if (S.ab && !S.ab.closing) { for (const [l, a] of S.ab.saved) l.shadow.autoUpdate = a; S.ab.resolve({ error: 'cancelled (gpu timer turned off)' }); }
+    if (S.ab && !S.ab.closing) { for (const [l, a] of S.ab.saved) l.shadow.autoUpdate = a; reassertShadowPref(); S.ab.resolve({ error: 'cancelled (gpu timer turned off)' }); }
     S.ab = null;
   }
   return gpuTimerState();
@@ -87,6 +88,7 @@ function abStep() {
 function finishAB() {
   const ab = S.ab;
   for (const [l, a] of ab.saved) l.shadow.autoUpdate = a;
+  reassertShadowPref();   // a shadows toggle during the A/B wins over the value saved at its start (review 7, L5)
   // results for the last few frames are still in flight: settle, then summarise
   S.ab = { ...ab, closing: true };
   setTimeout(() => {

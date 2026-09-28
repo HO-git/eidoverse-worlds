@@ -1,7 +1,8 @@
 // sky-bake-time-probe — every strip of a bake draws at ONE sky time (owner, 09-27: VR sky 'banding'). A bake is drawn in
 // strips across many frames; each strip used to march the clouds at its own frame's time, so strip edges were seams.
 // Real client, the clear-sky tier (cloudless: headless-safe): spies the draws into the bake targets and reads the sky
-// time uniform at each, across a few cadence cycles.
+// time uniform at each, across a few cadence cycles. The sun check binds: after each strip the probe nudges the LIVE sun
+// (in a microtask, i.e. after the draw's snapshot restore), so a strip that isn't drawn from the snapshot records it.
 //   bun tools/sky-bake-time-probe.mjs
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
 const { check, done } = checker();
@@ -19,7 +20,7 @@ try {
     const { sys } = (await import('./lib/sky.js')).skyForProbe(); const r = globalThis.EW.renderer;
     const W = sys._envTarget?.width; globalThis.__bt = [];
     const orig = r.render.bind(r);
-    r.render = (sc, cam) => { const t = r.getRenderTarget(); if (t && t.width === W && sc?.children?.[0]?.material === sys._envBake?.scene?.children?.[0]?.material) { const d = sys.uniforms.sunDir.value; globalThis.__bt.push([performance.now(), sys.uniforms.time.value, `${d.x.toFixed(5)},${d.y.toFixed(5)}`]); } return orig(sc, cam); };
+    r.render = (sc, cam) => { const t = r.getRenderTarget(); if (t && t.width === W && sc?.children?.[0]?.material === sys._envBake?.scene?.children?.[0]?.material) { const d = sys.uniforms.sunDir.value; globalThis.__bt.push([performance.now(), sys.uniforms.time.value, `${d.x.toFixed(5)},${d.y.toFixed(5)}`]); queueMicrotask(() => { sys.uniforms.sunDir.value.x += 0.001; }); } return orig(sc, cam); };
   });
   await pg.waitForTimeout(40000);
   const r = await pg.evaluate(() => {

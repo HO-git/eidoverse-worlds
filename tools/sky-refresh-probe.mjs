@@ -6,6 +6,7 @@
 // run this where Chromium has a real GPU, or with more RAM. It has NOT yet completed a run.
 //   bun tools/sky-refresh-probe.mjs
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
+if (process.env.SKY_REFRESH_GPU !== '1') { console.log('sky-refresh-probe: skipped (needs a GPU or more RAM; set SKY_REFRESH_GPU=1)'); process.exit(0); }
 import { readFileSync } from 'node:fs';
 const { check, done } = checker();
 const IWER_RAW = readFileSync(new URL('../node_modules/iwer/build/iwer.js', import.meta.url), 'utf8');

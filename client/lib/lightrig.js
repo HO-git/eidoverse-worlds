@@ -299,6 +299,8 @@ function applyShadowPref(on) {
     if (on) l.shadow.needsUpdate = true;   // the held map is stale: redraw it once now
   }
 }
+/** Put the shadow preference's uniform half back (after a probe held shadow maps across frames: review 7, L5). */
+export const reassertShadowPref = () => applyShadowPref(_prefShadows);
 export function setShadows(on) {
   localStorage.setItem(SH_KEY, on ? 'on' : 'off');
   _prefShadows = on;

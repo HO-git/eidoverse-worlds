@@ -21,7 +21,7 @@ import { report, bus, tee, teeNow, CONFIG } from './base.js';
 import { loadEidoModule, primeFiles, listLibrary, fetchBytes } from './assets.js';
 import { markPhase } from './boot.js';
 import { bandCuts, bandedBakeRender, bakeGeneration } from './sky_baked.js';
-import { BAKE_INTERCEPT, attachBakedDome, detachBakedDome, setBakeInterval, updateBakedDome, bakedActive, requestBake, holdLiveDomes, releaseLiveDomes, liveDomesHeld, takeHeldDomes,
+import { BAKE_INTERCEPT, attachBakedDome, detachBakedDome, updateBakedDome, bakedActive, requestBake, holdLiveDomes, releaseLiveDomes, liveDomesHeld, takeHeldDomes,
   envTexture, adoptEnvironment, whenBakeReady, bakedRefreshing } from './sky_baked.js';
 import { beginWork } from './loadwork.js';
 import { showInterimSky, updateInterimSky, hideInterimSky, interimSkyShown } from './sky_interim.js';
@@ -84,8 +84,8 @@ export let dayness = 1;
 // The tier's cost moves from per-frame to per-bake, which is why 'medium'
 // can afford the FULL 8-pass march — it looks better than the old live
 // 3-pass tier and costs a texture lookup per pixel at runtime. The trade is
-// stillness: clouds hold their shapes between re-bakes. 'high' used to keep the
-// live march; since 09-27 it's baked too (below).
+// stillness: clouds hold their shapes between re-bakes. 'high' keeps the live
+// march (below).
 //
 // This is a CLIENT preference, not world state. It is deliberately never a
 // verb: how many cloud passes your GPU can afford has nothing to do with what
@@ -438,6 +438,9 @@ async function renderOnce() {
     // outlive it here either.
     releaseForeignLights();
     impl = 'skymesh';
+    // a rebuilding teardown may have put the stand-in gradient up; the basic sky replaces it, so 'sky-busy' can't stick
+    // (UI review 3, L2a). Anyone waiting on the old build checks skyApi, which is null.
+    interimFor = null; hideInterimSky(); markSkyUp();
     await renderSkyMesh(a);
     markPhase('sky', 1);
   }
@@ -618,7 +621,9 @@ async function renderEidoverse(a) {
     // Under the boot splash (owner, 09-27 22:03: 'move the pre-build step into the splash'): boot waits on this warm, so
     // the VR cap's bake program compiles while the splash is still up (its stall freezes the splash, not the world).
     // Capped at 40 s, inside the splash's own 45 s ceiling; a cold cache that takes longer finishes in-world.
-    if (!BAKED_TIERS[cloudQuality]) await Promise.race([prebuildCapBake(skyApi), new Promise((r) => setTimeout(r, 40000))]);
+    // Only at boot (review 7, L2): a later fresh build to high (off→high, a world switch) mustn't block the render chain
+    // for 40 s in-world; finishSky's +15 s prebuild covers it.
+    if (!BAKED_TIERS[cloudQuality] && !bootDone()) await Promise.race([prebuildCapBake(skyApi), new Promise((r) => setTimeout(r, 40000))]);
     resolveSkyWarm();
     finishSky(skyApi).catch((e) => report('sky finish', e));
     return;
@@ -630,6 +635,9 @@ async function renderEidoverse(a) {
   try { await ensureSkyBake(); } finally { bake.end(); }
   phase('bake');
   if (bakedActive()) await whenBakeReady();
+  // a fresh build whose domes couldn't be held (engine internals moved) after a rebuilding teardown showed the stand-in:
+  // nothing else hides it (UI review 3, L2b). Fresh only: a 1 Hz re-apply must not hide a size swap's gradient.
+  if (fresh) hideInterimSky();
   resolveSkyWarm();
 }
 
@@ -654,6 +662,17 @@ async function finishSky(api) {
   // then show them. (A baked tier parks them unseen, so their programs are never built at all.)
   if (!bakedActive() && skyApi === api) await compileLiveDomes();
   if (skyApi !== api) return;
+  // A baked tier chosen WHILE the live domes compiled (the VR cap, entering in those minutes; review 7, M3): releasing
+  // would put the per-eye live march in the headset first. Arrive as the chosen tier instead: bake, the dome parks them.
+  if (!bakedActive() && pendingTier && BAKED_TIERS[pendingTier]) {
+    tee(`[sky] arriving as ${pendingTier} (chosen while the live domes compiled): baked, the live march never shown`);
+    cloudQuality = pendingTier; pendingTier = null;
+    bakePending = true;
+    const late = beginWork('sky bake');
+    try { await ensureSkyBake(); } catch (e) { report('sky bake', e); } finally { late.end(); }
+    if (bakedActive()) await whenBakeReady();
+    if (skyApi !== api) return;
+  }
   if (!bakedActive()) releaseLiveDomes();   // compiled above: safe to show, headset or not
   interimFor = null;
   hideInterimSky();
@@ -698,14 +717,17 @@ export async function prebuildBakeProgram(cloudPasses, opts = {}) {
       // through the api (it adds the world's own bake options), with the lock's wrapper stepped aside for this call
       const wrapped = sys.bakeEnv; sys.bakeEnv = raw;
       try { await api.bakeEnv({ width: 64, height: 32, cloudPasses, ...opts }); } finally { sys.bakeEnv = wrapped; }
-      await globalThis.__syncGate?.whenGiantLinked?.();
     } catch (e) { report('sky prebuild', e); }
     finally {
+      // put the real target and reflection fallback back NOW, not after the link wait below: for the minutes a cold
+      // link takes, reflections would otherwise sample the undrawn 64x32 (review 7, L1). The graph keeps the program.
       const tmp = sys._envTarget;
       sys._envTarget = keepT;
       if (sys._envFbNode && keepFb !== undefined) sys._envFbNode.value = keepFb;
       if (tmp && tmp !== keepT) tmp.dispose();
     }
+    // still inside the lock: no bake may start until the prebuilt program has linked
+    await globalThis.__syncGate?.whenGiantLinked?.();
   });
   tee(`[sky] headset present: the VR cap's bake program (${cloudPasses} passes) prebuilt on the desktop in ${(performance.now() - t0).toFixed(0)} ms`);
   return true;
@@ -788,7 +810,6 @@ function retainBakeGraphs(sys) {
   sys.__disposeKeptBakes = () => { for (const b of new Set([...kept.values(), cur])) b?.__realDispose?.(); kept.clear(); cur = null; };
 }
 const SAME_SYSTEM = new Set(['low', 'medium', 'high']);
-const sameBake = (a, b) => a && b && a.width === b.width && a.height === b.height && a.cloudPasses === b.cloudPasses;
 // ONE SWAP AT A TIME, LATEST CHOICE WINS (review 7 / owner's rig 09-27 23:12: switches made while one was compiling
 // piled up behind the bake lock, and a tier already left still baked). Each run swaps from what's actually SHOWN to the
 // tier chosen NOW; choices made while a run is in flight only queue one more run, and intermediate tiers are skipped.
@@ -809,10 +830,7 @@ function swapTier(from) {
 async function swapTierInner(from, to) {
   const t0 = performance.now(), api = skyApi;
   const F = BAKED_TIERS[from], T = BAKED_TIERS[to];
-  if (sameBake(F, T)) {
-    // same bake program: only the cadence differs
-    setBakeInterval(T.intervalMs);
-  } else if (F && T) {
+  if (F && T) {
     // baked → baked at another size (low ↔ medium): a new bake into a new target. The old dome can't stay up (its
     // texture is the target the new bake re-creates), and detaching it brings back the live march, so the march is held
     // out and the gradient stands in until the new dome attaches (attachBakedDome parks the held domes itself).
@@ -850,10 +868,11 @@ async function compileLiveDomes() {
   const domes = skyInner?.domes ?? [];
   const t0 = performance.now();
   // compileAsync skips invisible objects; a hidden cloud dome would otherwise link later, on the render path (audit L3)
-  const vis = domes.map((d) => d.visible);
-  for (const d of domes) if (!d.parent) d.visible = true;   // only while OUT of the scene: in it, visible = drawn
+  const forced = domes.filter((d) => !d.parent && !d.visible);   // only while OUT of the scene: in it, visible = drawn
+  for (const d of forced) d.visible = true;
   try { await Promise.all(domes.map((d) => renderer.compileAsync(d, camera, scene).catch(() => {}))); }
-  finally { domes.forEach((d, i) => { d.visible = vis[i]; }); }
+  // put back only what we flipped, and only if nothing else wrote it during the (minutes-long) compile (review 7, L6)
+  finally { for (const d of forced) if (d.visible === true && !d.parent) d.visible = false; }
   tee(`[sky] live domes compiled in ${(performance.now() - t0).toFixed(0)} ms (off the render path)`);
 }
 

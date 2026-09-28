@@ -20,6 +20,7 @@
 // frame is held for the capture (a desktop keeps its last image; in a headset expect a brief black blink).
 import { THREE, TSL, renderer, scene, camera } from './core.js';
 import { renderAside, setWorldHold } from './render.js';
+import { reassertShadowPref } from './lightrig.js';
 
 const { vec4 } = TSL;
 
@@ -145,6 +146,7 @@ export async function overdrawCapture({ mode = 'actual', w = 480, perTag = true,
     for (const [o, m] of orig) o.material = m;
     scene.background = saved.bg;
     for (const [l, a] of shadowLights) l.shadow.autoUpdate = a;
+    reassertShadowPref();   // a shadows toggle mid-measure wins over the saved value (review 7, L5)
     renderer.setClearColor(saved.cc, saved.ca);
     setWorldHold(false);
     for (const [, rt] of rts) rt.dispose();

@@ -146,7 +146,7 @@ export function initVideoPanel() {
       (v) => { setShadowRes(+v); flashHint(`shadow resolution: ${v}²`); });
     resRow.hidden = !shadowsOn();
     body.appendChild(checkRow('shadows',
-      'All cast shadows — the sun’s and the lamp shadow. Off is the cheapest single change on a weak GPU; flipping it may recompile materials once.',
+      'All cast shadows — the sun’s and the lamp shadow. Off is the cheapest single change on a weak GPU; flipping it recompiles nothing.',
       shadowsOn(), (on) => { setShadows(on); resRow.hidden = !on; flashHint(`shadows ${on ? 'on' : 'off'}`); }));
     body.appendChild(resRow);
 

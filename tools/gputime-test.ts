@@ -1,7 +1,9 @@
 // gputime's shadow A/B gives the shadow maps back however it ends (client/lib/gputime.js). `bun tools/gputime-test.ts`
 import { plugin } from 'bun';
 const STUB = new URL('./gputime-core-stub.mjs', import.meta.url).pathname;
-plugin({ name: 'gputime-stubs', setup(b) { b.onResolve({ filter: /^\.\/core\.js$/ }, () => ({ path: STUB })); } });
+const RIG = new URL('./gputime-lightrig-stub.mjs', import.meta.url).pathname;
+plugin({ name: 'gputime-stubs', setup(b) { b.onResolve({ filter: /^\.\/core\.js$/ }, () => ({ path: STUB })); b.onResolve({ filter: /^\.\/lightrig\.js$/ }, () => ({ path: RIG })); } });
+const { pref } = await import(RIG);
 const { lights } = await import(STUB);
 const G = await import('../client/lib/gputime.js');
 let pass = 0, fail = 0;
@@ -24,4 +26,13 @@ ok('a new measurement can start after', G.gpuTimerState().measuring === false);
   await new Promise((r) => setTimeout(r, 650));
   ok('a new A/B started during an old one\'s settle survives it', G.gpuTimerState().measuring === true);
   void q; void q2; }
+// shadows switched OFF during an A/B: the A/B's restore must not resurrect the value it saved at its start (review 7, L5)
+{ G.setGpuTimer(false); await new Promise((r) => setTimeout(r, 650));
+  sun.shadow.autoUpdate = true; pref.on = true;
+  const q = G.measureShadowPass(4);
+  G.gpuBegin(); G.gpuEnd();
+  pref.on = false; sun.shadow.autoUpdate = false;          // the person turns shadows off mid-A/B
+  G.setGpuTimer(false);
+  ok('shadows turned off mid-A/B stay off after it ends (the preference wins over the saved value)', sun.shadow.autoUpdate === false, String(sun.shadow.autoUpdate));
+  pref.on = true; void q; }
 console.log(`${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

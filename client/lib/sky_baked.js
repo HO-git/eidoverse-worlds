@@ -172,7 +172,7 @@ let cycleStart = 0;
 let cycleForced = false;
 let fade = null;       // { from, to, t0, dur }
 let nextAt = 0;
-let lastCycleMs = 0;
+let lastCycleMs = 0;   // how long the last bake cycle took (bands + pump spacing)
 let refreshing = false;
 export const bakedRefreshing = () => refreshing;
 // DRIFT (owner 09-27: 'if drift is almost free, do that for medium'; after a look: 'looks nice … an easy win'). On by
@@ -217,15 +217,11 @@ function atSkySnapshot(snap, draw) {
 export const BAKE_INTERCEPT = Symbol.for('ew.bakeIntercept');
 let bootBakeSkyT = null;   // the time the last banded boot/swap bake was pinned to (attach adopts it for target A)
 /** Drift state (probes, the debug panel): null when off, else the seconds each texture has drifted. */
-export const bakedDrift = () => (driftDt ? [driftDt[0].value, driftDt[1].value] : null);   // how long the last bake cycle took (bands + pump spacing)
+export const bakedDrift = () => (driftDt ? [driftDt[0].value, driftDt[1].value] : null);
 // The re-bake interval, never shorter than a bake takes plus room to dissolve (audit M1: in a headset one 4096x2048
-// 8-pass bake takes ~6.2 s at the pump's 40 ms band spacing, longer than high's 6 s interval, so it baked back to back).
+// 8-pass bake takes ~6.2 s at the pump's 40 ms band spacing, longer than the then-baked high's 6 s interval, so it baked
+// back to back).
 const cadenceMs = () => Math.max(cfg.intervalMs, lastCycleMs > 0 ? lastCycleMs + 2500 : 0);
-/** A tier switch that keeps the same bake (medium ↔ high): only the cadence changes, no rebuild. */
-export function setBakeInterval(ms) {
-  cfg = { ...cfg, intervalMs: ms };
-  nextAt = Math.min(nextAt, performance.now() + cadenceMs());
-}
 let pendingForce = false;
 
 let cfg = {
@@ -419,7 +415,7 @@ export function attachBakedDome(skyApi, opts = {}) {
   const U = s.uniforms ?? {};
   sysRef = s;
   let suvA, suvB;
-  if (DRIFT && U.skyWind && U.time && U.sunDir && U.cloudStart && U.cloudHeight) {
+  if (DRIFT && !cfg.noClouds && U.skyWind && U.time && U.sunDir && U.cloudStart && U.cloudHeight) {
     bakeSkyT[0] = bakeSkyT[1] = bootBakeSkyT ?? skyTimeNow();   // A holds the boot bake; B starts as its copy
     driftDt = [TSL.uniform(0), TSL.uniform(0)];
     const layerH = U.cloudStart.add(U.cloudHeight.mul(0.5)).sub(2);   // the bake's eye sits at y=2
@@ -811,7 +807,7 @@ export function detachBakedDome() {
     scene.remove(dome);
     dome.geometry.dispose();
     mat.dispose();
-    dome = null; driftDt = null; sysRef = null;
+    dome = null; driftDt = null; sysRef = null; bootBakeSkyT = null;   // a later one-shot attach mustn't adopt this build's bake time (review 7, L3)
     mat = null;
   }
   if (bandGeos) {

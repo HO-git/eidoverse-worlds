@@ -181,7 +181,7 @@ let lastCycleMs = 0;
 // then lands where the drifted picture already is. The shift fades out toward the horizon (no layer hit, tiny angles)
 // and around the sun (the bake includes the disc and its glow, which must not travel).
 const DRIFT = CONFIG.params.get('skydrift') !== '0';
-let sysRef = null, cycleSkyT = 0;
+let sysRef = null, cycleSkyT = 0, cycleSnap = null;
 const bakeSkyT = [0, 0];               // sky time each target's picture shows (mid-bake)
 let driftDt = null;                    // [uniform, uniform]: dt for A and B
 const skyTimeNow = () => sysRef?.uniforms?.time?.value ?? 0;
@@ -189,11 +189,25 @@ const skyTimeNow = () => sysRef?.uniforms?.time?.value ?? 0;
 // frames (156 over ~6–20 s in a headset), and each strip used to march the clouds at the sky time of ITS frame: the
 // clouds moved between strips, so strip edges showed as seams, worse the longer the bake. Every strip of a bake now
 // draws at the time the bake began (the uniform is pinned for the draw and restored), and drift measures from it.
-function atSkyTime(sys, t, draw) {
-  const u = sys?.uniforms?.time;
-  if (!u || t == null) return draw();
-  const keep = u.value; u.value = t;
-  try { return draw(); } finally { u.value = keep; }
+// …and not only its clock: the sun, the palette and every other per-frame sky uniform move too (fast at a high day
+// rate: the owner's 22.5×), so strips drawn at different moments showed as bands in the atmosphere behind the clouds
+// (09-27 22:57). A bake takes a SNAPSHOT of the sky's scalar and vector uniforms when it begins and draws every strip
+// with it, restoring the live values after each draw. Textures and matrices are left alone.
+function skySnapshot(sys) {
+  const U = sys?.uniforms; if (!U) return null;
+  const snap = [];
+  for (const [k, u] of Object.entries(U)) {
+    const v = u?.value;
+    if (typeof v === 'number' || typeof v === 'boolean') snap.push([u, v, false]);
+    else if (v && (v.isVector2 || v.isVector3 || v.isVector4 || v.isColor || v.isQuaternion)) snap.push([u, v.clone(), true]);
+  }
+  return snap;
+}
+function atSkySnapshot(snap, draw) {
+  if (!snap) return draw();
+  const keep = snap.map(([u, , obj]) => (obj ? u.value.clone() : u.value));
+  for (const [u, v, obj] of snap) { if (obj) u.value.copy(v); else u.value = v; }
+  try { return draw(); } finally { snap.forEach(([u, , obj], i) => { if (obj) u.value.copy(keep[i]); else u.value = keep[i]; }); }
 }
 let bootBakeSkyT = null;   // the time the last banded boot/swap bake was pinned to (attach adopts it for target A)
 /** Drift state (probes, the debug panel): null when off, else the seconds each texture has drifted. */
@@ -271,7 +285,7 @@ export async function bandedBakeRender(r, bakeScene, bakeCam, target, { cloudPas
       await globalThis.__syncGate?.whenGiantLinked?.();
       const waited = performance.now() - tl;
       tee(`[sky] band bake: compiled in ${(performance.now() - tc).toFixed(0)} ms${waited > 50 ? ` (waited ${waited.toFixed(0)} ms for a deferred link)` : ''}, ${meshes.length} bands to draw`); }
-    const pinSys = sys, pinT = sys?.uniforms?.time?.value ?? null;   // every strip at the time the drawing began
+    const pinSnap = skySnapshot(sys), pinT = sys?.uniforms?.time?.value ?? null;   // every strip at the moment the drawing began
     bootBakeSkyT = pinT;
     for (let i = 0; i < meshes.length; i++) {
       // budget: each band is a gpu unit of the shared per-frame budget (the client's callers; the probe paces itself).
@@ -285,7 +299,7 @@ export async function bandedBakeRender(r, bakeScene, bakeCam, target, { cloudPas
         r.autoClear = false;          // strips abut and each fully overdraws its own texels
         r.setRenderTarget(target);
         const t0 = performance.now();
-        try { atSkyTime(pinSys, pinT, () => r.render(bs, bakeCam)); } finally { r.setRenderTarget(prev ?? null); r.autoClear = autoClear; }
+        try { atSkySnapshot(pinSnap, () => r.render(bs, bakeCam)); } finally { r.setRenderTarget(prev ?? null); r.autoClear = autoClear; }
         if (g) spent('sky', performance.now() - t0, null, g);
       };
       // a bake that runs into a headset session (the VR cap's high→medium rebuild; a desktop bake still banding at
@@ -561,7 +575,7 @@ function xrPumpTick() {
       if (!maybeRefreshGraph()) {
         cycleForced = pendingForce;
         pendingForce = false;
-        cycleStart = now; cycleSkyT = skyTimeNow();
+        cycleStart = now; cycleSkyT = skyTimeNow(); cycleSnap = skySnapshot(sysRef);
         nextAt = now + cadenceMs();
         bandIdx = 0;
         state = 'baking';
@@ -629,7 +643,7 @@ export function updateBakedDome(now = performance.now()) {
     if (maybeRefreshGraph()) return;   // clear↔cloudy flip: rebuild first
     cycleForced = pendingForce;
     pendingForce = false;
-    cycleStart = now; cycleSkyT = skyTimeNow();
+    cycleStart = now; cycleSkyT = skyTimeNow(); cycleSnap = skySnapshot(sysRef);
     nextAt = now + cadenceMs();
     bandIdx = 0;
     state = 'baking';
@@ -747,7 +761,7 @@ function renderBand(i) {
   // try/finally: a throw inside the band render used to leave BOTH the 4096x2048 back target bound (render.js's
   // self-heal then logs "unbound a stale target … frame aborted mid-render" — seen once per boot on the owner's GPU,
   // 09-24) AND autoClear off for the main pass. The error still propagates; now it is also named.
-  try { atSkyTime(sysRef, cycleSkyT, () => renderer.render(bandScene, bakeCam)); }
+  try { atSkySnapshot(cycleSnap, () => renderer.render(bandScene, bakeCam)); }
   catch (e) { tee(`[sky] dome band ${i}/${bandMeshes.length} render threw: ${String(e?.message ?? e).slice(0, 300)}`); throw e; }
   finally { renderer.setRenderTarget(prev ?? null); renderer.autoClear = autoClear; }
 }

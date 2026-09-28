@@ -630,7 +630,7 @@ export function initDebug(p = {}) {
     cb.onchange = () => { setGpuTimer(cb.checked); paint(); };
     btn.onclick = () => { measureShadowPass().then((r) => { if (r?.error) toastLike(`gpu timer: ${r.error}`); cb.checked = gpuTimerOn(); paint(); }); paint(); };
     body.append(row, btn, out);
-    setInterval(() => { if (body.isConnected && body.offsetParent) paint(); }, 1000);
+    setInterval(() => { let x = false; try { x = xrPanelOpen('debug'); } catch { /* not presenting */ } if (body.isConnected && (body.offsetParent || x)) paint(); }, 1000);
     if (!gpuTimerState().supported) { cb.disabled = true; btn.disabled = true; }
     paint();
   });
@@ -686,7 +686,10 @@ export function updateDebug(now = performance.now()) {
   if (!frame) return;
   // F1 hides the UI for screenshots; debug lines are UI, whatever layer they
   // happen to live on
-  const hidden = !frame.visible || document.body.classList.contains('photo');
+  // open in the VR ring counts as shown: the desktop frame isn't 'visible' then, and this early return left the pane's
+  // numbers unpainted, so the quad (it re-rasters on DOM changes) froze (owner, 09-27 20:42: 'locked and never change')
+  let inXR = false; try { inXR = xrPanelOpen('debug'); } catch { /* not presenting */ }
+  const hidden = (!frame.visible && !inXR) || document.body.classList.contains('photo');
   ensureGroups();
   collGroup.visible = !hidden && on.colliders;
   ragGroup.visible = !hidden && on.ragdoll;

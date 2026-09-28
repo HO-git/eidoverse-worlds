@@ -539,6 +539,7 @@ function teardownSky({ rebuilding = false } = {}) {
   // unwrap loop inside is a no-op — no recompiles. Runs AFTER the blit,
   // BEFORE the dome disposal walk (double-dispose is idempotent in three).
   try { skyInner?.dispose?.(); } catch (e) { console.warn('[sky] engine dispose', e?.message ?? e); }
+  try { skyInner?.__disposeKeptBakes?.(); } catch (e) { console.warn('[sky] kept bake graphs', e?.message ?? e); }
   skyInner = null;
   for (const o of skyOwned) {
     scene.remove(o);
@@ -640,6 +641,32 @@ function announceBusy() {
 }
 bus.on('sky-interim', announceBusy);
 export const skyBusy = () => busyShown;
+/** Probes only: the api and the engine object. */
+export const skyForProbe = () => ({ api: skyApi, sys: skyInner });
+// sky_system keeps ONE bake graph (sys._envBake) and disposes it whenever a bake with another key (size, passes, clouds)
+// arrives. On the owner's rig (09-27 19:29) high's small env bake evicted medium's 1.76M-char bake program, so switching
+// back re-created it: a ~3 s GPU-process stall even with Chrome's blob cache. three looks programs up by shader SOURCE
+// and releases one only when no live material uses it, so the evicted graphs are kept (their dispose deferred, one per
+// key) and a rebuild of the same graph is a program-cache hit. All of them go at teardown. Skye's file is untouched.
+function retainBakeGraphs(sys) {
+  if (!sys || Object.getOwnPropertyDescriptor(sys, '_envBake')?.get) return;
+  let cur = sys._envBake ?? null;
+  const kept = new Map();   // key → a graph whose dispose was deferred
+  const keep = (b) => {
+    if (!b || b.__realDispose) return b;
+    b.__realDispose = b.dispose.bind(b);
+    b.dispose = () => {
+      const old = kept.get(b.key);
+      if (old && old !== b) old.__realDispose();   // the newer graph of that key holds the same programs
+      kept.set(b.key, b);
+    };
+    return b;
+  };
+  keep(cur);
+  Object.defineProperty(sys, '_envBake', { configurable: true, get: () => cur, set: (b) => { cur = keep(b); } });
+  sys.__keptBakeKeys = () => [...kept.keys()];
+  sys.__disposeKeptBakes = () => { for (const b of new Set([...kept.values(), cur])) b?.__realDispose?.(); kept.clear(); cur = null; };
+}
 const SAME_SYSTEM = new Set(['low', 'medium', 'high']);
 const sameBake = (a, b) => a && b && a.width === b.width && a.height === b.height && a.cloudPasses === b.cloudPasses;
 async function swapTier(from, to) {
@@ -783,6 +810,7 @@ async function buildSky(a, world, wantAudio) {
     // per-bakeKey cache / authoritative includeClouds), this whole fence
     // shrinks to one option flag.
     skyInner = skyApi?._internals?.sky ?? null;
+    retainBakeGraphs(skyInner);
     // held from birth, the domes were never in the scene for the diff above: claim them by identity, so a teardown
     // (which puts held domes back first) still finds and frees them
     for (const d of skyInner?.domes ?? []) if (d && !skyOwned.includes(d)) skyOwned.push(d);

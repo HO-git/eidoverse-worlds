@@ -172,6 +172,15 @@ let cycleStart = 0;
 let cycleForced = false;
 let fade = null;       // { from, to, t0, dur }
 let nextAt = 0;
+let lastCycleMs = 0;   // how long the last bake cycle took (bands + pump spacing)
+// The re-bake interval, never shorter than a bake takes plus room to dissolve (audit M1: in a headset one 4096x2048
+// 8-pass bake takes ~6.2 s at the pump's 40 ms band spacing, longer than high's 6 s interval, so it baked back to back).
+const cadenceMs = () => Math.max(cfg.intervalMs, lastCycleMs > 0 ? lastCycleMs + 2500 : 0);
+/** A tier switch that keeps the same bake (medium ↔ high): only the cadence changes, no rebuild. */
+export function setBakeInterval(ms) {
+  cfg = { ...cfg, intervalMs: ms };
+  nextAt = Math.min(nextAt, performance.now() + cadenceMs());
+}
 let pendingForce = false;
 
 let cfg = {
@@ -501,7 +510,7 @@ function xrPumpTick() {
         cycleForced = pendingForce;
         pendingForce = false;
         cycleStart = now;
-        nextAt = now + cfg.intervalMs;
+        nextAt = now + cadenceMs();
         bandIdx = 0;
         state = 'baking';
       }
@@ -568,7 +577,7 @@ export function updateBakedDome(now = performance.now()) {
     cycleForced = pendingForce;
     pendingForce = false;
     cycleStart = now;
-    nextAt = now + cfg.intervalMs;
+    nextAt = now + cadenceMs();
     bandIdx = 0;
     state = 'baking';
   }
@@ -691,6 +700,7 @@ function renderBand(i) {
 }
 
 function finishBake(now) {
+  lastCycleMs = now - cycleStart;
   const back = targets[1 - front];
   blitEnvFrom(back);   // IBL + reflection fallback follow the freshest bake
 

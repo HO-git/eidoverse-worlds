@@ -21,7 +21,7 @@ import { report, bus, tee, teeNow, CONFIG } from './base.js';
 import { loadEidoModule, primeFiles, listLibrary, fetchBytes } from './assets.js';
 import { markPhase } from './boot.js';
 import { bandCuts, bandedBakeRender, bakeGeneration } from './sky_baked.js';
-import { attachBakedDome, detachBakedDome, updateBakedDome, bakedActive, requestBake, holdLiveDomes, releaseLiveDomes, liveDomesHeld, takeHeldDomes,
+import { attachBakedDome, detachBakedDome, setBakeInterval, updateBakedDome, bakedActive, requestBake, holdLiveDomes, releaseLiveDomes, liveDomesHeld, takeHeldDomes,
   envTexture, adoptEnvironment, whenBakeReady } from './sky_baked.js';
 import { beginWork } from './loadwork.js';
 import { showInterimSky, updateInterimSky, hideInterimSky } from './sky_interim.js';
@@ -245,6 +245,14 @@ export async function setCloudQuality(level, { persist = true } = {}) {
     tee(`[sky] clouds ${cloudQuality}→${level} held until VR exit (a rebuild in the headset stalls it for seconds)`);
     bus.emit('sky-held', { quality: level });
     return;
+  }
+  // medium, high and live construct the SAME sky system (audit, 09-27): a switch among them swaps what's shown instead of
+  // tearing down and re-linking identical giant programs (every rebuild re-linked them, and three's WebGL backend never
+  // frees a GL program, so each one also leaked in the GPU process). The VR cap's entry/exit flip rides this too.
+  if (SAME_SYSTEM.has(cloudQuality) && SAME_SYSTEM.has(level) && skyApi && impl === 'eidoverse' && !interimFor && !building) {
+    const from = cloudQuality;
+    cloudQuality = level;
+    return swapTier(from, level);
   }
   beginPhases(`clouds ${cloudQuality}→${level}`);
   cloudQuality = level;
@@ -620,10 +628,40 @@ async function worldSettled() {
   }
   teeNow(`[sky] world settled after ${((performance.now() - t0) / 1000).toFixed(1)} s: compiling the sky now`);
 }
+const SAME_SYSTEM = new Set(['medium', 'high', 'live']);
+async function swapTier(from, to) {
+  const t0 = performance.now(), api = skyApi;
+  if (BAKED_TIERS[from] && BAKED_TIERS[to]) {
+    // same bake program (4096x2048, 8 passes): only the cadence differs
+    setBakeInterval(BAKED_TIERS[to].intervalMs);
+  } else if (to === 'live') {
+    // the baked dome stays up while the live domes compile off the render path; then they replace it
+    await compileLiveDomes();
+    if (skyApi !== api || cloudQuality !== 'live') return;
+    detachBakedDome();
+    scheduleEnvBake({ force: true });   // the live tier's own env-IBL
+  } else {
+    // live → baked: the live march stays on screen while the bake runs (in a headset it's held out, the gradient
+    // stands in: no per-eye march), then the baked dome parks it
+    if (xrPresenting && holdLiveDomes(skyApi, 'in a headset until the baked dome is ready')) showInterimSky(skyInner?.uniforms);
+    bakePending = true;
+    try { await ensureSkyBake(); } catch (e) { report('sky tier swap', e); }
+    if (bakedActive()) await whenBakeReady();
+    if (skyApi !== api) return;
+    if (!bakedActive()) releaseLiveDomes();
+    hideInterimSky();
+  }
+  tee(`[sky] clouds ${from}→${to} without a rebuild (${(performance.now() - t0).toFixed(0)} ms)`);
+}
+
 async function compileLiveDomes() {
   const domes = skyInner?.domes ?? [];
   const t0 = performance.now();
-  await Promise.all(domes.map((d) => renderer.compileAsync(d, camera, scene).catch(() => {})));
+  // compileAsync skips invisible objects; a hidden cloud dome would otherwise link later, on the render path (audit L3)
+  const vis = domes.map((d) => d.visible);
+  for (const d of domes) if (!d.parent) d.visible = true;   // only while OUT of the scene: in it, visible = drawn
+  try { await Promise.all(domes.map((d) => renderer.compileAsync(d, camera, scene).catch(() => {}))); }
+  finally { domes.forEach((d, i) => { d.visible = vis[i]; }); }
   tee(`[sky] live domes compiled in ${(performance.now() - t0).toFixed(0)} ms (off the render path)`);
 }
 

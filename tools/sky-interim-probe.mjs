@@ -53,6 +53,30 @@ try {
   await pg.waitForTimeout(6000);   // a few more rated-sky seconds after the bake
   check('a baked tier never runs the full-quad env re-bake (the synchronous giant-program caller)', !lines.some((l) => /env re-bake/.test(l)), lines.filter((l) => /env re-bake/.test(l)).slice(0, 2).join(' | '));
   check('the real sky replaces it: gradient gone, nothing left held', up && !after.interim && !after.held, JSON.stringify(after));
+  // M3: the off tier under cloudy weather never pins a cloud branch
+  await pg.evaluate(async () => { const { sendVerb } = await import('./lib/net.js'); sendVerb('sky', { hours: 12, rate: 0, clouds: 'cumulus', weather: 'overcast' }); });
+  await pg.waitForTimeout(4000);
+  const pinned = await pg.evaluate(async () => (await import('./lib/sky_baked.js')).bakedCloudsPinned());
+  check('off tier under overcast: the bake has no cloud branch', pinned === false, String(pinned));
+  await pg.evaluate(async () => { const { sendVerb } = await import('./lib/net.js'); sendVerb('sky', { hours: 12, rate: 0, clouds: 'cumulus', weather: 'clear' }); });
+  await pg.waitForTimeout(3000);
+  // M2: a quality flip never leaves the scene skyless during teardown + rebuild (gradient or baked dome at every sample).
+  // Sampled per drawn frame through the teardown/module window (3 s), then the page leaves before low's cloud bake (a software
+  // 3-pass bake exhausts this machine).
+  const gaps = await pg.evaluate(async () => {
+    const s = await import('./lib/sky.js'), si = await import('./lib/sky_interim.js'), sb = await import('./lib/sky_baked.js');
+    s.setCloudQuality('low');
+    let gaps = 0, samples = 0, sawInterim = false; const t0 = performance.now();
+    while (performance.now() - t0 < 3000) {
+      await new Promise((r) => requestAnimationFrame(r)); samples++;   // per drawn frame: what a person could see
+      const i = si.interimSkyShown(); if (i) sawInterim = true;
+      if (!i && !sb.bakedActive()) gaps++;
+    }
+    return { gaps, samples, sawInterim };
+  });
+  await pg.goto('about:blank');
+  console.log('    flip:', JSON.stringify(gaps));
+  check('a quality flip never shows a skyless frame (the gradient covers the rebuild)', gaps.gaps === 0 && gaps.samples >= 2 && gaps.sawInterim, JSON.stringify(gaps));
   check('no page errors', errs.length === 0, errs.slice(0, 3).join(' | '));
 } catch (e) { check('probe ran', false, e.message); }
 finally { try { await browser.close(); } catch {} try { await world.close(); } catch {} }

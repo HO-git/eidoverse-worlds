@@ -21,7 +21,7 @@ import { report, bus, tee, teeNow, CONFIG } from './base.js';
 import { loadEidoModule, primeFiles, listLibrary, fetchBytes } from './assets.js';
 import { markPhase } from './boot.js';
 import { bandCuts, bandedBakeRender, bakeGeneration } from './sky_baked.js';
-import { attachBakedDome, detachBakedDome, updateBakedDome, bakedActive, requestBake, holdLiveDomes, releaseLiveDomes, liveDomesHeld,
+import { attachBakedDome, detachBakedDome, updateBakedDome, bakedActive, requestBake, holdLiveDomes, releaseLiveDomes, liveDomesHeld, takeHeldDomes,
   envTexture, adoptEnvironment, whenBakeReady } from './sky_baked.js';
 import { beginWork } from './loadwork.js';
 import { showInterimSky, updateInterimSky, hideInterimSky } from './sky_interim.js';
@@ -121,7 +121,9 @@ const BAKED_TIERS = {
 };
 const bakeOpts = () => {
   const { width, height, cloudPasses } = BAKED_TIERS[cloudQuality] ?? {};
-  return width ? { width, height, cloudPasses } : {};
+  // 'off' bakes no cloud branch whatever the weather (audit M3: weather_system's setWeather respells the preset to
+  // cumulus/stratus under storm/rain/overcast, and the off tier then paid a cloud-program compile it opted out of)
+  return width ? { width, height, cloudPasses, ...(cloudQuality === 'off' ? { includeClouds: false } : {}) } : {};
 };
 let cloudQuality = localStorage.getItem('ew-cloud-quality') ?? 'medium';
 const BAND_BUDGET = 0.4e6;   // texels x passes per boot-bake band — sky_baked's cadence budget (~a few ms a strip)
@@ -499,8 +501,14 @@ function claimSkyAdditions(snap) {
   // but is not therefore ours — hence the host-owned marker.
   autoSystemsOwned = claimUnowned(snap.autos);
 }
-function teardownSky() {
-  interimFor = null; hideInterimSky();   // a rebuild shows its own stand-in; a pending finishSky sees skyApi change and stops
+function teardownSky({ rebuilding = false } = {}) {
+  // A rebuild keeps a gradient up through the teardown and the new build's module/texture loads (audit M2: a black gap on
+  // every quality flip, and in the headset). The palette uniforms are plain objects and outlive the system. A teardown
+  // to the basic sky drops it. A pending finishSky sees skyApi change and stops.
+  interimFor = null;
+  if (rebuilding && skyInner?.uniforms) showInterimSky(skyInner.uniforms); else hideInterimSky();
+  // Held domes are taken, not put back (audit M5): never compiled, they must not reach the scene on the way out.
+  const held = takeHeldDomes();
   // The adopted lightning first: the scene diff below cannot see it (the
   // rig's seam kept it OUT of the scene), and on teardowns that never
   // build a replacement weather system its registry-eviction release never
@@ -530,6 +538,7 @@ function teardownSky() {
       else m?.dispose?.();
     });
   }
+  for (const d of held) if (!skyOwned.includes(d)) { d.removeFromParent?.(); d.geometry?.dispose?.(); d.material?.dispose?.(); }
   skyOwned = [];
   // the per-frame hooks the sky registered would otherwise keep running
   // against a dome that is no longer in the scene — and only those: everyone
@@ -622,7 +631,7 @@ async function buildSky(a, world, wantAudio) {
   {
     // tear down a previous world's sky before building another
     try { skyApi?.dispose?.(); } catch { /* upstream has none; the diff below is the real teardown */ }
-    teardownSky();
+    teardownSky({ rebuilding: true });
     skyApi = null;
     const ownership = snapshotSceneOwnership();
     // Quality tier. The volumetric cloud march is the single most expensive
@@ -829,7 +838,7 @@ async function ensureSkyBake() {
   if (bakeGeneration() !== gen) return;   // torn down while baking: a newer build owns the sky now
   if (BAKED_TIERS[cloudQuality]) {
     const { cloudPasses, intervalMs } = BAKED_TIERS[cloudQuality];
-    if (!attachBakedDome(skyApi, { cloudPasses, intervalMs })) {
+    if (!attachBakedDome(skyApi, { cloudPasses, intervalMs, noClouds: cloudQuality === 'off' })) {
       // engine internals moved (or the bake failed) — the live march is
       // still in the scene, so the sky stays correct, just expensive. Domes held out in a headset come back too:
       // a costly sky beats no clouds for the whole session (review 09-27, P4).

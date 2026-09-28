@@ -65,6 +65,9 @@ export function releaseLiveDomes() {
   xrHeld = null;
 }
 export const liveDomesHeld = () => !!xrHeld;
+/** Teardown: hand back the held domes WITHOUT re-adding them. Held from birth, they may never have been compiled, and a
+ *  build that failed before claiming them would otherwise leave them in the scene for the render path (audit M5). */
+export function takeHeldDomes() { const out = (xrHeld ?? []).map(([d]) => d); xrHeld = null; return out; }
 export const holdLiveDomesInXR = (skyApi) => holdLiveDomes(skyApi);   // probe name
 let sys = null;        // sky_system internals
 let targets = null;    // [A, B] — A is the engine's _envTarget, B is ours
@@ -591,7 +594,7 @@ export const nextDesktopFrame = () => new Promise(function wait(res) {
   requestAnimationFrame(() => (renderer.xr?.isPresenting ? setTimeout(() => wait(res), 250) : res()));
 });
 function maybeRefreshGraph() {
-  const wantClouds = sys.state?.preset !== 'clear';
+  const wantClouds = !cfg.noClouds && sys.state?.preset !== 'clear';   // the off tier never grows a cloud branch (M3)
   if (wantClouds === pinnedCloudsOn) return false;
   // One direction only (§18b): a c1 graph with finalMul→0 draws a correct
   // clear sky, so cloudy→clear NEVER needs the full-quad rebake (the

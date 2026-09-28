@@ -109,14 +109,15 @@ export function installSyncGate(renderer, { tee = () => {}, gate = true } = {}) 
   tee(`[syncgate] installed: parallel-compile ${stats.parallel ? 'yes' : 'NO (gate inert: links block)'}; gate ${gate ? 'on' : 'off (?syncgate=0, census only)'}`);
   // resolves when every giant link pending now has landed; after maxMs it gives up, saying what the GL reports (a black
   // baked sky on the owner's rig, 09-27 18:10, with no 'linked after' line: this is the witness)
-  stats.whenGiantLinked = (maxMs = 120000) => {
+  // Never gives up: drawing with an unlinked giant program skips the draw and leaves a baked target black (audit M4;
+  // cold links measured 125–583 s on the owner's rig). Every tickMs it says what the GL reports, so a stuck link is
+  // visible; a dead context is gpulost's to recover (reload).
+  stats.whenGiantLinked = (tickMs = 120000) => {
     const list = [...pendingGiant];
     if (!list.length) return Promise.resolve(true);
-    let timer = 0;
-    return Promise.race([
-      Promise.all(list).then(() => true),
-      new Promise((r) => { timer = setTimeout(() => { tee(`[syncgate] giant link still pending after ${maxMs} ms: ${list.map((p) => p.status?.() ?? '?').join(' | ')}`, true); r(false); }, maxMs); }),
-    ]).finally(() => clearTimeout(timer));
+    const t0 = performance.now();
+    const timer = setInterval(() => tee(`[syncgate] giant link still pending after ${((performance.now() - t0) / 1000).toFixed(0)} s (waiting, not drawing): ${list.map((p) => p.status?.() ?? '?').join(' | ')}`, true), tickMs);
+    return Promise.all(list).then(() => true).finally(() => clearInterval(timer));
   };
   return stats;
 }

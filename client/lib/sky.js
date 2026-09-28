@@ -84,8 +84,8 @@ export let dayness = 1;
 // The tier's cost moves from per-frame to per-bake, which is why 'medium'
 // can afford the FULL 8-pass march — it looks better than the old live
 // 3-pass tier and costs a texture lookup per pixel at runtime. The trade is
-// stillness: clouds hold their shapes between re-bakes. 'high' keeps the
-// real thing.
+// stillness: clouds hold their shapes between re-bakes. 'high' used to keep the
+// live march; since 09-27 it's baked too (below).
 //
 // This is a CLIENT preference, not world state. It is deliberately never a
 // verb: how many cloud passes your GPU can afford has nothing to do with what
@@ -98,8 +98,9 @@ const QUALITY_OPTS = {
   medium: { cloudPasses: 3 },
   high: {},                                    // sky_system's own defaults (8)
 };
-// Baked-tier bake parameters. Anything listed here shows the baked dome;
-// 'high' is deliberately absent — it is the live march. One resolution/pass
+// Baked-tier bake parameters. Anything listed here shows the baked dome. 'high' joined on 09-27: as the live march it
+// needed the one program no other tier builds (a 1–2 MB shader whose first compile stalled the owner's GPU process
+// ~5 s even on the async path, and ran her at 40 fps), so no tier builds it now; high re-bakes more often instead. One resolution/pass
 // choice PER SESSION per tier: bakeEnv keys its cached node graph on
 // (W, H, passes), so every bake call must repeat the same values or each
 // re-bake would rebuild and recompile the whole march pipeline.
@@ -113,6 +114,7 @@ const BAKED_TIERS = {
   off: { width: 1024, height: 512, cloudPasses: 1, intervalMs: 12000 },   // clear sky anyway
   low: { width: 2048, height: 1024, cloudPasses: 3, intervalMs: 12000 },
   medium: { width: 4096, height: 2048, cloudPasses: 8, intervalMs: 9000 },
+  high: { width: 4096, height: 2048, cloudPasses: 8, intervalMs: 6000 },
 };
 const bakeOpts = () => {
   const { width, height, cloudPasses } = BAKED_TIERS[cloudQuality] ?? {};

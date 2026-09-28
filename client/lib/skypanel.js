@@ -114,7 +114,7 @@ export function paintSky(body) {
   // is per-fragment, so a big high-refresh display pays several times what a
   // small window does for the same sky.
   const { row: cqRow } = selectRow('clouds⚙', CLOUD_QUALITY, getCloudChoice(),
-    (v) => { setCloudQuality(v); flashHint(`clouds: ${v} (yours only)`); });
+    (v) => { setCloudQuality(v); flashHint(`clouds: ${v} (yours only). The first time a setting is used, your GPU may pause a few seconds to compile it`); });
   cqRow.title = 'local performance setting — not shared with the world';
   body.appendChild(cqRow);
 

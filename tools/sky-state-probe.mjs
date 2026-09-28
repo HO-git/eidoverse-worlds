@@ -65,6 +65,18 @@ try {
   console.log('   ', JSON.stringify({ realUi, backUi }));
   check('a real clock hides time and rate', realUi.hours.dis && realUi.rate.dis && !realUi.hours.shown && !realUi.rate.shown, JSON.stringify(realUi));
   check('…and the authored clock brings them back', !backUi.hours.dis && !backUi.rate.dis && backUi.hours.shown && backUi.rate.shown, JSON.stringify(backUi));
+  // review 8 M2: YOUR committed real clock must not outlive a remote return to the authored clock
+  const mine = await pg.evaluate(async () => {
+    const sel = [...document.querySelectorAll('#sec-sky select')].find((x) => [...x.options].some((o) => o.value === 'America/Los_Angeles'));
+    const btn = [...document.querySelectorAll('#sec-sky button')].find((b) => /log to world/.test(b.textContent));
+    if (!sel || !btn) return { found: false };
+    sel.value = 'America/Los_Angeles'; sel.dispatchEvent(new Event('change')); btn.click();
+    return { found: true };
+  });
+  await pg.waitForTimeout(1500);
+  const afterMine = await clockUi({ clock: undefined, tz: undefined });
+  check('(setup) the panel committed a real clock by its own select and ✓', mine.found, JSON.stringify(mine));
+  check('after YOU commit a real clock, a remote return to authored brings time and rate back', afterMine.hours.shown && afterMine.rate.shown && !afterMine.hours.dis, JSON.stringify(afterMine));
   // azimuth and fill only act on the basic sky: on the detailed sky they're hidden
   const basic = await pg.evaluate(async () => {
     const impl = (await import('./lib/sky.js')).skyImpl?.();

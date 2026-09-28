@@ -366,6 +366,10 @@ export function paintSky(body) {
   body.appendChild(commit);
 
   body._sync = () => {
+    // Nothing unsaved: everything in `local` was committed and the log now speaks for it, so forget it. Kept, it went
+    // on overriding later remote changes (a clock put back to authored left time/rate hidden; ✓ re-sent stale knobs).
+    // With edits pending (a panel re-open) it's the person's work: keep it (review 8, M2).
+    if (!commit.classList.contains('dirty')) for (const k of Object.keys(local)) delete local[k];
     const a = skyArgs();
     for (const [key, , , , , dflt] of SLIDERS) {
       // under a real clock hours/rate live in dormantRated (#65): load them (the rows are hidden) as what the world

@@ -840,7 +840,9 @@ async function swapTierInner(from, to) {
     bakePending = true;
     try { await ensureSkyBake(); } catch (e) { report('sky tier swap', e); }
     if (bakedActive()) await whenBakeReady();
-    if (skyApi !== api) return false;
+    // a newer choice arrived while this baked: its bake declined to attach (M1), and the queued swap owns the sky now,
+    // so leave the gradient/hold up for it rather than release the live march in between
+    if (skyApi !== api || cloudQuality !== to) return false;
     if (!bakedActive()) releaseLiveDomes();
     hideInterimSky();
   } else if (!T) {
@@ -856,7 +858,9 @@ async function swapTierInner(from, to) {
     bakePending = true;
     try { await ensureSkyBake(); } catch (e) { report('sky tier swap', e); }
     if (bakedActive()) await whenBakeReady();
-    if (skyApi !== api) return false;
+    // a newer choice arrived while this baked: its bake declined to attach (M1), and the queued swap owns the sky now,
+    // so leave the gradient/hold up for it rather than release the live march in between
+    if (skyApi !== api || cloudQuality !== to) return false;
     if (!bakedActive()) releaseLiveDomes();
     hideInterimSky();
   }
@@ -1029,6 +1033,9 @@ let bakePending = false;
 async function ensureSkyBake() {
   if (!bakePending || !skyApi) return;
   bakePending = false;
+  // the tier this bake is FOR: its size and passes come from it (bakeOpts), and so must the attach below. A choice
+  // made while it ran (the VR cap, adopted in finishSky: review 8, M1) queues its own bake, which owns the attach.
+  const tier = cloudQuality;
   // Environment reflections. `scene.environment` was never set, so every PBR
   // material in the world was lit by a hemisphere and a directional only —
   // metals and glossy surfaces read as dead plastic. The sky can bake itself.
@@ -1092,9 +1099,10 @@ async function ensureSkyBake() {
     adoptEnvironment();
   } catch (e) { console.warn('sky reflections unavailable', e); tee(`[sky] boot bake failed: ${e?.message ?? e}`); }
   if (bakeGeneration() !== gen) return;   // torn down while baking: a newer build owns the sky now
-  if (BAKED_TIERS[cloudQuality]) {
-    const { cloudPasses, intervalMs } = BAKED_TIERS[cloudQuality];
-    if (!attachBakedDome(skyApi, { cloudPasses, intervalMs, noClouds: cloudQuality === 'off' })) {
+  if (tier !== cloudQuality) { tee(`[sky] bake for ${tier} finished after the choice moved to ${cloudQuality}: not attached (its own bake will)`); return; }
+  if (BAKED_TIERS[tier]) {
+    const { cloudPasses, intervalMs } = BAKED_TIERS[tier];
+    if (!attachBakedDome(skyApi, { cloudPasses, intervalMs, noClouds: tier === 'off' })) {
       // engine internals moved (or the bake failed) — the live march is
       // still in the scene, so the sky stays correct, just expensive. Domes held out in a headset come back too:
       // a costly sky beats no clouds for the whole session (review 09-27, P4).

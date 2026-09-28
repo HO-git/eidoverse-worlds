@@ -80,7 +80,20 @@ const residentBase = () =>
   renderScale === 'auto' ? BASE_PIXEL_RATIO : BASE_PIXEL_RATIO * Number(renderScale);
 
 let pixelRatio = BASE_PIXEL_RATIO;
-const setPR = (v) => { pixelRatio = v; renderer.setPixelRatio(v); };
+// A pixel-ratio change RESIZES THE CANVAS (three writes canvas.width), and resizing a canvas clears its drawing buffer.
+// The governor decides after the frame is drawn (the 1 Hz pulse runs after 'render'), so applying here wiped the frame
+// just drawn and the compositor showed it empty: the sporadic single black frames (owner, 09-27; ~9/min = the cruise's
+// shed/restore rhythm, only while compiles held fps in the 26–52 band). The change waits for the next frame's start
+// instead (applyPendingPixelRatio, registered just before 'render').
+let pendingPR = null;
+const setPR = (v) => { pixelRatio = v; pendingPR = v; };
+/** Apply a pixel-ratio change the governor made, BEFORE this frame renders. */
+export function applyPendingPixelRatio() {
+  if (pendingPR == null) return;
+  if (renderer.xr?.isPresenting) return;   // never mid-session (#32: the ratio scales each eye's viewport); lands after exit
+  const v = pendingPR; pendingPR = null;
+  renderer.setPixelRatio(v);
+}
 
 export const getRenderScale = () => renderScale;
 export function setRenderScale(v) {

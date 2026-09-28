@@ -25,36 +25,59 @@ stub.renderer.xr = { isPresenting: false };
 const G: any = await import('../client/lib/governor.js');
 const hist = () => (G.governorDebug().history as string[]);
 const pixelMoves = () => hist().filter((h) => /pixels/.test(h)).length;
+// one frame as main.js runs it: the pulse decides, the NEXT frame's 'pixel-ratio' system applies before 'render'
+const tick = (fps: number) => { G.governPerformance(fps); G.applyPendingPixelRatio(); };
 
 // 1. SLOW seconds in a headset: the ladder must skip 'pixels' (shed returns false) and never touch the ratio
 stub.renderer.xr.isPresenting = true;
 const r0 = ratios.length, p0 = pixelMoves();
-for (let i = 0; i < 40; i++) G.governPerformance(12);
+for (let i = 0; i < 40; i++) tick(12);
 check('headset, slow: no pixel-ratio write and no "pixels" rung', ratios.length === r0 && pixelMoves() === p0, { writes: ratios.slice(r0), hist: hist().slice(-4) });
 check('…but the ladder still acts on something else (it moved on, not stalled)', hist().some((h) => h.startsWith('−') && !/pixels/.test(h)), hist().slice(-4));
 
 // 2. MID (dead-band) seconds in a headset: the cruise step must not fire either
 const r1 = ratios.length, p1 = pixelMoves();
-for (let i = 0; i < 40; i++) G.governPerformance(40);
+for (let i = 0; i < 40; i++) tick(40);
 check('headset, sustained mid fps (cruise regime): no pixel-ratio write', ratios.length === r1 && pixelMoves() === p1, { writes: ratios.slice(r1), hist: hist().slice(-4) });
 
 // 3. FAST seconds in a headset, starting BELOW base (shed on the desktop first — otherwise restore has nothing to raise
 //    and the check could never fail): restore must not raise the ratio while presenting
 stub.renderer.xr.isPresenting = false;
-for (let i = 0; i < 60 && G.governorDebug().pixelRatio >= 1; i++) G.governPerformance(12);
+for (let i = 0; i < 60 && G.governorDebug().pixelRatio >= 1; i++) tick(12);
 const shedTo = G.governorDebug().pixelRatio;
 stub.renderer.xr.isPresenting = true;
 const r2 = ratios.length;
-for (let i = 0; i < 60; i++) G.governPerformance(72);
+for (let i = 0; i < 60; i++) tick(72);
 check('headset, fast, ratio below base: restore does NOT raise it', shedTo < 1 && ratios.length === r2 && G.governorDebug().pixelRatio === shedTo, { shedTo, writes: ratios.slice(r2), now: G.governorDebug().pixelRatio });
 stub.renderer.xr.isPresenting = false;
-for (let i = 0; i < 80; i++) G.governPerformance(72);
+for (let i = 0; i < 80; i++) tick(72);
 check('control — desktop, fast: the SAME state DOES restore the ratio', G.governorDebug().pixelRatio > shedTo, { shedTo, now: G.governorDebug().pixelRatio });
 
 // CONTROL: the same slow drive on the desktop DOES shed pixels (the measurement has a subject)
 stub.renderer.xr.isPresenting = false;
 const r3 = ratios.length;
-for (let i = 0; i < 60; i++) G.governPerformance(12);
+for (let i = 0; i < 60; i++) tick(12);
 check('control — desktop, slow: the governor DOES move the pixel ratio', ratios.length > r3 && hist().some((h) => /− pixels/.test(h)), { writes: ratios.slice(r3), hist: hist().slice(-4) });
 
+// a decision made on the desktop and still pending at VR entry must wait for exit (#32)
+{ stub.renderer.xr.isPresenting = false;
+  const pr0 = G.governorDebug().pixelRatio; let decided = false;
+  for (let i = 0; i < 80 && !decided; i++) { G.governPerformance(i < 40 ? 72 : 12); decided = G.governorDebug().pixelRatio !== pr0; }
+  const w0 = ratios.length; stub.renderer.xr.isPresenting = true; G.applyPendingPixelRatio();
+  check('a change still pending at VR entry is NOT applied mid-session', !decided || ratios.length === w0, { decided, writes: ratios.slice(w0) });
+  stub.renderer.xr.isPresenting = false; G.applyPendingPixelRatio();
+  check('…it lands after exit', !decided || ratios.length === w0 + 1, { decided, writes: ratios.slice(w0) }); }
+// THE BLACK FRAMES (09-28): a pixel-ratio change resizes (and so clears) the canvas; decided after the draw, it must
+// not reach the renderer until the next frame's apply step, which runs BEFORE render
+{ stub.renderer.xr.isPresenting = false;
+  for (let i = 0; i < 80; i++) tick(72);                          // back to base
+  const before = ratios.length, pr0 = G.governorDebug().pixelRatio;
+  let decided = false;
+  for (let i = 0; i < 60 && !decided; i++) { G.governPerformance(12); decided = G.governorDebug().pixelRatio !== pr0; }
+  check('(setup) the governor decided a pixel-ratio change', decided, { pr0, now: G.governorDebug().pixelRatio });
+  check('its decision does NOT touch the renderer after the frame (no canvas resize, no cleared frame)', ratios.length === before, ratios.slice(before));
+  G.applyPendingPixelRatio();
+  check('…the next frame start applies it, once', ratios.length === before + 1 && ratios.at(-1) === G.governorDebug().pixelRatio, ratios.slice(before));
+  G.applyPendingPixelRatio();
+  check('…and only once', ratios.length === before + 1, ratios.slice(before)); }
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

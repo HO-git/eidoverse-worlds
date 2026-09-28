@@ -86,7 +86,7 @@ import { budgetStats } from './lib/framebudget.js';
 import { pending, P, onIdle, laneStats as schedLaneStats } from './lib/scheduler.js';
 import { laneStats as loadLaneStats } from './lib/loadwork.js';
 import { colliderCacheStats } from './lib/colliders.js';
-import { governPerformance, governorDebug, whenCalm } from './lib/governor.js';
+import { governPerformance, governorDebug, whenCalm, applyPendingPixelRatio } from './lib/governor.js';
 import { registerSystem, startFrame, frameDebug } from './lib/frame.js';
 import { perf } from './lib/perf.js';
 import { renderWorld, drawStats, setDrawBatching } from './lib/render.js';
@@ -555,6 +555,7 @@ registerSystem('send-pose', (dt, t, now) => sendPose(now));
 // XR: read hands → fill intent (updateMe already moved the body) → rig follows
 registerSystem('xr', (dt) => updateXR(dt));
 registerSystem('xrvignette', (dt) => tickXRVignette(dt));   // comfort tunnel, on the XR camera (Settings › VR)
+registerSystem('pixel-ratio', () => applyPendingPixelRatio());   // a resize clears the canvas: before the draw, never after
 registerSystem('render', renderWorld);
 registerSystem('xrmirror', () => tickXRMirror());           // desktop view while presenting (Settings › VR)
 // radial-menu actions: the ring speaks through the same flows the keyboard does

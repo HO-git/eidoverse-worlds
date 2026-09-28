@@ -185,7 +185,7 @@ globalThis.__xrPassSplit = separateXRPass(renderer);
 // No pipeline links on the render path: a missed warm pops in late instead of freezing the browser (syncgate.js). ?syncgate=0 = census only.
 globalThis.__syncGate = installSyncGate(renderer, { tee: (l, now) => (now ? teeNow(l) : tee(l)), gate: CONFIG.params.get('syncgate') !== '0' });
 // A lost context (GPU watchdog reset, driver crash) goes back to the live world instead of a black canvas (gpulost.js).
-globalThis.__gpuLost = installGpuLostRecovery({ canvas, renderer, tee, onStop: (why) => bus.emit('gpu-lost-stop', { why }) });
+globalThis.__gpuLost = installGpuLostRecovery({ canvas, renderer, tee, onStop: (why, rule) => bus.emit('gpu-lost-stop', { why, rule }) });
 // the splash watchdog (index.html) stops worrying: modules resolved and the
 // GPU answered — everything past this point can report its own failures
 globalThis.__ewEngineUp = true;

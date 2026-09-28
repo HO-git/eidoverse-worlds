@@ -51,7 +51,7 @@ export function installGpuLostRecovery({ canvas, renderer, tee = () => {}, onSto
     const act = gpuLostAction(Date.now(), recent);
     try { store?.setItem(GPU_LOST_KEY, JSON.stringify(act.recent)); } catch {}
     tee(`[gpu] LOST (${why}) — ${act.reload ? 'reloading into the live world' : `${act.why}, not reloading again`}`);
-    if (!act.reload) { onStop(why); return; }
+    if (!act.reload) { onStop(why, act.why); return; }
     try { store?.setItem(GPU_RECOVERED_KEY, why); } catch {}
     // This reload is deliberate, not a crash: disarm the lite tripwire (index.html) or the
     // recovery lands the person in the phone client — a boot that armed it and has not yet

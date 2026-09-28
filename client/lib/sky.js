@@ -590,6 +590,10 @@ async function renderEidoverse(a) {
   if (fresh && (holdLiveDomes(skyApi, 'until the real sky is ready') || liveDomesHeld())) {
     interimFor = skyApi;
     showInterimSky(skyInner?.uniforms);
+    // Under the boot splash (owner, 09-27 22:03: 'move the pre-build step into the splash'): boot waits on this warm, so
+    // the VR cap's bake program compiles while the splash is still up (its stall freezes the splash, not the world).
+    // Capped at 40 s, inside the splash's own 45 s ceiling; a cold cache that takes longer finishes in-world.
+    if (!BAKED_TIERS[cloudQuality]) await Promise.race([prebuildCapBake(skyApi), new Promise((r) => setTimeout(r, 40000))]);
     resolveSkyWarm();
     finishSky(skyApi).catch((e) => report('sky finish', e));
     return;
@@ -627,7 +631,7 @@ async function finishSky(api) {
   interimFor = null;
   hideInterimSky();
   tee(`[sky] the real sky is up (${bakedActive() ? 'baked dome' : 'live domes'}); the interim gradient is gone`);
-  if (!BAKED_TIERS[cloudQuality]) prebuildCapBakeWhenHeadset(api);
+  if (!BAKED_TIERS[cloudQuality] && capPrebuiltFor !== api) prebuildCapBakeWhenHeadset(api);   // a build that wasn't under the splash
 }
 
 // ENTERING VR FROM HIGH (owner, 09-27 21:52: 'pre-building medium in anticipation of a headset entry is a good idea').
@@ -637,13 +641,18 @@ async function finishSky(api) {
 // ~15 s after the sky is up. A bake's shader doesn't depend on its size, so it's built by a 64x32 bake of medium's
 // pass count into a TEMPORARY target (the live tier's own env target and reflection fallback are put back), and
 // retainBakeGraphs keeps that graph, so its program stays cached for the entry's 4096 bake.
-async function prebuildCapBakeWhenHeadset(api) {
-  let ok = false;
-  try { ok = !!(await navigator.xr?.isSessionSupported?.('immersive-vr')); } catch { /* no WebXR */ }
-  if (!ok) return;
-  await new Promise((r) => setTimeout(r, 15000));
+let capPrebuiltFor = null;   // the sky build whose cap program is already compiled (or compiling)
+const headsetPresent = async () => { try { return !!(await navigator.xr?.isSessionSupported?.('immersive-vr')); } catch { return false; } };
+async function prebuildCapBake(api) {
+  if (capPrebuiltFor === api || !(await headsetPresent())) return;
   if (skyApi !== api || BAKED_TIERS[cloudQuality] || xrPresenting) return;
+  capPrebuiltFor = api;
   await prebuildBakeProgram(BAKED_TIERS[CAP_TO].cloudPasses);
+}
+async function prebuildCapBakeWhenHeadset(api) {
+  if (!(await headsetPresent())) return;
+  await new Promise((r) => setTimeout(r, 15000));
+  await prebuildCapBake(api);
 }
 /** Compile a bake program (the given pass count) without touching the sky's own env target. Exported for probes. */
 export async function prebuildBakeProgram(cloudPasses, opts = {}) {

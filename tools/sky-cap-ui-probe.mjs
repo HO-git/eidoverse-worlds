@@ -1,6 +1,6 @@
-// sky-cap-ui-probe — in a headset 'live' clouds are unavailable (owner, 09-27): World › sky greys the 'live' option,
-// and when live is YOUR choice a note says what runs instead and why; both go away at exit. Clouds start at 'low' and
-// 'live' is only ever HELD (a headset holds rebuilds), then replaced by 'low' before exit: nothing heavy builds headless.
+// sky-cap-ui-probe — in a headset 'high' (live-march) clouds are unavailable (owner, 09-27): World › sky greys 'high',
+// and when high is YOUR choice a note says what runs instead and why; both go away at exit. Clouds start at 'low' and
+// 'high' is only ever HELD (a headset holds rebuilds), then replaced by 'low' before exit: nothing heavy builds headless.
 // Real client + IWER.
 //   bun tools/sky-cap-ui-probe.mjs
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
@@ -26,16 +26,16 @@ try {
     const wdom = [...document.querySelectorAll('#sec-sky')][0];
     if (!wdom?.querySelector('.cloud-cap-note')) document.querySelector('#sec-sky .head')?.click();
     await new Promise((r) => setTimeout(r, 300));
-    const sel = [...document.querySelectorAll('#sec-sky select')].find((s) => [...s.options].some((o) => o.value === 'live'));
+    const sel = [...document.querySelectorAll('#sec-sky select')].find((s) => [...s.options].some((o) => o.value === 'high'));
     const note = document.querySelector('#sec-sky .cloud-cap-note');
-    return { liveDisabled: [...(sel?.options ?? [])].find((o) => o.value === 'live')?.disabled ?? null, note: note && !note.hidden ? note.textContent : null };
+    return { liveDisabled: [...(sel?.options ?? [])].find((o) => o.value === 'high')?.disabled ?? null, note: note && !note.hidden ? note.textContent : null };
   });
   const inVR = await ui();
-  await pg.evaluate(async () => (await import('./lib/sky.js')).setCloudQuality('live'));
+  await pg.evaluate(async () => (await import('./lib/sky.js')).setCloudQuality('high'));
   await pg.waitForTimeout(400);
   const capped = await ui();
   const running = await pg.evaluate(async () => { const s = await import('./lib/sky.js'); return { q: s.getCloudQuality(), choice: s.getCloudChoice(), cap: s.cloudCap(), held: s.skyHeld() }; });
-  await pg.evaluate(async () => (await import('./lib/sky.js')).setCloudQuality('low'));   // replace the cap before exit (no live build headless)
+  await pg.evaluate(async () => (await import('./lib/sky.js')).setCloudQuality('low'));   // replace the cap before exit (no live-march build headless)
   await pg.waitForTimeout(400);
   const replaced = await ui();
   await pg.evaluate(async () => { await window.__iwerDevice.activeSession?.end(); });
@@ -43,11 +43,11 @@ try {
   await pg.waitForTimeout(800);
   const out = await ui();
   console.log('   ', JSON.stringify({ inVR, capped, running, replaced, out }));
-  check("in VR 'live' is greyed", inVR.liveDisabled === true, JSON.stringify(inVR));
-  check('…with no note while live is not your choice', inVR.note === null, inVR.note);
-  check('choosing live in VR: runs high, remembers live, says why', running.cap?.from === 'live' && running.choice === 'live' && /high \(baked\)/.test(capped.note ?? ''), JSON.stringify({ running, note: capped.note }));
+  check("in VR 'high' (the live march) is greyed", inVR.liveDisabled === true, JSON.stringify(inVR));
+  check('…with no note while high is not your choice', inVR.note === null, inVR.note);
+  check('choosing high in VR: runs medium, remembers high, says why', running.cap?.from === 'high' && running.choice === 'high' && /medium \(baked\)/.test(capped.note ?? ''), JSON.stringify({ running, note: capped.note }));
   check('choosing another level clears the note', replaced.note === null, replaced.note);
-  check("out of VR 'live' is available again, no note", out.liveDisabled === false && out.note === null, JSON.stringify(out));
+  check("out of VR 'high' is available again, no note", out.liveDisabled === false && out.note === null, JSON.stringify(out));
   check('no page errors', errs.length === 0, errs.slice(0, 3).join(' | '));
 } catch (e) { check('probe ran', false, e.message); }
 finally { try { await browser.close(); } catch {} try { await world.close(); } catch {} }

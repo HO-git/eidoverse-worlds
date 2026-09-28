@@ -117,7 +117,7 @@ export function paintSky(body) {
     (v) => { setCloudQuality(v); flashHint(`clouds: ${v} (yours only). The first time a setting is used, your GPU may pause a few seconds to compile it`); });
   cqRow.title = 'local performance setting — not shared with the world';
   body.appendChild(cqRow);
-  // In a headset 'live' is unavailable (owner, 09-27): greyed, and when it's YOUR choice, a note says what runs instead
+  // In a headset 'high' (the live march) is unavailable (owner, 09-27): greyed, and when it's YOUR choice, a note says what runs instead
   // and why. Shown only in VR; it goes away at exit.
   const cqNote = document.createElement('div');
   cqNote.className = 'cloud-cap-note';
@@ -126,10 +126,10 @@ export function paintSky(body) {
   body.appendChild(cqNote);
   let inXR = skyInXR();   // the panel may first paint mid-session
   const syncCap = () => {
-    const live = [...cq.options].find((o) => o.value === 'live');
+    const live = [...cq.options].find((o) => o.value === 'high');
     if (live && live.disabled !== inXR) live.disabled = inXR;
     const cap = cloudCap();
-    const text = inXR && cap ? `In VR your clouds run at high (baked). Live clouds march every pixel for each eye, which halves a headset's frame rate; your live setting comes back when you leave VR.` : '';
+    const text = inXR && cap ? `In VR your clouds run at medium (baked). High clouds march every pixel for each eye, which halves a headset's frame rate; your high setting comes back when you leave VR.` : '';
     if (cqNote.textContent !== text) cqNote.textContent = text;
     if (cqNote.hidden !== !text) cqNote.hidden = !text;
     cq.value = getCloudChoice();

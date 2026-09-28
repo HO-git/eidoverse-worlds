@@ -609,7 +609,14 @@ async function finishSky(api) {
   await worldSettled();
   if (skyApi !== api) return;            // torn down / rebuilt while we waited: the newer build owns the sky
   const bake = beginWork('sky bake');
-  try { await ensureSkyBake(); } finally { bake.end(); }
+  if (!BAKED_TIERS[cloudQuality]) {
+    // the live tier: its env bake only lights reflections, so the clouds don't wait for it. On the owner's rig (09-27
+    // 20:30) that bake's cold link took 120 s while the domes were ready sooner; the sky sat on the gradient throughout.
+    // Both compile side by side; the domes show as soon as theirs are linked.
+    ensureSkyBake().catch((e) => report('sky env bake', e)).finally(() => bake.end());
+  } else {
+    try { await ensureSkyBake(); } finally { bake.end(); }
+  }
   phase('bake');
   if (bakedActive()) await whenBakeReady();
   // No baked dome (the high tier, a failed attach): the live domes ARE the sky. Compile them off the render path,
@@ -945,7 +952,7 @@ async function ensureSkyBake() {
       console.warn('[sky] baked dome could not attach — staying on the live cloud march');
       tee('[sky] baked dome could not attach — the live cloud march stays (in a headset too)');
     }
-  } else releaseLiveDomes();
+  } else if (!interimFor) releaseLiveDomes();   // while the sky is arriving, finishSky releases them once COMPILED
 }
 
 // Re-baking the environment map.

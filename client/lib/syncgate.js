@@ -18,6 +18,7 @@
 // naming object, material and the generated shader sizes — the question the trace could not answer: WHICH material.
 
 const SLOW_MS = 250;
+const GIANT_FS = 400000;   // chars of fragment source: only the sky's cloud programs are this big
 // the world's own pass: no user target bound — or the target three's _renderScene binds for it (its tone-mapping
 // framebuffer, isPostProcessingRenderTarget ~63249; the XR eye target in a session). Anything else is someone's target.
 const isWorldPass = (rt) => rt === null || !!rt?.isPostProcessingRenderTarget || !!rt?.isXRRenderTarget;
@@ -52,7 +53,15 @@ export function installSyncGate(renderer, { tee = () => {}, gate = true } = {}) 
     // an env/PMREM, a capture — and a skipped draw there is not a late pop-in but a permanently wrong texture (the sky
     // boot bake would come out black). Those keep upstream behaviour; their owners warm them (sky_baked compiles its
     // bands with compileAsync first).
-    const deferring = gate && !!be.parallel && isWorldPass(renderer.getRenderTarget());
+    // …and the BACKSTOP (owner, 09-27: 'it simply can't block the rest of the world'): a GIANT program asked for
+    // synchronously into a target defers too, whoever asks. On her GPU a 1.76 MB sky program built this way blocked
+    // 89–94 s, Windows reset the driver, the page reloaded and asked again: a loop that never finishes. Deferred, that
+    // one draw into the target is skipped until the program links (a stale or empty texel set, redrawn by its owner's
+    // next pass) instead of freezing Chrome. Measured sizes: world materials ~66 k, the sky programs 0.9–1.8 M.
+    const fsLen = renderObject.pipeline?.fragmentProgram?.code?.length ?? 0;
+    const giantAside = fsLen > GIANT_FS && !isWorldPass(renderer.getRenderTarget());
+    const deferring = gate && !!be.parallel && (isWorldPass(renderer.getRenderTarget()) || giantAside);
+    if (giantAside && gate && be.parallel) stats.intoTargetDeferred = (stats.intoTargetDeferred ?? 0) + 1;
     let ret;
     const mine = [];
     if (deferring) {
@@ -75,7 +84,7 @@ export function installSyncGate(renderer, { tee = () => {}, gate = true } = {}) 
       if (ms >= SLOW_MS) stats.slow.push(row);
       // a BLOCKING build over a second: who asked for it (09-27: an 89 s 1.76 MB build into a target froze the owner's
       // GPU process and its caller wasn't in the log). The stack is only taken on this rare path.
-      const who = !deferring && ms >= 1000 ? ` via ${String(new Error().stack ?? '').split('\n').slice(2, 12).map((l) => l.trim().replace(/^at /, '').replace(/\(?https?:\/\/[^/]+\/(lib\/)?/, '').replace(/\)$/, '')).join(' < ')}` : '';
+      const who = (giantAside || (!deferring && ms >= 1000)) ? ` into ${(() => { const t = renderer.getRenderTarget(); return t ? `${t.texture?.name || t.constructor?.name || 'target'} ${t.width}x${t.height}` : 'canvas'; })()} via ${(() => { const L = Error.stackTraceLimit; Error.stackTraceLimit = 60; try { return String(new Error().stack ?? ''); } finally { Error.stackTraceLimit = L; } })().split('\n').slice(3, 40).map((l) => l.trim().replace(/^at /, '').replace(/\(?https?:\/\/[^/]+\/(lib\/)?/, '').replace(/\)$/, '')).join(' < ')}` : '';
       if (ms >= SLOW_MS || row.fs > 60000) tee(`[syncgate] render-path build ${row.ms} ms${deferring ? ' (deferred link)' : ' (BLOCKING)'} ${row.object} ${row.material} vs ${row.vs} fs ${row.fs} chars skinned=${row.skinned} morphs=${row.morphs} lights=${row.lights}${who}`, ms >= 1000);
       // how long a big deferred program took to link, i.e. how long its object stayed off screen
       if (deferring && row.fs > 60000 && mine.length) Promise.all(mine).then(

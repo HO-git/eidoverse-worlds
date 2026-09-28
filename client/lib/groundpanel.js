@@ -89,7 +89,7 @@ export function paintGround(body) {
       if (g && !g.clear) {
         const cap = getGrassQuality(), shed = getGrassShed(), eff = getGrassDensity();
         if (cap === 'off') you = 'no grass drawn (your grass⚙ is off)';
-        else if (eff < 1) you = `drawing ×${eff} of it (${shed < 1 ? `auto governor ×${shed}` : ''}${shed < 1 && cap !== 'full' ? ', ' : ''}${cap !== 'full' ? `your grass⚙ ${cap}` : ''})`;
+        else if (eff < 1) you = `drawing ×${+eff.toFixed(2)} of it (${shed < 1 ? `auto governor ×${+shed.toFixed(2)}` : ''}${shed < 1 && cap !== 'full' ? ', ' : ''}${cap !== 'full' ? `your grass⚙ ${cap}` : ''})`;
       }
       lines.set(world, you);
     };

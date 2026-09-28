@@ -109,8 +109,9 @@ try {
         .filter((c) => c.owner),
       // the owner's rule for the capability card (09-27): it may cover anything while its dismiss button is visible
       // and clickable, i.e. the pixel at the button's centre is the button
-      capDismissable: (() => { const bt = document.querySelector('.capnotice .cn-ok'); if (!bt) return null; const r = bt.getBoundingClientRect();
-        if (!r.width || !r.height) return false; const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return bt === h || bt.contains(h); })(),
+      capDismissable: (() => { const bts = [...document.querySelectorAll('.capnotice .cn-ok')]; if (!bts.length) return null;
+        return bts.every((bt) => { const r = bt.getBoundingClientRect(); if (!r.width || !r.height) return false;
+          const h = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return bt === h || bt.contains(h); }); })(),   // EVERY item's (U4)
       // how many control surfaces were MEASURABLE at all. A check that reports
       // green from an empty collection is worse than no check: at 390x844 the
       // emote bar is hidden by fitsDefaults, so `.frame .tile` yields nine

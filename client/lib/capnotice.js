@@ -2,7 +2,6 @@
 // path. Toasts fade in seconds; a capability is for the whole visit.
 import { backendName } from './core.js';
 import { bus } from './base.js';
-import { getFrame } from './frames.js';
 import { takeGpuRecovered } from './gpulost.js';
 
 const LS = 'ew-capnotice-dismissed';
@@ -41,20 +40,6 @@ function show(key, title, body) {
     // subscribed again, leaking one listener per show/dismiss cycle.
     setAnchor = () => { if (card) card.dataset.anchor = mq.matches ? 'stretch' : 'right'; };
 
-    // ONE DIRECTION, by the owner's rule (15:04): "Compute emote bar first relative to
-    // the dock. capnotice lands under the emote bar (or just over it, tbh, because you
-    // can dismiss it)."
-    //
-    // This replaces a CYCLE. An earlier attempt computed the card's top from every
-    // obstacle above it, the bar included — while emotebar.js's roomFor() computes the
-    // bar's width from every obstacle in its band, the card included. Each fed the
-    // other: 361 on one run, 95 on the next, no stable answer.
-    //
-    // emotebar.js had already written down what moving the card into that band would
-    // do: "clearRight becomes ~innerWidth and room goes negative (measured -6, which
-    // fed snapTo a negative width and reflowed the 9-across bar to a 48x350 column)."
-    // That is exactly what reached a phone — nine tiles in one 48px column down the
-    // right edge. The card is now removed from that list and placed SECOND instead.
     // TOP-CENTRE, OVER EVERYTHING, UNTIL DISMISSED (owner, 09-27). This used to measure the rail, the emote bar and
     // every frame button in its span and drop below them (#185 B2: 'dismissibility is not reachability'). With the
     // layouts people actually build, the card wandered: mid-screen over the body, half across a panel. The owner's
@@ -62,15 +47,12 @@ function show(key, title, body) {
     // each item also dismisses itself for this visit after AUTO_MS (paused while the pointer is on it), so nothing
     // stays covered for long even if nobody clicks. boot-check tests exactly that rule.
     placeTop = () => { if (card) card.style.top = '8px'; };
-    document.body.appendChild(card);   // IN THE DOM BEFORE THE FIRST MEASURE: a detached card's rect is all zeros, every occupant test misses, and the card is born over the emote bar (pre-review B1)
+    document.body.appendChild(card);
     const repaint = () => { setAnchor(); placeTop(); };
     repaint();
-    mq.addEventListener('change', repaint);
-    addEventListener('resize', repaint);
-    addEventListener('dockmoved', repaint);
+    mq.addEventListener('change', repaint);   // the anchor follows the breakpoint; the top is fixed, so nothing else to watch
     unwatch = () => {
-      mq.removeEventListener('change', repaint); removeEventListener('resize', repaint);
-      removeEventListener('dockmoved', repaint);
+      mq.removeEventListener('change', repaint);
       setAnchor = null; placeTop = null; unwatch = null;
     };
   }
@@ -84,8 +66,9 @@ function show(key, title, body) {
   const close = () => { clearTimeout(auto); item.remove(); if (card && !card.childElementCount) { card.remove(); card = null; unwatch?.(); } };
   // the fallback: gone for this visit after AUTO_MS unless the pointer is on it (not 'don't show again')
   const arm = () => { clearTimeout(auto); auto = setTimeout(close, AUTO_MS); };
-  item.addEventListener('mouseenter', () => clearTimeout(auto));
-  item.addEventListener('mouseleave', arm);
+  // a real mouse only: on touch the compat enter had no leave, and cancelled the auto-dismiss for good (review U3)
+  item.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') clearTimeout(auto); });
+  item.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') arm(); });
   arm();
   item.querySelector('.cn-ok').onclick = close;
   if (ESSENTIAL.has(key)) item.querySelector('.cn-never').remove();

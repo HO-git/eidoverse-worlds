@@ -323,7 +323,9 @@ export function paintSky(body) {
   // rows (owner, 09-27: first 'gray out … inoperable', then 'hide settings that aren't relevant'); the clock row itself
   // says what's driving the hour. The presets still set weather/clouds/light, but not their hour.
   const syncClockUi = () => {
-    const real = ck.value !== '';
+    // the clock the commit will SEND, not what the select shows: while you have unsaved edits a remote clock change
+    // doesn't reach the select (review 3, L4)
+    const real = gather().clock === 'real';
     for (const k of ['hours', 'rate']) {
       const input = inputs[k], row = input?.parentNode; if (!input || !row) continue;
       input.disabled = real;
@@ -366,8 +368,8 @@ export function paintSky(body) {
   body._sync = () => {
     const a = skyArgs();
     for (const [key, , , , , dflt] of SLIDERS) {
-      // under a real clock hours/rate live in dormantRated (#65); show them
-      // (disabled) as what the world would return to
+      // under a real clock hours/rate live in dormantRated (#65): load them (the rows are hidden) as what the world
+      // would return to
       inputs[key].value = a[key] ?? a.dormantRated?.[key] ?? dflt;
       inputs[key].parentNode.querySelector('.v').textContent = inputs[key].value;
     }

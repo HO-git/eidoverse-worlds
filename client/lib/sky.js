@@ -180,7 +180,12 @@ bus.on('xr:state', (on) => {
     tee(`[sky] VR on WebGL: clouds capped ${CAP_FROM} → ${CAP_TO} (baked) for the session (the saved choice stays ${CAP_FROM})`);
     bus.emit('cloud-cap', { from: CAP_FROM, to: CAP_TO });
     rebuildInXR = true;
-    setCloudQuality(CAP_TO, { persist: false }).catch((e) => report('sky VR cap', e)).finally(() => { rebuildInXR = false; });
+    // after the entry curtain is actually on screen (xr.js emits it), so the swap's bake doesn't take the GPU process
+    // before the headset's first frames: that showed black or the runtime's own construct (owner's rig 09-27 22:24)
+    const go = () => { off?.(); clearTimeout(tm);
+      setCloudQuality(CAP_TO, { persist: false }).catch((e) => report('sky VR cap', e)).finally(() => { rebuildInXR = false; }); };
+    let off = null, tm = 0;
+    off = bus.on('xr:curtain-shown', go); tm = setTimeout(go, 4000);
   } else if (!on && xrCappedFrom) {
     const back = xrCappedFrom; xrCappedFrom = null;
     tee(`[sky] VR exit: clouds back to ${back}`);
@@ -677,18 +682,26 @@ async function prebuildCapBakeWhenHeadset(api) {
 export async function prebuildBakeProgram(cloudPasses, opts = {}) {
   const api = skyApi, sys = skyInner;
   if (!api?.bakeEnv || !sys) return false;
-  const keepT = sys._envTarget, keepFb = sys._envFbNode?.value, t0 = performance.now();
-  sys._envTarget = null;
-  try {
-    await api.bakeEnv({ width: 64, height: 32, cloudPasses, ...opts });
-    await globalThis.__syncGate?.whenGiantLinked?.();
-  } catch (e) { report('sky prebuild', e); }
-  finally {
-    const tmp = sys._envTarget;
-    sys._envTarget = keepT;
-    if (sys._envFbNode && keepFb !== undefined) sys._envFbNode.value = keepFb;
-    if (tmp && tmp !== keepT) tmp.dispose();
-  }
+  const t0 = performance.now();
+  const lock = sys.__withBakeLock ?? ((fn) => fn());
+  const raw = sys.__rawBakeEnv ?? sys.bakeEnv;
+  // the whole swap under the bake lock: no other bake may see the temporary target (see serializeBakes)
+  await lock(async () => {
+    const keepT = sys._envTarget, keepFb = sys._envFbNode?.value;
+    sys._envTarget = null;
+    try {
+      // through the api (it adds the world's own bake options), with the lock's wrapper stepped aside for this call
+      const wrapped = sys.bakeEnv; sys.bakeEnv = raw;
+      try { await api.bakeEnv({ width: 64, height: 32, cloudPasses, ...opts }); } finally { sys.bakeEnv = wrapped; }
+      await globalThis.__syncGate?.whenGiantLinked?.();
+    } catch (e) { report('sky prebuild', e); }
+    finally {
+      const tmp = sys._envTarget;
+      sys._envTarget = keepT;
+      if (sys._envFbNode && keepFb !== undefined) sys._envFbNode.value = keepFb;
+      if (tmp && tmp !== keepT) tmp.dispose();
+    }
+  });
   tee(`[sky] headset present: the VR cap's bake program (${cloudPasses} passes) prebuilt on the desktop in ${(performance.now() - t0).toFixed(0)} ms`);
   return true;
 }
@@ -728,6 +741,21 @@ export const skyForProbe = () => ({ api: skyApi, sys: skyInner });
 // back re-created it: a ~3 s GPU-process stall even with Chrome's blob cache. three looks programs up by shader SOURCE
 // and releases one only when no live material uses it, so the evicted graphs are kept (their dispose deferred, one per
 // key) and a rebuild of the same graph is a program-cache hit. All of them go at teardown. Skye's file is untouched.
+// ONE BAKE AT A TIME (owner's rig 09-27 22:24–22:30: the VR sky went black). Every bake shares the engine's single
+// _envTarget and _envBake. The VR prebuild swapped a temporary target in and held it for its whole cold link (11 min);
+// meanwhile the live tier's env bake and then the VR cap's 4096 bake ran INTO that temporary; when the prebuild finished
+// it put the old target back and disposed the temporary, which was the target the cap's bake had just drawn: attach
+// failed, black sky. Now every sys.bakeEnv (all callers go through it) queues behind the one before, and the prebuild
+// holds the queue around its whole swap. A queued bake for a torn-down sky still runs (bakeEnv checks nothing), but
+// the callers already stop on a generation/skyApi change.
+function serializeBakes(sys) {
+  if (!sys?.bakeEnv || sys.__rawBakeEnv) return;
+  const raw = sys.bakeEnv.bind(sys);
+  let tail = Promise.resolve();
+  sys.__rawBakeEnv = raw;
+  sys.__withBakeLock = (fn) => { const run = tail.then(fn, fn); tail = run.catch(() => {}); return run; };
+  sys.bakeEnv = (...a) => sys.__withBakeLock(() => raw(...a));
+}
 function retainBakeGraphs(sys) {
   if (!sys || Object.getOwnPropertyDescriptor(sys, '_envBake')?.get) return;
   let cur = sys._envBake ?? null;
@@ -891,6 +919,7 @@ async function buildSky(a, world, wantAudio) {
     // shrinks to one option flag.
     skyInner = skyApi?._internals?.sky ?? null;
     retainBakeGraphs(skyInner);
+    serializeBakes(skyInner);
     // held from birth, the domes were never in the scene for the diff above: claim them by identity, so a teardown
     // (which puts held domes back first) still finds and frees them
     for (const d of skyInner?.domes ?? []) if (d && !skyOwned.includes(d)) skyOwned.push(d);

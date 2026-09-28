@@ -1004,6 +1004,8 @@ export function leaveVR(why = 'verb') {
 // one huge gap; a runtime stall shows as the t0→first gap. One tee line, then it retires.
 let entryClock = null;
 const buildTotals = { programs: 0, programMs: 0, pipelines: 0, syncPipelines: 0, syncMs: 0 };   // sync = created with promises===null on a render frame (blocking link)   // lifetime — the exit probe reads deltas off it (entryClock is nulled 12 s after entry)
+let skyArriving = false;   // sky.js 'sky-busy': the gradient's up or a tier swap is compiling/baking
+bus.on('sky-busy', (b) => { skyArriving = !!b; });
 let curtainState = null;   // { armed, t0 } — the compile kicks off on the first presenting frame
 let eyeBase = null;
 let consoleTapped = false, shaderTees = 0;
@@ -1046,7 +1048,13 @@ export function updateXR(dtSec = 1 / 72) {
   }
   if (curtainState && !curtainState.armed && !curtainState.down) {
     const frames = (perf.frameNo ?? 0) - curtainState.f0, ms = performance.now() - curtainState.t0;
-    if ((curtainState.resolved && frames >= 2) || ms > 15000) {
+    // the curtain is on screen: the sky's entry swap may start its heavy work now (it waits for this, so the headset
+    // shows the curtain rather than black while that work occupies the GPU process)
+    if (frames >= 3 && !curtainState.shown) { curtainState.shown = true; bus.emit('xr:curtain-shown'); }
+    // …and the curtain covers the WHOLE transition, the sky's arrival included (owner, 09-27 22:28: 'I liked having the
+    // splash up for the entire transition'): today's world-first sky took the sky out of the entry compile, so the
+    // curtain dropped in under a second, before the cap's swap even began. Still capped at 15 s.
+    if ((curtainState.resolved && frames >= 2 && curtainState.shown && !skyArriving) || ms > 15000) {
       curtainState.down = true; setXRCurtain(false);
       const clock = curtainState.clock;
       tee(`[xr] curtain #${sessionNo} down (${curtainState.resolved ? 'compile resolved' : 'CAP 15 s'}) after ${ms.toFixed(0)} ms — sync pipelines so far ${buildTotals.syncPipelines} (${buildTotals.syncMs.toFixed(0)} ms), frames under it ${frames}, programs ${clock?.programs ?? '?'} in ${clock?.programMs?.toFixed(0) ?? '?'} ms, pipelines ${clock?.pipelines ?? '?'}`);

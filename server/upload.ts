@@ -196,6 +196,13 @@ async function pumpOptimize() {
         optQueue.length = 0; break;
       }
       const code = await proc.exited;
+      // what a new variant was built FROM (freshOver), recorded the moment the child is gone — before anything else
+      // is awaited: until then the new bytes sit beside the previous build's sidecar and read stale (the safe
+      // direction: provisional, never old bytes answered as fresh). A store original's needs none.
+      if (code === 0 && existsSync(dest)) {
+        if (srcId) try { writeFileSync(sourceSidecar(dest), JSON.stringify(srcId)); } catch { /* best effort: reads stale until rebuilt */ }
+        else if (existsSync(sourceSidecar(dest))) try { rmSync(sourceSidecar(dest)); } catch { /* best effort */ }
+      }
       const err = (await new Response(proc.stderr).text()).trim();
       if (capped && (code === 126 || code === 127)) {
         // environmental, like a missing dep: no marker, and no point grinding on
@@ -212,9 +219,6 @@ async function pumpOptimize() {
         undefer(dest);
         // a verdict that was re-measured and answered differently is history
         if (existsSync(failed)) try { rmSync(failed); } catch { /* best effort */ }
-        // what this variant was built FROM (freshOver); a store original's needs none
-        if (srcId) try { writeFileSync(sourceSidecar(dest), JSON.stringify(srcId)); } catch { /* best effort: reads as legacy (mtime) */ }
-        else if (existsSync(sourceSidecar(dest))) try { rmSync(sourceSidecar(dest)); } catch { /* best effort */ }
         if (mode === "--lod") pruneOldLodGenerations(src, dest);
         const ratio = (Bun.file(src).size / Math.max(1, Bun.file(dest).size)).toFixed(1);
         console.log(mode ? `[ktx2] ${base} → ${basename(dest)} (${ratio}x)` : `[store] optimized ${base} (${ratio}x)`);

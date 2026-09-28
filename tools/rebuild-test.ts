@@ -62,7 +62,8 @@ check("store object: variants rebuilt beside the original, .deferred cleared", !
   await optIdle();
   const b0 = runs().length;
   const { KTX2_RECIPE } = await import("../server/store-variants.ts");
-  writeFileSync(join(root, "refuse-once"), `[optimize] not smaller (1 -> 2, 1ms) recipe=${KTX2_RECIPE} — keeping original`);   // a verdict that STANDS
+  const { toolsStamp } = await import("../server/tools-stamp.ts");
+  writeFileSync(join(root, "refuse-once"), `[optimize] not smaller (1 -> 2, 1ms) recipe=${KTX2_RECIPE} ${toolsStamp()} — keeping original`);   // a verdict that STANDS
   rebuildAsset("store/abc123.glb"); rebuildAsset("store/abc123.glb"); await optIdle();
   const mine = runs().slice(b0);
   check("a forced re-ask queued behind an in-flight refusal still runs (KTX2 twice)", mine.filter((l) => l.startsWith("--ktx2 ")).length === 2, mine);

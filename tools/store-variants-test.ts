@@ -51,9 +51,10 @@ import { join } from "node:path";
 import { Document, NodeIO } from "@gltf-transform/core";
 import { PNG } from "pngjs";
 import { isStoreOriginal, isKtx2Variant, isServingArtifact, ktx2VariantPath, storeShadowsMissing, KTX2_SUFFIX,
-  capTexels, verdictStands, recipeStamp, KTX2_TEXEL_CAP,
+  capTexels, verdictStands, recipeStamp, KTX2_TEXEL_CAP, KTX2_RECIPE,
   LOD_RECIPE, LOD_GEN, LOD_MIN_VERTS, lodRecipeFor, lodVariantPath, isLodVariant, lodVerdictKind, lodVerdictFinal, hasStamp } from "../server/store-variants.ts";
 import { findKtx2Encoder, isKtx2Container, lodGpuRefusal } from "../server/optimize.ts";
+import { toolsStamp, toolsDigest, toolVersions, currentToolsDigest, hasToolsStamp } from "../server/tools-stamp.ts";
 import { KTX2_KEY, KTX2_QUERY, wantsKtx2, withKtx2, keyFromVersion, negotiate } from "../shared/ktx2.js";
 
 let failures = 0;
@@ -123,7 +124,31 @@ console.log("\nthe store's KTX2 shadow (store-variants.ts, shared/ktx2.js):\n");
   // the verdict: a size refusal is only as durable as its recipe
   const prodMarker = "[optimize] not smaller (17600988 -> 26716692, 91234ms) — keeping original";   // the show box, 2026-08-25, ×16
   check("the show box's sixteen refusals carry no stamp → stale, a question again", !verdictStands(prodMarker));
-  check("a refusal under the CURRENT recipe stands", verdictStands(`[optimize] not smaller (1 -> 2, 3ms) ${recipeStamp()} — keeping original`));
+  check("a refusal under the CURRENT recipe and tools stands", verdictStands(`[optimize] not smaller (1 -> 2, 3ms) ${recipeStamp()} ${toolsStamp()} — keeping original`));
+  // the tools are the third part of the derivation key (tools-stamp.ts): a new encoder / reducer / sharp re-asks the
+  // REFUSALS it could overturn — and only those; no variant URL changes
+  {
+    const other = toolsDigest({ ...toolVersions(), encoder: "toktx:1:2" });
+    check("a size refusal measured with OTHER tools does not stand (re-asked once)", other !== currentToolsDigest()
+      && !verdictStands(`[optimize] not smaller (1 -> 2, 3ms) ${recipeStamp()} ${toolsStamp(other)} — keeping original`));
+    check("…nor one from before the tools stamp (tools unknown: re-asked once, like an unstamped recipe)",
+      !verdictStands(`[optimize] not smaller (1 -> 2, 3ms) ${recipeStamp()} — keeping original`));
+    const lodL = (v: string, t = toolsStamp()) => `[optimize] lod: ${v} (47ms) ${recipeStamp(LOD_RECIPE)} ${t} — original stays the only representation`;
+    check("the reducer's refusals (ineffective / preservation / gpu) stand only under the tools that measured them",
+      ["reduction ineffective (14000 -> 9000 verts, permissive too)", "preservation failed: bounds moved on axis 1", "not lighter on the GPU (textures 1.33 -> 5.33 MB, 912ms)"]
+        .every((v) => verdictStands(lodL(v), LOD_RECIPE) && !verdictStands(lodL(v, toolsStamp(other)), LOD_RECIPE) && !verdictStands(lodL(v, ""), LOD_RECIPE)));
+    check("CONTENT verdicts stand whatever the tools (a body, under the floor, nothing to convert — facts about the file)",
+      [lodL("unsupported: skinned/avatar asset (skins)", toolsStamp(other)), lodL(`already light (981 verts < ${LOD_MIN_VERTS})`, "")].every((c) => verdictStands(c, LOD_RECIPE))
+      && verdictStands("[optimize] ktx2: no convertible raster images (12ms) — keeping original", KTX2_RECIPE, other));
+    const v0 = toolVersions();
+    check("the digest moves with EVERY tool the CLI runs (gltf-transform, meshoptimizer, draco, sharp, the encoder binary)",
+      Object.keys(v0).length >= 7 && Object.keys(v0).every((k) => toolsDigest({ ...v0, [k]: `${v0[k]}+1` }) !== toolsDigest(v0)), v0);
+    check("…is canonical (key order does not matter) and delimited (a digest that extends this one is not it)",
+      toolsDigest(Object.fromEntries(Object.entries(v0).reverse())) === toolsDigest(v0)
+      && hasToolsStamp(`x ${toolsStamp()} y`) && !hasToolsStamp(`${toolsStamp()}0`), toolsDigest(v0));
+    check("the encoder is named by basename + size + mtime of its real file, never by running it; absent → none",
+      toolVersions(null).encoder === "none" && /^bun:\d+:[\d.]+$/.test(toolVersions(process.execPath).encoder), toolVersions(process.execPath).encoder);
+  }
   check("a refusal under an OLDER recipe does not", !verdictStands(`[optimize] not smaller (1 -> 2, 3ms) ${recipeStamp("texel2048")} — keeping original`));
   check("…nor one whose stamp merely EXTENDS this recipe's (texel10240 is not texel1024): the match is delimited, never a prefix",
     !verdictStands(`[optimize] not smaller (1 -> 2, 3ms) ${recipeStamp("texel10240")} — keeping original`)
@@ -172,6 +197,7 @@ console.log("\nthe store's KTX2 shadow (store-variants.ts, shared/ktx2.js):\n");
     const gpuLine = lodGpuRefusal(1.33, 5.33, 912);   // the CLI's own line (optimize.ts --lod GPU gate)
     check("the CLI's GPU-gate refusal carries the running recipe's stamp and reads as kind 'gpu'",
       gpuLine.includes(stamp) && lodVerdictKind(gpuLine) === "gpu" && !lodVerdictFinal(gpuLine), gpuLine);
+    check("…and the tools stamp: a new encoder or sharp re-asks it", gpuLine.includes(`${stamp} ${toolsStamp()}`) && verdictStands(gpuLine, LOD_RECIPE), gpuLine);
     check("NOT final: the GPU gate's refusal, stamped — it depends on the encoder and the host, not on the URL",
       !lodVerdictFinal(`[optimize] lod: not lighter on the GPU (textures 1.33 -> 5.33 MB, 912ms) ${stamp} — original stays the only representation`));
     check("NOT final: a floor verdict without the stamp (an older CLI), under another floor, or judged against another generation",
@@ -185,8 +211,10 @@ console.log("\nthe store's KTX2 shadow (store-variants.ts, shared/ktx2.js):\n");
     const marker = `${ktx2VariantPath(original)}.failed`;
     const m1 = storeShadowsMissing(original, minDir2, (p) => p === marker, () => prodMarker);
     check("storeShadowsMissing: a stale size verdict → the KTX2 shadow is MISSING (retry)", m1.ktx2);
-    const m2 = storeShadowsMissing(original, minDir2, (p) => p === marker, () => `not smaller ${recipeStamp()}`);
+    const m2 = storeShadowsMissing(original, minDir2, (p) => p === marker, () => `not smaller ${recipeStamp()} ${toolsStamp()}`);
     check("…a current one → not missing (no retry)", !m2.ktx2);
+    const m3 = storeShadowsMissing(original, minDir2, (p) => p === marker, () => `not smaller ${recipeStamp()} ${toolsStamp(toolsDigest({ ...toolVersions(), meshoptimizer: "0.0.1" }))}`);
+    check("…one measured with other tools → MISSING (the sweep re-asks it)", m3.ktx2);
   }
 
   // the negotiation key is a generation, shared by both sides
@@ -419,6 +447,8 @@ console.log("\n  the optimizer, against the fake encoder:");
     // a size refusal names its recipe
     r = await runKtx2(two, ktx2VariantPath(two) + ".bloat", { KTX2_TOKTX: FAKE_TOKTX, FAKE_TOKTX_MODE: "bloat" });
     check("a size refusal (exit 2) carries the recipe stamp — a later recipe can tell it is stale", r.code === 2 && !r.wrote && r.err.includes(recipeStamp()), `exit ${r.code}: ${r.err.split("\n").pop()}`);
+    check("…and the stamp of the tools the CLI ran with (this encoder) — a new encoder can tell it is stale",
+      r.err.includes(`${recipeStamp()} ${toolsStamp(toolsDigest(toolVersions(FAKE_TOKTX)))}`), r.err.split("\n").pop());
 
     const real = findKtx2Encoder();
     if (!real) console.log("  - real encoder: skipped — none on this box (KTX2_TOKTX / toktx / ktx; docs/ktx2-encoder.md)");
@@ -626,7 +656,8 @@ console.log("\n  the boot sweep — a stale size verdict is re-measured, a curre
   // both have a store-min verdict so only the KTX2 arm is in play
   writeFileSync(join(STORE_MIN, `${hs}.glb.failed`), "fixture"); writeFileSync(join(STORE_MIN, `${hc}.glb.failed`), "fixture");
   writeFileSync(`${ktx2VariantPath(join(STORE, `${hs}.glb`))}.failed`, "[optimize] not smaller (17600988 -> 26716692, 91234ms) — keeping original");   // prod's shape
-  writeFileSync(`${ktx2VariantPath(join(STORE, `${hc}.glb`))}.failed`, `[optimize] not smaller (1 -> 2, 3ms) ${recipeStamp()} — keeping original`);
+  // current = this recipe AND the tools the child server's CLI runs with (the fake encoder)
+  writeFileSync(`${ktx2VariantPath(join(STORE, `${hc}.glb`))}.failed`, `[optimize] not smaller (1 -> 2, 3ms) ${recipeStamp()} ${toolsStamp(toolsDigest(toolVersions(FAKE_TOKTX)))} — keeping original`);
   const S = await startServer({ KTX2_TOKTX: FAKE_TOKTX, FAKE_TOKTX_MODE: "ok" });
   check("child server came up", S.up, `:${S.PORT}`);
   if (S.up) {

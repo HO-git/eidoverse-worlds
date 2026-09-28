@@ -4,13 +4,14 @@
 // the card and the wire cannot disagree. A changed floor or reducer is a new recipe (LOD_GEN, lodRecipeFor): a new
 // filename, so an older generation's marker is simply never looked up here; there is no per-kind re-opening any more.
 import { classifyVariant, variantStatus, lodVariantPath, ktx2VariantPath, lodRecipeFor, LOD_RECIPE, LOD_MIN_VERTS, KTX2_RECIPE, recipeStamp, sourceSidecar, sourceToken, freshOver, variantSource } from "../server/store-variants.ts";
+import { toolsStamp, toolsDigest, toolVersions } from "../server/tools-stamp.ts";
 
 let pass = 0, fail = 0;
 const check = (name: string, ok: boolean, got: unknown) => { if (ok) pass++; else fail++; console.log(`  ${ok ? "✓" : "✗"} ${name}${ok ? "" : `  got ${JSON.stringify(got)}`}`); };
 const fs = (files: Record<string, string>) => ({ exists: (p: string) => p in files, read: (p: string) => files[p] ?? "" });
 
 const O = "/opt/store/abc.glb", L = lodVariantPath(O), K = ktx2VariantPath(O);
-const S = recipeStamp(LOD_RECIPE);
+const S = `${recipeStamp(LOD_RECIPE)} ${toolsStamp()}`;   // the CLI stamps recipe AND tools (tools-stamp.ts)
 const lodLine = (v: string, ms = 12) => `[optimize] lod: ${v} (${ms}ms) ${S} — original stays the only representation`;
 const cases: [string, Record<string, string>, string, string | null][] = [
   ["variant on disk → built", { [L]: "" }, "built", null],
@@ -24,6 +25,8 @@ const cases: [string, Record<string, string>, string, string | null][] = [
   ["not lighter on the GPU → refused, no log dressing", { [`${L}.failed`]: `[optimize] lod: not lighter on the GPU (textures 1.33 -> 5.33 MB, 912ms) ${S} — original stays the only representation` }, "refused", "not lighter on the GPU (textures 1.33 -> 5.33 MB)"],
   // a LOD mentioning "nothing to" is not the KTX2 arm's content verdict: the LOD grammar is lodVerdictKind's alone
   ["an unclassified LOD marker is refused with its raw reason — never guessed 'not needed'", { [`${L}.failed`]: "[optimize] lod: nothing to see here (5ms) — original stays the only representation" }, "refused", "nothing to see here"],
+  ["the reducer's refusal measured with OTHER tools → stale (a new meshoptimizer re-asks it)", { [`${L}.failed`]: lodLine("reduction ineffective (20280 -> 13728 verts, permissive too)", 287).replace(toolsStamp(), toolsStamp(toolsDigest({ ...toolVersions(), meshoptimizer: "9.9.9" }))) }, "stale", "reduction ineffective (20280 -> 13728 verts, permissive too)"],
+  ["a content verdict measured with other tools still stands (under the floor is a fact about the file)", { [`${L}.failed`]: lodLine(`already light (927 verts < ${LOD_MIN_VERTS})`).replace(toolsStamp(), "tools=000000000000") }, "not-needed", `already light (927 verts < ${LOD_MIN_VERTS})`],
   ["size gate, OLD recipe → stale (the sweep re-measures)", { [`${L}.failed`]: "[optimize] not smaller (1 -> 2, 5ms) recipe=lod0-old — keeping original" }, "stale", "not smaller (1 -> 2)"],
   ["host could not afford → deferred with why", { [`${L}.deferred`]: "no ktx encoder on this host\n" }, "deferred", "no ktx encoder on this host"],
   ["nothing on disk → pending", {}, "pending", null],
@@ -32,7 +35,7 @@ const cases: [string, Record<string, string>, string, string | null][] = [
 ];
 // KTX2 keeps its byte gate: a current-recipe size verdict still stands as refused
 {
-  const { exists, read } = fs({ [`${K}.failed`]: `[optimize] not smaller (100 -> 200, 3ms) recipe=${KTX2_RECIPE} — keeping original` });
+  const { exists, read } = fs({ [`${K}.failed`]: `[optimize] not smaller (100 -> 200, 3ms) recipe=${KTX2_RECIPE} ${toolsStamp()} — keeping original` });
   const r = classifyVariant(K, exists, read, KTX2_RECIPE);
   check("KTX2 size verdict, current recipe → refused, no log dressing", r.state === "refused" && r.reason === "not smaller (100 -> 200)", r);
   const n = fs({ [`${K}.failed`]: "[optimize] ktx2: no convertible raster images (12ms) — keeping original" });
@@ -46,7 +49,7 @@ for (const [name, files, state, reason] of cases) {
 }
 // a forced rebuild refused OVER a built variant: the old bytes still serve, and the card must not say "built"
 {
-  const { exists, read } = fs({ [K]: "", [`${K}.failed`]: `[optimize] not smaller (100 -> 200, 3ms) recipe=${KTX2_RECIPE} — keeping original` });
+  const { exists, read } = fs({ [K]: "", [`${K}.failed`]: `[optimize] not smaller (100 -> 200, 3ms) recipe=${KTX2_RECIPE} ${toolsStamp()} — keeping original` });
   const r = classifyVariant(K, exists, read, KTX2_RECIPE);
   check("variant + CURRENT-recipe verdict → refused, naming the served variant", r.state === "refused" && r.reason === "rebuild refused (not smaller (100 -> 200)); the earlier variant still serves", r);
   const o = fs({ [K]: "", [`${K}.failed`]: "[optimize] not smaller (100 -> 200, 3ms) recipe=ktx2-old — keeping original" });
@@ -99,7 +102,7 @@ for (const [name, files, state, reason] of cases) {
   const store = variantStatus(O, "/opt/min", { ...mk, stat: () => ({ size: 7, mtimeMs: 0 }) });
   check("a store upload passes no source (content-addressed): an ancient marker still stands", store.lod.state === "not-needed", store.lod);
   // a forced rebuild's refusal over a built variant must ALSO be newer than the source to count as the current answer
-  const rb = fs({ [K]: "", [`${K}.failed`]: `[optimize] not smaller (100 -> 200, 3ms) recipe=${KTX2_RECIPE} — keeping original` });
+  const rb = fs({ [K]: "", [`${K}.failed`]: `[optimize] not smaller (100 -> 200, 3ms) recipe=${KTX2_RECIPE} ${toolsStamp()} — keeping original` });
   at[K] = 3000; at[`${K}.failed`] = 1000;
   const r = classifyVariant(K, rb.exists, rb.read, KTX2_RECIPE, { source: SRC, stat: mtime });
   check("variant fresh + a verdict older than the source beside it → built (that refusal judged an older model)", r.state === "built", r);

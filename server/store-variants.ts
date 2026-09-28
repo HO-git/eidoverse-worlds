@@ -39,6 +39,7 @@
 
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
+import { currentToolsDigest, hasToolsStamp } from "./tools-stamp.ts";
 
 /** The variant suffix. `<hash>.glb` + this = the KTX2 shadow's file name. */
 export const KTX2_SUFFIX = ".ktx2.glb";
@@ -247,12 +248,24 @@ export function lodVariantPath(original: string, recipe = LOD_RECIPE): string {
   return `${original}.lod.${recipe}.glb`;
 }
 
-/** Does a `.failed` verdict still stand under the current recipe? A size
- *  verdict ("not smaller") stands only if it carries the current stamp;
- *  anything else stands regardless. */
-export function verdictStands(content: string, recipe = KTX2_RECIPE): boolean {
-  if (!/not smaller/i.test(content)) return true;
-  return hasStamp(content, recipe);
+/** Is this verdict a REFUSAL a different tool could overturn? The size gate (the encoder's output), an ineffective or
+ *  unpreservable reduce (meshoptimizer, gltf-transform's weld/simplify), the GPU gate (the encoder, and sharp's presence
+ *  on a `ktx create` host). A content fact — a skinned body, under the floor, no raster images — is not: it is about
+ *  the file, whatever reads it (tools-stamp.ts). */
+export function toolDependent(content: string): boolean {
+  if (/not smaller/i.test(content)) return true;
+  const k = lodVerdictKind(content);
+  return k === "ineffective" || k === "preservation" || k === "gpu";
+}
+/** Does a `.failed` verdict still stand under the current recipe AND tools? A size verdict ("not smaller") stands only
+ *  if it carries the current recipe stamp; a tool-dependent verdict only if it carries the current TOOLS stamp (a new
+ *  encoder, reducer or sharp re-asks it once — without renaming a single variant URL); anything else stands
+ *  regardless. A tool-dependent verdict from before the tools stamp is re-asked once, like one from an older recipe:
+ *  there are few (refusals only — no built variant is touched), and "unknown tools" must not stand forever. */
+export function verdictStands(content: string, recipe = KTX2_RECIPE, tools = currentToolsDigest()): boolean {
+  if (/not smaller/i.test(content) && !hasStamp(content, recipe)) return false;
+  if (toolDependent(content) && !hasToolsStamp(content, tools)) return false;
+  return true;
 }
 
 /** Any KTX2 serving artifact, of any asset class: `<rel>.ktx2.glb` (models,
@@ -334,7 +347,7 @@ export type VariantStatus = { state: VariantState; reason: string | null };
 // note, a gltf-transform logger line) must not become the card's reason
 const verdictLine = (raw: string): string => { const ls = raw.split("\n"); return [...ls].reverse().find((l) => /^\[optimize\]/.test(l)) ?? ls[0]; };
 const failedReason = (raw: string): string => verdictLine(raw).replace(/^\[optimize\]\s*(?:lod:\s*)?/, "").replace(/\s*\(\d+ms\).*$/, "")
-  .replace(/,\s*\d+ms\)/, ")").replace(/\s+—\s+.*$/, "").replace(/\s*recipe=\S+/, "").trim() || "refused (no reason recorded)";
+  .replace(/,\s*\d+ms\)/, ")").replace(/\s+—\s+.*$/, "").replace(/\s*recipe=\S+/, "").replace(/\s*tools=\S+/, "").trim() || "refused (no reason recorded)";
 
 /** How classifyVariant reads one pass. `lod`: the marker is read through lodVerdictKind — the route's own reader of the
  *  reducer's grammar, so the card and the x-eidoverse-lod header name the same verdict. `source`: the MUTABLE file the

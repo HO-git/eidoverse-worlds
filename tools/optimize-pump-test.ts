@@ -19,13 +19,16 @@ case "$v" in
   0) mkdir -p "$(dirname "$dest")"; printf 'tiny' > "$dest"; exit 0;;
   sig) kill -SEGV $$;;
   long) i=0; while [ $i -lt 30 ]; do echo "[optimize] per-texture note $i: no sharp to resize it — a long line padded out to well over one hundred characters of text" >&2; i=$((i+1)); done
-        echo "[optimize] not smaller (1.00x) recipe=texel1024" >&2; exit 2;;
+        echo "[optimize] not smaller (1.00x) recipe=texel1024 __TOOLS__" >&2; exit 2;;
   *) echo "fake verdict $v" >&2; exit "$v";;
 esac
 `); chmodSync(fake, 0o755);
 process.env.SKIP_OPT_SWEEP = "1";   // the parent's own boot timers must not sweep the real library through the fake
 process.env.WORLDS_DIR = join(root, "worlds"); process.env.OPT_DIR = join(root, "opt"); process.env.JOIN_TOKEN = "t"; process.env.OPT_CMD = fake;   // OPT_DIR: NEVER the checkout's store
 process.env.OPT_MEM_BUDGET_MB = "10"; process.env.OPT_COST_FACTOR = "1"; process.env.KTX2_TOKTX = "";
+// the verdict names the tools it was measured with (tools-stamp.ts) — THIS process's, which the pump also reads by
+const { toolsStamp } = await import("../server/tools-stamp.ts");
+writeFileSync(fake, readFileSync(fake, "utf8").replace("__TOOLS__", toolsStamp()));
 const { queueOptimize, optIdle } = await import("../server/upload.ts");
 const { STORE_MIN } = await import("../server/config.ts");
 const src = (name: string, bytes: number, verdict: string) => {
@@ -49,7 +52,7 @@ ok(existsSync(storeDest(s3) + ".failed") && !existsSync(storeDest(s3)), "exit 2 
 const { verdictStands } = await import("../server/store-variants.ts");
 const s3b = src("s3b.glb", 1000, "long"); queueOptimize(s3b); await optIdle();
 const m3b = existsSync(storeDest(s3b) + ".failed") ? readFileSync(storeDest(s3b) + ".failed", "utf8") : "";
-ok(m3b.trim().endsWith("recipe=texel1024") && verdictStands(m3b), `long stderr → the marker keeps the verdict tail (${m3b.length} chars, ends: ${m3b.slice(-50)})`);
+ok(m3b.includes(`recipe=texel1024 ${toolsStamp()}`) && verdictStands(m3b), `long stderr → the marker keeps the verdict tail (${m3b.length} chars, ends: ${m3b.slice(-50)})`);
 // 4. a variant that exists already (done elsewhere) retires a stale .deferred without spawning
 const s4 = src("s4.glb", 1000, "0"); mkdirSync(STORE_MIN, { recursive: true }); writeFileSync(storeDest(s4), "done-elsewhere"); writeFileSync(storeDest(s4) + ".deferred", "stale");
 queueOptimize(s4); await optIdle();

@@ -29,6 +29,8 @@ import { dedup, prune, resample, textureCompress, draco, listTextureSlots, weld,
 import { MeshoptSimplifier } from "meshoptimizer";
 import draco3d from "draco3dgltf";
 import { capTexels, recipeStamp, LOD_RECIPE, LOD_MIN_VERTS, LOD_RATIO, LOD_ERROR } from "./store-variants.ts";
+import { findKtx2Encoder, resolveNestedSharp, toolsStamp } from "./tools-stamp.ts";
+export { findKtx2Encoder, resolveNestedSharp };
 import { glbPerf } from "./glbperf.ts";
 import { parseGlb, rasterDims, GLB_MAGIC, CHUNK_JSON, CHUNK_BIN, KTX2_ID, align4, type GlbParts } from "./glbparse.ts";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -74,19 +76,8 @@ import { join, basename, dirname } from "node:path";
 // the rejection propagates, both callers skip the texture pass, and a
 // draco-only result ships. Less compression is a cost; an image that is not
 // an image is a lie.
-/** Where gltf-transform's own sharp lives, or null when there is no nested
- *  copy at all (a deduped install — the state this whole fix is chasing).
- *  RESOLUTION ONLY: it must not import, because import failure and absence
- *  are different facts and only one of them makes a bare import safe. */
-export function resolveNestedSharp(): string | null {
-  try {
-    const fnDir = dirname(Bun.resolveSync("@gltf-transform/functions", import.meta.dir));
-    const npDir = dirname(Bun.resolveSync("ndarray-pixels", fnDir));
-    return Bun.resolveSync("sharp", npDir);
-  } catch {
-    return null;
-  }
-}
+// resolveNestedSharp — where gltf-transform's own sharp lives (RESOLUTION ONLY) — is in tools-stamp.ts, which names
+// that same copy in the verdict stamp; re-exported above.
 
 /** The choice itself, with its two effects injected so a test can drive the
  *  branch that matters (#136 review). Fails CLOSED: once a nested copy has
@@ -177,22 +168,7 @@ export async function optimizeGlb(bytes: Uint8Array): Promise<Uint8Array> {
 // ?ktx2=1 — KHR_texture_basisu lands in extensionsRequired, and parsers
 // without a KTX2 decoder throw on required extensions.
 
-/** Encoder probe: KTX2_TOKTX env (absolute path) → toktx on PATH → ktx on
- *  PATH. Absent is an ENVIRONMENT, not a failure — the CLI exits 3 so the
- *  caller env-skips, never writing a .failed marker (the sharp-degrade
- *  pattern: the content is fine, this box just can't encode yet). */
-export function findKtx2Encoder(): string | null {
-  const env = process.env.KTX2_TOKTX;
-  if (env && existsSync(env)) return env;
-  const which = Bun.which("toktx") ?? Bun.which("ktx");
-  if (which) return which;
-  // the docs/ktx2-encoder.md recipe lands here (bin+lib siblings for
-  // @rpath) — a PATH-less install must not silently exit-3 the sweep
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
-  for (const p of [`${home}/.local/ktx/bin/toktx`, `${home}/.local/ktx/bin/ktx`])
-    if (home && existsSync(p)) return p;
-  return null;
-}
+// findKtx2Encoder lives in tools-stamp.ts (the verdict stamp names the encoder it finds) — re-exported above
 
 // baseColor/emissive are the eye-facing sRGB slots — ETC1S block noise hides
 // in shading there and the files come out ~4-8× smaller. Everything else
@@ -404,7 +380,7 @@ const sceneBounds = (doc: Document): [number[], number[]] => {
  *  whether the texel cap could be honoured on this host, neither of which the URL pins — so the route answers it
  *  provisional, and a LOD_GEN bump is what re-asks it. */
 export const lodGpuRefusal = (origTexMB: number, lodTexMB: number, ms: number): string =>
-  `[optimize] lod: not lighter on the GPU (textures ${origTexMB} -> ${lodTexMB} MB, ${ms}ms) ${recipeStamp(LOD_RECIPE)} — original stays the only representation`;
+  `[optimize] lod: not lighter on the GPU (textures ${origTexMB} -> ${lodTexMB} MB, ${ms}ms) ${recipeStamp(LOD_RECIPE)} ${toolsStamp()} — original stays the only representation`;
 
 export type LodResult = { out: Uint8Array | null; verdict: string | null; before: number; after: number; permissive?: boolean };
 
@@ -1028,7 +1004,7 @@ if (import.meta.main) {
         process.exit(3);
       }
       if (r.verdict) {   // a typed content refusal — fail closed, marker's business; stamped with the recipe like the ktx2 size verdict
-        console.error(`[optimize] lod: ${r.verdict} (${Math.round(performance.now() - t0)}ms) ${recipeStamp(LOD_RECIPE)} — original stays the only representation`);
+        console.error(`[optimize] lod: ${r.verdict} (${Math.round(performance.now() - t0)}ms) ${recipeStamp(LOD_RECIPE)} ${toolsStamp()} — original stays the only representation`);
         process.exit(2);
       }
       if (!r.out) {
@@ -1072,9 +1048,10 @@ if (import.meta.main) {
       }
       console.log(`[optimize] lod: GPU textures ${a.texMB} -> ${b.texMB} MB, tris ${a.tris} -> ${b.tris}; download ${(out.length / src.length).toFixed(2)}x the original`);
     } else if (out.length >= src.length * (ktx2Mode ? 1.25 : 0.95)) {
-      // the KTX2 verdict carries its recipe: a later recipe re-measures it
-      // (store-variants.ts verdictStands) instead of inheriting the refusal
-      console.error(`[optimize] not smaller (${src.length} -> ${out.length}, ${ms}ms)${ktx2Mode ? ` ${recipeStamp(mode === "--lod" ? LOD_RECIPE : undefined)}` : ""} — keeping original`);
+      // the KTX2 verdict carries its recipe AND its tools: a later recipe or
+      // a new encoder re-measures it (store-variants.ts verdictStands)
+      // instead of inheriting the refusal
+      console.error(`[optimize] not smaller (${src.length} -> ${out.length}, ${ms}ms)${ktx2Mode ? ` ${recipeStamp(mode === "--lod" ? LOD_RECIPE : undefined)} ${toolsStamp()}` : ""} — keeping original`);
       process.exit(2);
     }
     // …and the same care about CONTENT: a GLB whose images are not images is

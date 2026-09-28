@@ -41,8 +41,9 @@ import { join, dirname } from "node:path";
 import { Document, NodeIO } from "@gltf-transform/core";
 import { PNG } from "pngjs";
 import { isLodVariant, isServingArtifact, isStoreOriginal, lodVariantPath, ktx2VariantPath, storeShadowsMissing,
-  LOD_RECIPE, LOD_MIN_VERTS, recipeStamp, lodVerdictKind, lodVerdictFinal, lodRecipeFor, sourceToken, diskIdentity } from "../server/store-variants.ts";
+  LOD_RECIPE, LOD_MIN_VERTS, recipeStamp, lodVerdictKind, lodVerdictFinal, lodRecipeFor, sourceToken, diskIdentity, freshOver } from "../server/store-variants.ts";
 import { lodExclusion, findKtx2Encoder, optimizeGlbLod, lodNodesSig, lodMatsSig } from "../server/optimize.ts";
+import { toolsStamp, toolsDigest, toolVersions } from "../server/tools-stamp.ts";
 import { lodFromVersion, withLod, keyFromVersion, negotiate } from "../shared/ktx2.js";
 
 let failures = 0;
@@ -614,6 +615,8 @@ console.log("\n  the library arm — the sweep queues LODs, and mutable sources 
       const lMarker2 = join(OPT, `${REL2}.lod.${LOD_RECIPE}.glb.failed`);
       const lightDone = await until(() => existsSync(lMarker2) && existsSync(join(OPT, `${REL2}.ktx2.glb`)), 60_000);
       check("the library sweep wrote the light prop's typed verdict beside its ktx2 variant", lightDone);
+      check("…stamped with the recipe AND the tools the CLI ran with (this box's encoder — tools-stamp.ts)", lightDone
+        && readFileSync(lMarker2, "utf8").includes(`${recipeStamp(LOD_RECIPE)} ${toolsStamp(toolsDigest(toolVersions(FAKE_TOKTX)))}`), lightDone && readFileSync(lMarker2, "utf8").split("\n").slice(-2));
       if (lightDone) {
         const f1 = await S.get(withLod(negotiate(REL2, S.key), S.lod));
         check("STANDING VERDICT (library): the lod URL answers the ktx2 variant at the variant tier (short max-age + ETag, never immutable), named",
@@ -664,7 +667,8 @@ console.log("\n  the library arm — the sweep queues LODs, and mutable sources 
       S = await startServer({ KTX2_TOKTX: FAKE_TOKTX }, LIB);
       check("child rebooted", S.up);
       if (S.up) {
-        const rebuilt = await until(() => existsSync(lodPath) && Bun.file(lodPath).lastModified > Bun.file(join(LIB, REL)).lastModified, 60_000);
+        // fresh by THE rule (freshOver: the variant records the new source's identity), not by mtime order
+        const rebuilt = await until(() => existsSync(lodPath) && freshOver(lodPath, join(LIB, REL)), 60_000);
         check("the next boot re-swept the mutated source into a FRESH variant", rebuilt);
         if (rebuilt) {
           const res2 = await S.get(withLod(negotiate(REL, S.key), S.lod));

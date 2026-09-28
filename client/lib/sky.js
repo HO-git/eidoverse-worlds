@@ -24,7 +24,7 @@ import { bandCuts, bandedBakeRender, bakeGeneration } from './sky_baked.js';
 import { attachBakedDome, detachBakedDome, setBakeInterval, updateBakedDome, bakedActive, requestBake, holdLiveDomes, releaseLiveDomes, liveDomesHeld, takeHeldDomes,
   envTexture, adoptEnvironment, whenBakeReady } from './sky_baked.js';
 import { beginWork } from './loadwork.js';
-import { showInterimSky, updateInterimSky, hideInterimSky } from './sky_interim.js';
+import { showInterimSky, updateInterimSky, hideInterimSky, interimSkyShown } from './sky_interim.js';
 import { busy as loadingBusy } from './framebudget.js';
 import { bootDone } from './boot.js';
 import { setDayness, releaseForeignLights } from './lightrig.js';
@@ -631,9 +631,22 @@ async function worldSettled() {
   }
   teeNow(`[sky] world settled after ${((performance.now() - t0) / 1000).toFixed(1)} s: compiling the sky now`);
 }
+// 'sky-busy' (true/false): the sky is still arriving here (the stand-in gradient is up, or a tier swap is compiling or
+// baking). The World › sky panel shows 'loading…' from it; nothing depends on anyone listening.
+let swapping = 0, busyShown = false;
+function announceBusy() {
+  const b = interimSkyShown() || swapping > 0;
+  if (b !== busyShown) { busyShown = b; bus.emit('sky-busy', b); }
+}
+bus.on('sky-interim', announceBusy);
+export const skyBusy = () => busyShown;
 const SAME_SYSTEM = new Set(['low', 'medium', 'high']);
 const sameBake = (a, b) => a && b && a.width === b.width && a.height === b.height && a.cloudPasses === b.cloudPasses;
 async function swapTier(from, to) {
+  swapping++; announceBusy();
+  try { await swapTierInner(from, to); } finally { swapping--; announceBusy(); }
+}
+async function swapTierInner(from, to) {
   const t0 = performance.now(), api = skyApi;
   const F = BAKED_TIERS[from], T = BAKED_TIERS[to];
   if (sameBake(F, T)) {

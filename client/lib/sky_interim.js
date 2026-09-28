@@ -4,6 +4,7 @@
 // Tiny program, no textures: it links in milliseconds. (Owner, 09-27: one gradient that resembles the time of day,
 // never the half-made states.)
 import { THREE, scene, camera } from './core.js';
+import { bus } from './base.js';
 
 const R = 14000;          // inside sky_system's DOME_R, outside everything else
 let mesh = null, uni = null, lastKey = '';
@@ -36,7 +37,7 @@ export function showInterimSky(uniforms) {
     mesh.userData.noSupportCheck = true;
     lastKey = '';
   }
-  if (!mesh.parent) scene.add(mesh);
+  if (!mesh.parent) { scene.add(mesh); bus.emit('sky-interim', true); }
   paint();
 }
 
@@ -49,6 +50,8 @@ export function updateInterimSky() {
 
 export function hideInterimSky() {
   if (!mesh) return;
+  const was = !!mesh.parent;
   mesh.removeFromParent(); mesh.geometry.dispose(); mesh.material.dispose(); mesh = null; uni = null;
+  if (was) bus.emit('sky-interim', false);
 }
 export const interimSkyShown = () => !!mesh?.parent;

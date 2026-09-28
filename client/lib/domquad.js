@@ -176,11 +176,13 @@ export function domQuadsPick(handRay, click = false) {
   return hit.distance;
 }
 
-// Trigger on a panel, the way touch works (and Resonite / VRChat panels): on something you can act on (a button, an
-// input, a link…) it clicks at once, as before; on anything else it's a PRESS: drag past DRAG_PX and the panel scrolls
-// with the laser, release without dragging and it clicks where it was pressed.
-const INTERACTIVE = 'a[href],button,input,select,textarea,label,summary,[role=button],[role=checkbox],[role=switch],'
-  + '[role=slider],[role=tab],[role=option],[role=menuitem],[contenteditable=""],[contenteditable="true"],[onclick]';
+// Trigger on a panel, the way touch works (and Resonite / VRChat panels): every press is a PRESS: drag past DRAG_PX and
+// the panel scrolls with the laser, release without dragging and it clicks where it was pressed. Buttons, checkboxes,
+// dropdowns and links click on release, so a drag that starts on one scrolls instead of toggling it: the debug panel
+// is mostly checkbox rows and section-head buttons, and pressing to scroll it flipped them (owner 09-27, review P2).
+// Only controls that need the press ITSELF click at once: a slider (it drags its own thumb) and text fields (focus).
+const NEEDS_PRESS = 'input[type=range],[role=slider],input:not([type]),input[type=text],input[type=search],'
+  + 'input[type=number],input[type=password],input[type=email],input[type=url],textarea,[contenteditable=""],[contenteditable="true"]';
 const DRAG_PX = 20;   // from the press point, not summed per frame: hand tremor wanders a few px each way (review 09-27, P1)
 function aim(handRay) {
   _m.identity().extractRotation(handRay.matrixWorld);
@@ -199,7 +201,7 @@ export function domQuadsPress(handRay) {
   if (!hit.uv) return { dist: hit.distance, press: null };
   const data = { x: hit.uv.x, y: 1 - hit.uv.y };
   const el = hit.object.material.map.elementAt?.(data.x, data.y);
-  if (!el || el.closest?.(INTERACTIVE)) { domQuadsPick(handRay, true); return { dist: hit.distance, press: null }; }
+  if (!el || el.closest?.(NEEDS_PRESS)) { domQuadsPick(handRay, true); return { dist: hit.distance, press: null }; }
   return { dist: hit.distance, press: { mesh: hit.object, data, lastY: data.y, travel: 0, dragging: false } };
 }
 

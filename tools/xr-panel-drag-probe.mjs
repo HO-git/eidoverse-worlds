@@ -1,5 +1,5 @@
 // xr-panel-drag-probe — a trigger on EMPTY panel space is a press: drag it and the panel scrolls with the laser, release
-// without dragging and it clicks; a trigger on a control (a checkbox) still acts at once, exactly once. The owner
+// without dragging and it clicks; a checkbox too clicks on release (a drag started on it scrolls, review P2). The owner
 // couldn't scroll the debug panel in a headset (09-27): the stick scrolled only while a button held the laser up.
 // Real client + IWER; the rays go through the same domQuadsPress/Drag/Release path xr.js drives from the trigger.
 //   bun tools/xr-panel-drag-probe.mjs
@@ -95,21 +95,34 @@ try {
     dq.domQuadsRelease(pr3.press, true);
     const clicksAfterCancel = clicks;
     dom.removeEventListener('click', onClick, true);
-    // 4. a checkbox still acts on the press itself, exactly once, with no press left pending
-    let cb = null, cbFlip = null, cbPress = 'n/a';
+    // 4. a checkbox is a press like anything else (review P2): it toggles on RELEASE, exactly once, and a drag that
+    //    starts on it scrolls instead of toggling (the debug panel is mostly checkbox rows)
+    let cb = null, cbFlip = null, cbPress = 'n/a', cbEarly = null, cbDragFlip = null, cbDragging = null;
     for (const qid of dq.domQuadIds()) { const d = dq.domQuadTexture(qid)?.dom; const c = [...(d?.querySelectorAll('input[type=checkbox]') ?? [])].find((e) => e.getBoundingClientRect().height > 0); if (c) { cb = { qid, c }; break; } }
     if (cb) {
       for (const q of dq.domQuadIds()) dq.domQuadShow(q, q === cb.qid); await new Promise((res) => setTimeout(res, 300));
       const f = dq.domQuadTexture(cb.qid).dom.getBoundingClientRect(), r = cb.c.getBoundingClientRect(), was = cb.c.checked;
-      const p4 = dq.domQuadsPress(rayAt(cb.qid, r.left + r.width / 2 - f.left, r.top + r.height / 2 - f.top));
+      const cx = r.left + r.width / 2 - f.left, cy = r.top + r.height / 2 - f.top;
+      const p4 = dq.domQuadsPress(rayAt(cb.qid, cx, cy));
+      await new Promise((res) => setTimeout(res, 100));
+      cbEarly = cb.c.checked !== was; cbPress = p4?.press ?? null;
+      if (p4?.press) dq.domQuadsRelease(p4.press);
       await new Promise((res) => setTimeout(res, 200));
-      cbFlip = cb.c.checked !== was; cbPress = p4?.press ?? null;
+      cbFlip = cb.c.checked !== was;
       if (cbFlip) cb.c.click();
+      const was2 = cb.c.checked;
+      const p5 = dq.domQuadsPress(rayAt(cb.qid, cx, cy));
+      if (p5?.press) for (let i = 1; i <= 6; i++) dq.domQuadsDrag(rayAt(cb.qid, cx, cy - i * 10), p5.press);
+      cbDragging = !!p5?.press?.dragging;
+      if (p5?.press) dq.domQuadsRelease(p5.press);
+      await new Promise((res) => setTimeout(res, 200));
+      cbDragFlip = cb.c.checked !== was2;
+      if (cbDragFlip) cb.c.click();
     }
     // rounded corners: the raster leaves a frame's border-radius corners clear, and the material cuts them out
     let corner = null;
     { const t = dq.domQuadTexture(id), c = t.image; try { corner = { a: c.getContext('2d').getImageData(1, 1, 1, 1).data[3], test: meshOf(id).material.alphaTest, radius: getComputedStyle(t.dom).borderTopLeftRadius }; } catch (e) { corner = { err: String(e) }; } }
-    return { corner, dbg: globalThis.__dbg, id, spot, s0, s1, s2, clicksAfterDrag, clicksAfterTap, clicksAfterCancel, cb: !!cb, cbFlip, cbPressNull: cbPress === null, dragging: pr.press?.dragging };
+    return { corner, dbg: globalThis.__dbg, id, spot, s0, s1, s2, clicksAfterDrag, clicksAfterTap, clicksAfterCancel, cb: !!cb, cbFlip, cbEarly, cbPending: cbPress !== null && cbPress !== 'n/a', cbDragFlip, cbDragging, dragging: pr.press?.dragging };
   });
   console.log('  ·', JSON.stringify(r));
   check('a VR panel has a scrollable box to test', !r.none && !r.nospot, JSON.stringify(r));
@@ -117,7 +130,8 @@ try {
   check('…and that drag is not a click', r.clicksAfterDrag === 0, r.clicksAfterDrag);
   check('a tap (jitter under the threshold) is a click, and does not scroll', r.clicksAfterTap === 1 && r.s2 === 0, JSON.stringify({ clicks: r.clicksAfterTap, moved: r.s2 }));
   check('a grab that takes over a press cancels its click', r.clicksAfterCancel === 1, r.clicksAfterCancel);
-  check('a trigger on a checkbox toggles it on the press, exactly once, with no drag pending', r.cb && r.cbFlip === true && r.cbPressNull, JSON.stringify({ cb: r.cb, cbFlip: r.cbFlip, pressNull: r.cbPressNull }));
+  check('a trigger on a checkbox toggles it on release, exactly once (not on the press)', r.cb && r.cbEarly === false && r.cbPending && r.cbFlip === true, JSON.stringify({ cb: r.cb, early: r.cbEarly, pending: r.cbPending, flip: r.cbFlip }));
+  check('a drag that starts on a checkbox scrolls and never toggles it', r.cb && r.cbDragging && r.cbDragFlip === false, JSON.stringify({ dragging: r.cbDragging, flipped: r.cbDragFlip }));
   check('rounded corners: the corner texel is clear and the material cuts it out (not black)', r.corner?.a === 0 && r.corner?.test > 0, JSON.stringify(r.corner));
   check('no page errors', errs.length === 0, errs.slice(0, 3).join(' | '));
 } catch (e) { check('probe ran', false, e.message); }

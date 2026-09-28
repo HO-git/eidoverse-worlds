@@ -86,4 +86,18 @@ check('control — desktop, slow: the governor DOES move the pixel ratio', ratio
   check('…the next frame start applies it, once', ratios.length === before + 1 && ratios.at(-1) === G.governorDebug().pixelRatio, ratios.slice(before));
   G.applyPendingPixelRatio();
   check('…and only once', ratios.length === before + 1, ratios.slice(before)); }
+// review 10a M3: the headset's cap on loading's share holds WHILE loading too (entering VR mid-load, the usual cold entry)
+{ const FB: any = await import('../client/lib/framebudget.js');
+  stub.renderer.xr.isPresenting = false;
+  for (let i = 0; i < 10; i++) tick(72);                               // smooth desktop: the share is the desktop 0.36
+  const desk = FB.budgetStats().share;
+  FB.reportPending('governor-xr-test', 1);                             // loading is busy from here
+  tick(72);
+  check('control — desktop, loading: the share is frozen (loading must not shrink its own slice)', FB.budgetStats().share === desk && desk > 0.25, { desk, now: FB.budgetStats().share });
+  stub.renderer.xr.isPresenting = true;                                // enter VR mid-load
+  tick(72);
+  check('headset entered mid-load: the share drops to the 0.25 cap at once', FB.budgetStats().share <= 0.25, { desk, now: FB.budgetStats().share });
+  FB.setShare(0.2); tick(72);
+  check('…and the cap only lowers: a smaller share stays', FB.budgetStats().share === 0.2, FB.budgetStats().share);
+  FB.reportPending('governor-xr-test', 0); stub.renderer.xr.isPresenting = false; }
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

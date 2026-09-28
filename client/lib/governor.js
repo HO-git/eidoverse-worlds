@@ -53,7 +53,7 @@
 
 import { renderer, sun, BASE_PIXEL_RATIO } from './core.js';
 import { CONFIG, bus } from './base.js';
-import { busy as budgetBusy, setShare } from './framebudget.js';
+import { busy as budgetBusy, setShare, budgetStats } from './framebudget.js';
 import { promoteTailPending, modelQuality } from './realize/models.js';
 import { setSlotCap, getSlotCap, maxSlots, litCount,
   setCasterBudget, getCasterBudget, casterCount, shadowsOn, shadowRes } from './lightrig.js';
@@ -352,9 +352,10 @@ function loadingBusy() {
 // The share of each frame background work may use (framebudget), from the regime this pulse measured: smooth gets
 // the old 6 ms at 60 Hz; a slow machine gives loading less of a frame it is already missing; a headset's frames are
 // shorter and a missed one is felt, so it is capped lower.
+const XR_SHARE_CAP = 0.25;
 function backgroundShare(fps) {
   const s = fps > 52 ? 0.36 : fps >= 26 ? 0.3 : 0.2;
-  return renderer.xr?.isPresenting ? Math.min(s, 0.25) : s;
+  return renderer.xr?.isPresenting ? Math.min(s, XR_SHARE_CAP) : s;
 }
 
 let grace = false;        // the last pulse was held by loading grace
@@ -377,6 +378,9 @@ export function whenCalm() {
 export function governPerformance(fps) {
   // the share follows the machine, not the storm: a second that loading itself slowed must not shrink loading's slice
   if (!loadingBusy()) setShare(backgroundShare(fps));
+  // …but the headset's cap holds while loading too (review 10a M3: entering VR mid-load, the usual cold entry, kept the
+  // desktop's 0.36 — ~4 ms of an 11 ms frame — for the heaviest stretch of the session). Only ever lowers it.
+  else if (renderer.xr?.isPresenting) setShare(Math.min(budgetStats().share, XR_SHARE_CAP));
   if (loadingBusy()) {
     // freeze BOTH directions and reset every streak: a storm-dip shed and a
     // splash-smooth restore are both answers to loading, not to the machine

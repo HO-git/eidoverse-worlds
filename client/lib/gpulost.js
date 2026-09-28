@@ -12,16 +12,24 @@
 // either way. The ?xr=1 boot flag is dropped so a crash out of VR lands on the desktop.
 //
 // A second loss inside the window does NOT reload again: a device that resets on every
-// boot would otherwise loop. It says so and leaves the reload to the person.
+// boot would otherwise loop. It says so and leaves the reload to the person. Nor does a THIRD
+// loss inside 15 min, however far apart (review 10a M2): a loop whose period is boot time plus
+// time-to-the-fatal-draw — the 89–94 s sky link above plus a cold boot — runs longer than 2 min,
+// saw an empty short window every time and reloaded forever, a driver reset each cycle.
 
 export const GPU_LOST_KEY = 'ew-gpu-lost';           // sessionStorage: ms timestamps of recent losses
 export const GPU_RECOVERED_KEY = 'ew-gpu-recovered'; // sessionStorage: the reason, read once by the next boot's notice
 export const GPU_LOST_WINDOW_MS = 120000;
+export const GPU_LOST_LONG_MS = 15 * 60000;   // …and at most GPU_LOST_LONG_MAX losses in this one
+export const GPU_LOST_LONG_MAX = 3;
 
-/** Pure: given recent loss times and now, reload or stop? */
+/** Pure: given recent loss times and now, reload or stop? `why` names the rule that stopped it. */
 export function gpuLostAction(now, recent) {
-  const within = (recent ?? []).filter((t) => Number.isFinite(t) && now - t >= 0 && now - t < GPU_LOST_WINDOW_MS);
-  return within.length ? { reload: false, recent: [...within, now] } : { reload: true, recent: [...within, now] };
+  const kept = (recent ?? []).filter((t) => Number.isFinite(t) && now - t >= 0 && now - t < GPU_LOST_LONG_MS);
+  const next = [...kept, now];
+  if (kept.some((t) => now - t < GPU_LOST_WINDOW_MS)) return { reload: false, recent: next, why: 'second loss inside 2 min' };
+  if (next.length >= GPU_LOST_LONG_MAX) return { reload: false, recent: next, why: `${next.length} losses inside 15 min` };
+  return { reload: true, recent: next };
 }
 
 /** The URL to come back on: same world, same everything, minus the XR boot flag. */
@@ -42,7 +50,7 @@ export function installGpuLostRecovery({ canvas, renderer, tee = () => {}, onSto
     try { recent = JSON.parse(store?.getItem(GPU_LOST_KEY) || '[]'); } catch {}
     const act = gpuLostAction(Date.now(), recent);
     try { store?.setItem(GPU_LOST_KEY, JSON.stringify(act.recent)); } catch {}
-    tee(`[gpu] LOST (${why}) — ${act.reload ? 'reloading into the live world' : 'second loss inside 2 min, not reloading again'}`);
+    tee(`[gpu] LOST (${why}) — ${act.reload ? 'reloading into the live world' : `${act.why}, not reloading again`}`);
     if (!act.reload) { onStop(why); return; }
     try { store?.setItem(GPU_RECOVERED_KEY, why); } catch {}
     // This reload is deliberate, not a crash: disarm the lite tripwire (index.html) or the

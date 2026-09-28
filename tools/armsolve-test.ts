@@ -121,16 +121,22 @@ const ident = new THREE.Quaternion();
     const sg = side === 'right' ? 1 : -1, gripOf = (tw: number) => sg * tw + sg * 120.7;
     const band: [number, number] = [-100, 190];   // twist, supination-positive
     const setup = () => {
+      // a virtual clock: one 72 Hz frame per solve (the solver reseeds its twist after a gap, so time is an input)
+      let clk = 0; const frame = () => (clk += 1000 / 72);
       const v = humanoid(); const sh = v.bones[side + 'UpperArm'].getWorldPosition(new THREE.Vector3());
       const t = sh.clone().add(new THREE.Vector3(side === 'right' ? -0.1 : 0.1, 0, 0.45));
-      solveArm(v, side, t, ident, { dt: 1 / 72 }); v.scene.updateMatrixWorld(true);
+      solveArm(v, side, t, ident, { dt: 1 / 72, now: frame() }); v.scene.updateMatrixWorld(true);
       const fa = v.bones[side + 'Hand'].getWorldPosition(new THREE.Vector3()).sub(v.bones[side + 'LowerArm'].getWorldPosition(new THREE.Vector3())).normalize();
       const ax = v.bones[side + 'Hand'].position.clone().normalize();
-      const at = (tw: number) => { solveArm(v, side, t, new THREE.Quaternion().setFromAxisAngle(fa, gripOf(tw) * Math.PI / 180), { dt: 1 / 72 }); v.scene.updateMatrixWorld(true); };
+      const at = (tw: number) => { solveArm(v, side, t, new THREE.Quaternion().setFromAxisAngle(fa, gripOf(tw) * Math.PI / 180), { dt: 1 / 72, now: frame() }); v.scene.updateMatrixWorld(true); };
       const roll = () => { const q = v.bones[side + 'LowerArm'].quaternion; return 2 * Math.atan2(q.x * ax.x + q.y * ax.y + q.z * ax.z, q.w) * 180 / Math.PI; };
-      // SEED at the start, as a session or a tracking regain would (a one-frame 180° jump there is not a motion)
-      const seed = (tw: number) => { delete v.userData._arm; at(tw); };
-      return { v, at, roll, seed };
+      // SEED at the start, the way the product does at a session start or a tracking regain: a gap in the solves (a
+      // one-frame 180° jump there is not a motion). This used to delete the arm state, a reset the product never did
+      // (review 10a M1): the stale twist then put a fresh grip on the far branch. `gap` is the product's own rule now.
+      const gap = (ms: number) => { clk += ms; };
+      const seed = (tw: number) => { gap(1000); at(tw); };
+      const twist = () => sg * (v.userData._arm?.[side]?.twist ?? NaN) * 180 / Math.PI;   // supination-positive, both sides
+      return { v, at, roll, seed, gap, twist };
     };
     { const { v, seed } = setup(); seed(0); const tw = v.userData._arm?.[side]?.twist;
       // a finite NUMBER, not merely defined: the seed path writes st.twist = null, so `!== undefined` passed on a solver
@@ -149,6 +155,23 @@ const ident = new THREE.Quaternion();
     for (const s0 of [-100, -45, 0, 45, 90, 135, 190]) for (const end of band) if (end !== s0) {
       const w = sweep(s0, end); if (w > worst) { worst = w; worstAt = `${s0}° → ${end}°`; } }
     ok(worst < 2.5, `${side}: every sweep inside the forearm's range continuous (worst ${worst.toFixed(2)}°/° at ${worstAt})`);
+    // 6b. RESEED AFTER A GAP (review 10a M1): palm-up at the end of one session (twist ≈ 200°), then the next session
+    //     starts with the grip pronated (−100°) at the same place (no teleport). The twist must land on the NEAR branch.
+    {
+      const up = (s: ReturnType<typeof setup>) => { s.seed(0); for (let tw = 1; tw <= 200; tw++) s.at(tw); };
+      const g = setup(); up(g); const before = g.twist();
+      g.gap(500); g.at(-100);                       // 0.5 s without a solve: an exit/entry, an emote, a short loss
+      const ref = setup(); ref.seed(-100);          // the same grip, solved from nothing
+      ok(Math.abs(before - 200) < 3 && Math.abs(g.twist() + 100) < 3, `${side}: after a 0.5 s gap a pronated grip reseeds on the near branch (twist ${before.toFixed(0)}° → ${g.twist().toFixed(1)}°, want ≈ −100°)`);
+      ok(Math.abs(g.roll() - ref.roll()) < 1, `${side}: …and the forearm rolls as a fresh solve does (${g.roll().toFixed(1)}° vs ${ref.roll().toFixed(1)}°)`);
+      // controls: the measurement has a subject — with NO gap the unwrap carries the old branch (it's a real 300° swing
+      // of the grip in one frame, which the continuity rule reads as −60°); and a dropped frame or two (0.1 s) is no gap
+      const c = setup(); up(c); c.at(-100);
+      ok(Math.abs(c.twist() + 100) > 90, `${side}: control, no gap: the twist stays on the old branch (${c.twist().toFixed(0)}°)`);
+      // (230°: past the middle + 180°, so a reseed there WOULD land on the other branch, −130°: the check has a subject)
+      const d = setup(); d.seed(0); for (let tw = 1; tw <= 230; tw++) d.at(tw); d.gap(100); d.at(230);
+      ok(Math.abs(d.twist() - 230) < 3, `${side}: control, a 0.1 s hitch keeps the unwrap (230° stays 230°, got ${d.twist().toFixed(1)}°)`);
+    }
   }
 }
 

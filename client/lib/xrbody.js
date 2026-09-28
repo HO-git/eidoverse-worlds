@@ -92,7 +92,7 @@ const ARM = { SAMPLES: 36, REFINE: 8, MIN_ELBOW: 22 * Math.PI / 180, MIN_REACH_F
   TORSO_W: 1.5, LOCAL_BASIN: 60 * Math.PI / 180, BASIN_JUMP: 100 * Math.PI / 180, SWITCH_MARGIN: 0.12, DWELL: 0.2, SMOOTH: 0.08, MAX_RATE: 720 * Math.PI / 180,
   TELEPORT: 0.6, HEAD_FADE: [0.15, 0.45], REST_OUT: 0.35, REST_BACK: 0.25,
   WRIST_KEEP_FRAC: 0.15, WRIST_KEEP_MAX: 15 * Math.PI / 180, ROLL_MAX: 120 * Math.PI / 180, TWIST_CENTER: 45 * Math.PI / 180, TWIST_WINDOW: 240 * Math.PI / 180,
-  HOLD: 0.5, RELAX_HZ: 3 };
+  HOLD: 0.5, RELAX_HZ: 3, TWIST_GAP: 0.25 };
 const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _d = new THREE.Vector3(), _u = new THREE.Vector3(), _elbow = new THREE.Vector3(), _rest = new THREE.Vector3();
 // solver scratch — these run per side, per body (remotes too since C18), per frame: nothing here may allocate
 const _uPos = new THREE.Vector3(), _toT = new THREE.Vector3(), _axis = new THREE.Vector3(), _up = new THREE.Vector3(), _fwd = new THREE.Vector3(), _out = new THREE.Vector3();
@@ -145,6 +145,12 @@ export function solveArm(vrm, side, targetPos, targetQuat, opts = {}) {
   const U = h.getNormalizedBoneNode(side + 'UpperArm'), L = h.getNormalizedBoneNode(side + 'LowerArm'), H = h.getNormalizedBoneNode(side + 'Hand');
   if (!U || !L || !H) return false;
   const st = armState(vrm, side), dt = opts.dt > 0 ? opts.dt : 1 / 60;
+  // THE TWIST RESEEDS AFTER ANY GAP (review 10a M1). It unwraps against last frame's value, which is only meaningful if
+  // last frame was just now: across a VR exit/entry, an emote that took the arms, a remote leaving VR, or a tracking
+  // loss shorter than the relax, the stale value put a fresh grip on the far 360° branch (palm-up at exit, pronated at
+  // entry → a candy-wrapper wrist) and it stuck, since the unwrap only moves continuously. `opts.now` (ms) for tests.
+  const now = opts.now ?? performance.now();
+  if (st.twist != null && st.solvedAt != null && now - st.solvedAt > ARM.TWIST_GAP * 1000) st.twist = null;
   U.quaternion.identity(); L.quaternion.identity(); H.quaternion.identity();
   vrm.scene.updateMatrixWorld(true);
   const uPos = U.getWorldPosition(_uPos);
@@ -223,7 +229,8 @@ export function solveArm(vrm, side, targetPos, targetQuat, opts = {}) {
     // the one ambiguous angle a seed can land on is 135° of pronation past palm-down, not palm-up; (b) it unwraps
     // against last frame, continuous through ±180°; (c) it SATURATES 240° either side of that middle — past it the
     // forearm holds its cap and the hand takes the rest. A twist must change branch once per 360° somewhere; this
-    // puts it ~420° from the middle. Reseeded wherever the swivel is (first frame, teleport, tracking lost).
+    // puts it ~420° from the middle. Reseeded wherever the swivel is (first frame, teleport, tracking lost), and after any
+    // solve gap over ARM.TWIST_GAP (session start, emotes, short tracking losses: review 10a M1).
     const raw = twistAbout(_qH, _fa), mid = side === 'left' ? -ARM.TWIST_CENTER : ARM.TWIST_CENTER;
     const demand = st.twist == null ? mid + wrapA(raw - mid)
       : THREE.MathUtils.clamp(st.twist + wrapA(raw - st.twist), mid - ARM.TWIST_WINDOW, mid + ARM.TWIST_WINDOW);
@@ -240,7 +247,7 @@ export function solveArm(vrm, side, targetPos, targetQuat, opts = {}) {
   }
   st.held = st.held || { U: new THREE.Quaternion(), L: new THREE.Quaternion(), H: new THREE.Quaternion(), pos: new THREE.Vector3(), quat: new THREE.Quaternion() };
   st.held.U.copy(U.quaternion); st.held.L.copy(L.quaternion); st.held.H.copy(H.quaternion); st.held.pos.copy(targetPos); if (targetQuat) st.held.quat.copy(targetQuat);
-  st.lost = 0;
+  st.lost = 0; st.solvedAt = now;
   return true;
 }
 /** Tracking lost this frame: hold the last solve for 0.5 s, then relax toward the clip pose at 3 Hz.

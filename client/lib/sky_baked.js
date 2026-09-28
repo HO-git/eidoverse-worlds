@@ -185,6 +185,17 @@ let sysRef = null, cycleSkyT = 0;
 const bakeSkyT = [0, 0];               // sky time each target's picture shows (mid-bake)
 let driftDt = null;                    // [uniform, uniform]: dt for A and B
 const skyTimeNow = () => sysRef?.uniforms?.time?.value ?? 0;
+// ONE SKY TIME PER BAKE (owner, 09-27: the VR sky 'banding' she'd seen for a while). A bake is drawn in strips over many
+// frames (156 over ~6–20 s in a headset), and each strip used to march the clouds at the sky time of ITS frame: the
+// clouds moved between strips, so strip edges showed as seams, worse the longer the bake. Every strip of a bake now
+// draws at the time the bake began (the uniform is pinned for the draw and restored), and drift measures from it.
+function atSkyTime(sys, t, draw) {
+  const u = sys?.uniforms?.time;
+  if (!u || t == null) return draw();
+  const keep = u.value; u.value = t;
+  try { return draw(); } finally { u.value = keep; }
+}
+let bootBakeSkyT = null;   // the time the last banded boot/swap bake was pinned to (attach adopts it for target A)
 /** Drift state (probes, the debug panel): null when off, else the seconds each texture has drifted. */
 export const bakedDrift = () => (driftDt ? [driftDt[0].value, driftDt[1].value] : null);   // how long the last bake cycle took (bands + pump spacing)
 // The re-bake interval, never shorter than a bake takes plus room to dissolve (audit M1: in a headset one 4096x2048
@@ -229,7 +240,7 @@ export async function renderBetweenXRFrames(r, fn) {
  *  global uvs as the quad — so the same texels, just not in one draw. The band pipeline is compiled off the render path
  *  first (a cold band met inside a frame is the 1.5MB-shader stall again). Returns the band count. */
 export async function bandedBakeRender(r, bakeScene, bakeCam, target, { cloudPasses = cfg.cloudPasses, passTexelBudget = cfg.passTexelBudget,
-  nextFrame = () => new Promise((res) => requestAnimationFrame(res)), budget = false, alive = () => true } = {}) {
+  nextFrame = () => new Promise((res) => requestAnimationFrame(res)), budget = false, alive = () => true, sys = null } = {}) {
   const bakeMat = bakeScene.children?.[0]?.material;
   if (!bakeMat) throw new Error('bandedBakeRender: bake scene has no quad');
   const cuts = bandCuts(target.width, target.height, cloudPasses, passTexelBudget);
@@ -260,6 +271,8 @@ export async function bandedBakeRender(r, bakeScene, bakeCam, target, { cloudPas
       await globalThis.__syncGate?.whenGiantLinked?.();
       const waited = performance.now() - tl;
       tee(`[sky] band bake: compiled in ${(performance.now() - tc).toFixed(0)} ms${waited > 50 ? ` (waited ${waited.toFixed(0)} ms for a deferred link)` : ''}, ${meshes.length} bands to draw`); }
+    const pinSys = sys, pinT = sys?.uniforms?.time?.value ?? null;   // every strip at the time the drawing began
+    bootBakeSkyT = pinT;
     for (let i = 0; i < meshes.length; i++) {
       // budget: each band is a gpu unit of the shared per-frame budget (the client's callers; the probe paces itself).
       // Nothing is bound across this wait: other frames render meanwhile.
@@ -272,7 +285,7 @@ export async function bandedBakeRender(r, bakeScene, bakeCam, target, { cloudPas
         r.autoClear = false;          // strips abut and each fully overdraws its own texels
         r.setRenderTarget(target);
         const t0 = performance.now();
-        try { r.render(bs, bakeCam); } finally { r.setRenderTarget(prev ?? null); r.autoClear = autoClear; }
+        try { atSkyTime(pinSys, pinT, () => r.render(bs, bakeCam)); } finally { r.setRenderTarget(prev ?? null); r.autoClear = autoClear; }
         if (g) spent('sky', performance.now() - t0, null, g);
       };
       // a bake that runs into a headset session (the VR cap's high→medium rebuild; a desktop bake still banding at
@@ -387,14 +400,18 @@ export function attachBakedDome(skyApi, opts = {}) {
   sysRef = s;
   let suvA, suvB;
   if (DRIFT && U.skyWind && U.time && U.sunDir && U.cloudStart && U.cloudHeight) {
-    bakeSkyT[0] = bakeSkyT[1] = skyTimeNow();   // A holds the boot bake (just drawn); B starts as its copy
+    bakeSkyT[0] = bakeSkyT[1] = bootBakeSkyT ?? skyTimeNow();   // A holds the boot bake; B starts as its copy
     driftDt = [TSL.uniform(0), TSL.uniform(0)];
     const layerH = U.cloudStart.add(U.cloudHeight.mul(0.5)).sub(2);   // the bake's eye sits at y=2
     const sunKeep = TSL.smoothstep(Math.cos(14 * Math.PI / 180), Math.cos(6 * Math.PI / 180), TSL.dot(dirL, TSL.normalize(U.sunDir)));
     const w = TSL.smoothstep(0.03, 0.15, dirL.y).mul(TSL.float(1).sub(sunKeep));
     const shifted = (dt) => {
       const hit = dirL.mul(layerH.div(TSL.max(dirL.y, 0.03)));
-      const moved = hit.add(TSL.vec3(U.skyWind.x.mul(dt), 0, U.skyWind.z.mul(dt)));
+      // capped at ~12% of the layer height (~7° overhead): a stale picture under a storm wind (VR cycles run ~20 s, the
+      // storm scales the wind up) otherwise pulled hazy near-horizon texels overhead (owner's headset, 09-27 20:37)
+      const d = TSL.vec3(U.skyWind.x.mul(dt), 0, U.skyWind.z.mul(dt));
+      const cap = layerH.mul(0.12);
+      const moved = hit.add(d.mul(TSL.min(1, cap.div(TSL.max(TSL.length(d), 1e-3)))));
       return TSL.equirectUV(TSL.normalize(TSL.mix(dirL, TSL.normalize(moved), w)));
     };
     suvA = shifted(driftDt[0]); suvB = shifted(driftDt[1]);
@@ -670,8 +687,8 @@ function maybeRefreshGraph() {
     const target = renderer.getRenderTarget();
     renderer.setRenderTarget(outer ?? null);
     const t0 = performance.now();
-    return bandedBakeRender(renderer, sc, cam, target, { cloudPasses: cfg.cloudPasses, passTexelBudget: cfg.passTexelBudget, nextFrame: nextDesktopFrame, budget: true, alive })
-      .then((n) => { refreshStats.bands = n; tee(`[sky] graph refresh baked in ${n} bands over ${(performance.now() - t0).toFixed(0)} ms`); renderer.setRenderTarget(target); });
+    return bandedBakeRender(renderer, sc, cam, target, { cloudPasses: cfg.cloudPasses, passTexelBudget: cfg.passTexelBudget, nextFrame: nextDesktopFrame, budget: true, alive, sys })
+      .then((n) => { const ti = targets?.indexOf?.(target) ?? -1; if (ti >= 0 && bootBakeSkyT != null) bakeSkyT[ti] = bootBakeSkyT; refreshStats.bands = n; tee(`[sky] graph refresh baked in ${n} bands over ${(performance.now() - t0).toFixed(0)} ms`); renderer.setRenderTarget(target); });
   };
   Promise.resolve(sys.bakeEnv(renderer, {
     width: A.width, height: A.height, cloudPasses: cfg.cloudPasses,
@@ -730,7 +747,7 @@ function renderBand(i) {
   // try/finally: a throw inside the band render used to leave BOTH the 4096x2048 back target bound (render.js's
   // self-heal then logs "unbound a stale target … frame aborted mid-render" — seen once per boot on the owner's GPU,
   // 09-24) AND autoClear off for the main pass. The error still propagates; now it is also named.
-  try { renderer.render(bandScene, bakeCam); }
+  try { atSkyTime(sysRef, cycleSkyT, () => renderer.render(bandScene, bakeCam)); }
   catch (e) { tee(`[sky] dome band ${i}/${bandMeshes.length} render threw: ${String(e?.message ?? e).slice(0, 300)}`); throw e; }
   finally { renderer.setRenderTarget(prev ?? null); renderer.autoClear = autoClear; }
 }
@@ -738,7 +755,7 @@ function renderBand(i) {
 function finishBake(now) {
   lastCycleMs = now - cycleStart;
   const back = targets[1 - front];
-  bakeSkyT[1 - front] = (cycleSkyT + skyTimeNow()) / 2;
+  bakeSkyT[1 - front] = cycleSkyT;   // every strip was drawn at this time
   blitEnvFrom(back);   // IBL + reflection fallback follow the freshest bake
 
   // Dissolve toward the fresh bake across the remainder of the interval so

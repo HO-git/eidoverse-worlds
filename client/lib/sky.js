@@ -162,6 +162,7 @@ export const skyHeld = () => (heldQuality || heldRebuild ? { quality: heldQualit
 // (high, where the VR cap doesn't apply) keeps its march; so does a sky build whose baked dome failed to attach (P4:
 // a costly sky beats no clouds; the 1 Hz render re-held them after that release, review 10b M1).
 let attachFailedFor = null;       // the sky build whose baked dome could not attach
+let bakeRetriedFor = null;        // the sky build whose failed bake already had its one retry
 let headsetGradient = false;      // the gradient is up because holdLiveInHeadset put it there
 function holdLiveInHeadset() {
   if (!xrPresenting || !BAKED_TIERS[cloudQuality] || cloudQuality === 'off' || bakedActive() || attachFailedFor === skyApi) return;
@@ -1095,8 +1096,15 @@ async function ensureSkyBake() {
       // a failed bake left the target undrawn: attaching would show a black dome. Same policy as a failed attach below:
       // the live march stays (a costly sky beats no clouds; review 12b L4)
       attachFailedFor = skyApi;   // or the 1 Hz render's holdLiveInHeadset re-holds them within a second
-      releaseLiveDomes();
-      tee('[sky] bake failed: no baked dome attached, the live cloud march stays (in a headset too)');
+      // while the sky is still arriving, finishSky releases them once COMPILED (review 13 L2), as on success
+      if (!interimFor) releaseLiveDomes();
+      // ONE retry after a pause (review 13 L1: without it, one failure kept the live march for the whole visit; the old
+      // black dome at least re-baked on its cadence). A second failure stays on the live march until the next choice.
+      if (bakeRetriedFor !== api) {
+        bakeRetriedFor = api;
+        tee('[sky] bake failed: no baked dome attached, the live cloud march stays; retrying once in 10 s');
+        setTimeout(() => { if (skyApi !== api || tier !== cloudQuality || bakedActive()) return; bakePending = true; ensureSkyBake().catch((e) => report('sky bake retry', e)); }, 10000);
+      } else tee('[sky] bake failed again: the live cloud march stays until the next cloud choice');
       return;
     }
     if (BAKED_TIERS[tier]) {

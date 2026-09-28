@@ -627,6 +627,42 @@ async function finishSky(api) {
   interimFor = null;
   hideInterimSky();
   tee(`[sky] the real sky is up (${bakedActive() ? 'baked dome' : 'live domes'}); the interim gradient is gone`);
+  if (!BAKED_TIERS[cloudQuality]) prebuildCapBakeWhenHeadset(api);
+}
+
+// ENTERING VR FROM HIGH (owner, 09-27 21:52: 'pre-building medium in anticipation of a headset entry is a good idea').
+// The VR cap swaps high → medium at entry, and medium's bake program (1.76M chars) compiled right then: the GPU process
+// was busy for seconds, so no frame, not even the entry curtain, could be presented, and the headset showed its own
+// WebXR construct (first frame +2.6 s). With a headset present, the program is compiled on the desktop instead, once,
+// ~15 s after the sky is up. A bake's shader doesn't depend on its size, so it's built by a 64x32 bake of medium's
+// pass count into a TEMPORARY target (the live tier's own env target and reflection fallback are put back), and
+// retainBakeGraphs keeps that graph, so its program stays cached for the entry's 4096 bake.
+async function prebuildCapBakeWhenHeadset(api) {
+  let ok = false;
+  try { ok = !!(await navigator.xr?.isSessionSupported?.('immersive-vr')); } catch { /* no WebXR */ }
+  if (!ok) return;
+  await new Promise((r) => setTimeout(r, 15000));
+  if (skyApi !== api || BAKED_TIERS[cloudQuality] || xrPresenting) return;
+  await prebuildBakeProgram(BAKED_TIERS[CAP_TO].cloudPasses);
+}
+/** Compile a bake program (the given pass count) without touching the sky's own env target. Exported for probes. */
+export async function prebuildBakeProgram(cloudPasses, opts = {}) {
+  const api = skyApi, sys = skyInner;
+  if (!api?.bakeEnv || !sys) return false;
+  const keepT = sys._envTarget, keepFb = sys._envFbNode?.value, t0 = performance.now();
+  sys._envTarget = null;
+  try {
+    await api.bakeEnv({ width: 64, height: 32, cloudPasses, ...opts });
+    await globalThis.__syncGate?.whenGiantLinked?.();
+  } catch (e) { report('sky prebuild', e); }
+  finally {
+    const tmp = sys._envTarget;
+    sys._envTarget = keepT;
+    if (sys._envFbNode && keepFb !== undefined) sys._envFbNode.value = keepFb;
+    if (tmp && tmp !== keepT) tmp.dispose();
+  }
+  tee(`[sky] headset present: the VR cap's bake program (${cloudPasses} passes) prebuilt on the desktop in ${(performance.now() - t0).toFixed(0)} ms`);
+  return true;
 }
 
 let interimFor = null;    // the sky build the interim gradient is standing in for

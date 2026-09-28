@@ -41,7 +41,7 @@ import { join, dirname } from "node:path";
 import { Document, NodeIO } from "@gltf-transform/core";
 import { PNG } from "pngjs";
 import { isLodVariant, isServingArtifact, isStoreOriginal, lodVariantPath, ktx2VariantPath, storeShadowsMissing,
-  LOD_RECIPE, LOD_MIN_VERTS, recipeStamp, lodVerdictKind, lodVerdictFinal } from "../server/store-variants.ts";
+  LOD_RECIPE, LOD_MIN_VERTS, recipeStamp, lodVerdictKind, lodVerdictFinal, lodRecipeFor } from "../server/store-variants.ts";
 import { lodExclusion, findKtx2Encoder, optimizeGlbLod, lodNodesSig, lodMatsSig } from "../server/optimize.ts";
 import { lodFromVersion, withLod, keyFromVersion, negotiate } from "../shared/ktx2.js";
 
@@ -528,6 +528,9 @@ console.log("\n  the store door — the tier URL carries the generation:");
       writeFileSync(lMarker, saved.replace(stamp, recipeStamp("lod9-r25e01-texel1024-min12000")));
       const older = await S.get(lUrl);
       check("…nor one stamped with another generation", older.cc === "no-cache" && older.lod === "provisional; verdict=light", `cc=${older.cc} lod=${older.lod}`);
+      writeFileSync(lMarker, saved.replace(stamp, recipeStamp(`${LOD_RECIPE}0`)));
+      const pref = await S.get(lUrl);
+      check("…nor a stamp that merely EXTENDS this recipe's (min120000 is not min12000)", pref.cc === "no-cache" && pref.lod === "provisional; verdict=light", `cc=${pref.cc} lod=${pref.lod}`);
       writeFileSync(lMarker, "exit 1");
       const unk = await S.get(lUrl);
       check("…nor an unclassified marker", unk.cc === "no-cache" && unk.lod === "provisional; verdict=unknown", `cc=${unk.cc} lod=${unk.lod}`);
@@ -625,6 +628,16 @@ console.log("\n  the library arm — the sweep queues LODs, and mutable sources 
           const f3 = await S.get(withLod(negotiate(REL2, S.key), S.lod));
           check("…and the mutated light prop was re-measured: its verdict stands again, newer than the source — final",
             remeasured && f3.cc === "public, max-age=86400" && f3.lod === "refused=light", `remeasured=${remeasured} cc=${f3.cc} lod=${f3.lod}`);
+          // a FRESH verdict over a STALE ktx2 variant (the source re-exported, the ktx2 rebuild not yet run — or refused):
+          // the unflagged answer tolerates that window; a FINAL answer must not serve yesterday's bytes for a day
+          if (remeasured) {
+            await sleep(1100);
+            const t3 = new Date(); utimesSync(join(LIB, REL2), t3, t3);                                   // source newer than the ktx2 variant…
+            const t4 = new Date(t3.getTime() + 2000); utimesSync(lMarker2, t4, t4);                       // …but the verdict newer still
+            const f4 = await S.get(withLod(negotiate(REL2, S.key), S.lod));
+            check("a fresh verdict over a STALE ktx2 variant is NOT final: provisional, and the header names the stale arm",
+              f4.cc === "no-cache" && f4.lod === "provisional; verdict=light; ktx2=stale", `cc=${f4.cc} lod=${f4.lod}`);
+          }
         }
       }
     }
@@ -674,8 +687,16 @@ console.log("\n  the canary — a pulled recipe lands under a running sequencer:
     if (S.up) {
       const landed = await until(() => existsSync(lodVariantPath(join(STORE, `${hash}.glb`))), 45_000);
       check("its boot sweep built the current-generation variant", landed);
-      const NEXT = "lod1-r10-future";
-      writeFileSync(SV, pristine.toString("utf8").replace(`export const LOD_RECIPE = "${LOD_RECIPE}";`, `export const LOD_RECIPE = "${NEXT}";`));
+      // the recipe DERIVES from its parameters now, so a pull that changes one is what a real deploy looks like — and the
+      // mutation must be PROVEN to have landed (the old literal-replace went silently inert when the literal left the file)
+      const NEXT = lodRecipeFor({ minVerts: 6000 });
+      const pulled = pristine.toString("utf8").replace(/export const LOD_MIN_VERTS = 12_000;/, "export const LOD_MIN_VERTS = 6_000;");
+      check("the canary's pull changes the on-disk source (a no-op mutation proves nothing)", pulled !== pristine.toString("utf8") && NEXT !== LOD_RECIPE, NEXT);
+      writeFileSync(SV, pulled);
+      const fresh = spawn(process.execPath, ["-e", "import { LOD_RECIPE } from './server/store-variants.ts'; console.log(LOD_RECIPE)"], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+      let freshOut = ""; fresh.stdout!.on("data", (d) => { freshOut += d; });
+      await new Promise<void>((r) => fresh.on("close", () => r()));
+      check("a FRESH process reading the pulled file derives the NEXT recipe — the pull is real", freshOut.trim() === NEXT, `fresh=${freshOut.trim()}`);
       const version2 = await fetch(`${S.base}/version`).then((r) => r.json());
       check("the pull landed; /version still publishes the RUNNING recipe", lodFromVersion(version2) === LOD_RECIPE, JSON.stringify(version2.lodRecipe));
       const good = await S.get(withLod(negotiate(`store/${hash}.glb`, S.key), LOD_RECIPE));

@@ -960,8 +960,20 @@ const ROUTES: Route[] = [
           // a lod-requesting fetch answered by the plain ktx2 variant is
           // PROVISIONAL — the lod may land later under this same URL —
           // UNLESS a typed verdict stands: then the plain variant IS this
-          // tier's answer, and it caches exactly as it does unflagged
-          if (fresh) return serveFrom(OPT_DIR, kRel, true, req, versioned, lodAsked != null && !lodFinal, lodHeader);
+          // tier's answer, and it caches exactly as it does unflagged.
+          // For a library GLB the unflagged answer tolerates a variant older
+          // than a re-exported source until the next boot rebuilds it (a
+          // short window, ETag-revalidated); a FINAL answer must not — the
+          // verdict may be fresh while the ktx2 bytes are yesterday's model
+          let ktx2Stale = false;
+          if (lodFinal && !rel.startsWith("store/")) {
+            const src = [[PATCH_DIR, normalize(join(PATCH_DIR, rel))], [OPT_DIR, normalize(join(OPT_DIR, rel))], [LIBRARY_DIR, normalize(join(LIBRARY_DIR, rel))]]
+              .find(([b, p]) => p.startsWith(b) && existsSync(p))?.[1];
+            ktx2Stale = !src || Bun.file(k).lastModified <= Bun.file(src).lastModified;
+          }
+          const finalHere = lodFinal && !ktx2Stale;
+          const header = ktx2Stale ? { "x-eidoverse-lod": `${lodState!.replace(/^refused=/, "provisional; verdict=")}; ktx2=stale` } : lodHeader;
+          if (fresh) return serveFrom(OPT_DIR, kRel, true, req, versioned, lodAsked != null && !finalHere, header);
         }
       }
       // A flagged fetch that falls through is PROVISIONAL for that URL, not

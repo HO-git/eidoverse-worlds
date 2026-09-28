@@ -78,6 +78,12 @@ export function capTexels(size: [number, number] | null | undefined, cap = KTX2_
 // images", a corrupt container) carry no stamp and stand.
 export const KTX2_RECIPE = "texel1024";
 export const recipeStamp = (recipe = KTX2_RECIPE) => `recipe=${recipe}`;
+/** Does `content` carry the stamp for exactly `recipe`? Delimited, never a
+ *  prefix: `recipe=…-min12000` must not answer for `…-min120000` (a marker
+ *  written by a newer CLI into a filename the older running server chose,
+ *  in a pull-before-restart window). */
+export const hasStamp = (content: string, recipe: string) =>
+  new RegExp(`(^|\\s)${recipeStamp(recipe).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s|$)`).test(content);
 
 // ---- the geometry LOD (objects only — v1 contract, PR #142 thread) ---------
 // A far or VRAM-pressed client can ask for a decimated variant of a PLACEABLE
@@ -106,8 +112,17 @@ export const LOD_MIN_VERTS = 12_000;   // under this, there is nothing worth red
  *  the same string would have left every "already light" verdict standing
  *  and the sweep skipping exactly the models the change was for. */
 export function lodRecipeFor({ gen = LOD_GEN, ratio = LOD_RATIO, error = LOD_ERROR, texel = KTX2_TEXEL_CAP, minVerts = LOD_MIN_VERTS } = {}): string {
-  const pct = (x: number) => String(Math.round(x * 100)).padStart(2, "0");   // 0.25 → 25, 0.01 → 01
-  return `lod${gen}-r${pct(ratio)}e${pct(error)}-texel${texel}-min${minVerts}`;
+  // the fraction's own decimal digits, every one of them — 0.25 → 25, 0.01 →
+  // 01, 0.014 → 014: two settings the reducer tells apart must never share a
+  // string (a rounded percent read 0.014 as 0.01, and the sweep would have
+  // skipped every existing file under the unchanged address)
+  const frac = (x: number, what: string) => {
+    const s = x.toString();
+    if (!(x > 0 && x < 1) || !/^0\.\d+$/.test(s)) throw new Error(`lod ${what} must be a plain decimal in (0, 1): ${s}`);
+    return s.slice(2);
+  };
+  if (!Number.isInteger(texel) || !Number.isInteger(minVerts) || !Number.isInteger(gen)) throw new Error("lod gen/texel/minVerts must be integers");
+  return `lod${gen}-r${frac(ratio, "ratio")}e${frac(error, "error")}-texel${texel}-min${minVerts}`;
 }
 export const LOD_RECIPE = lodRecipeFor();   // "lod1-r25e01-texel1024-min12000"
 
@@ -138,7 +153,7 @@ export function lodVerdictKind(content: string): LodVerdictKind | null {
  *  the filename binds the recipe too; the stamp is the belt to that brace. */
 export function lodVerdictFinal(content: string, recipe = LOD_RECIPE): boolean {
   const kind = lodVerdictKind(content);
-  return (kind === "structural" || kind === "light") && content.includes(recipeStamp(recipe));
+  return (kind === "structural" || kind === "light") && hasStamp(content, recipe);
 }
 
 /** A geometry-LOD serving artifact — ANY recipe generation's, not only the
@@ -162,7 +177,7 @@ export function lodVariantPath(original: string, recipe = LOD_RECIPE): string {
  *  anything else stands regardless. */
 export function verdictStands(content: string, recipe = KTX2_RECIPE): boolean {
   if (!/not smaller/i.test(content)) return true;
-  return content.includes(recipeStamp(recipe));
+  return hasStamp(content, recipe);
 }
 
 /** Any KTX2 serving artifact, of any asset class: `<rel>.ktx2.glb` (models,

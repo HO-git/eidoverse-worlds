@@ -248,7 +248,11 @@ export async function bandedBakeRender(r, bakeScene, bakeCam, target, { cloudPas
   try {
     { const prev = r.getRenderTarget(); r.setRenderTarget(target);
       const tc = performance.now();
-      try { await r.compileAsync(bs, bakeCam).catch((e) => tee(`[sky] band bake: compileAsync rejected: ${e?.message ?? e}`)); } finally { r.setRenderTarget(prev ?? null); }
+      // the target is read when compileAsync is CALLED; holding it bound across the await (seconds, cold) left every
+      // frame meanwhile starting with the bake target bound (render.js: 'unbound a stale target at frame start')
+      let compiling;
+      try { compiling = r.compileAsync(bs, bakeCam); } finally { r.setRenderTarget(prev ?? null); }
+      await compiling.catch((e) => tee(`[sky] band bake: compileAsync rejected: ${e?.message ?? e}`));
       // …and LINKED: a giant program the syncgate backstop deferred earlier (a render into this target during the
       // build) may still be linking; drawing now would skip every band and leave the dome black (09-27 18:10)
       const tl = performance.now();

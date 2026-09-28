@@ -908,7 +908,9 @@ async function ensureSkyBake() {
         // self-heal UNBINDS any target left bound at frame start, so the draw must re-bind it or it lands on the canvas
         const target = renderer.getRenderTarget();
         const t0 = performance.now();
-        return renderer.compileAsync(sc, cam).catch(() => {})
+        const compiling = renderer.compileAsync(sc, cam);   // the target is read here, at the call…
+        renderer.setRenderTarget(outer ?? null);            // …so nothing stays bound while it links (frames run meanwhile)
+        return compiling.catch(() => {})
           .then(() => globalThis.__syncGate?.whenGiantLinked?.())   // a deferred giant link must land before the one draw (09-27)
           .then(() => { tee(`[sky] one-shot bake precompiled in ${(performance.now() - t0).toFixed(0)} ms`); renderer.setRenderTarget(target); return origRA.call(renderer, sc, cam); });
       }

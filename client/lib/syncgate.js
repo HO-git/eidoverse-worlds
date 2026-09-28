@@ -73,7 +73,11 @@ export function installSyncGate(renderer, { tee = () => {}, gate = true } = {}) 
       // used for that: once the pipeline exists, it resolves at once, linked or not.
       if (mine.length && fsLen > GIANT_FS) {
         const pipe = renderObject.pipeline;
-        const p = Promise.all(mine).catch(() => {}).finally(() => pendingGiant.delete(p));
+        // a program whose material is disposed (its sky torn down while linking) holds nobody up: a new sky's bake
+        // sat ~44 s behind the old sky's orphaned link on the owner's rig (09-27 20:27, medium→low, no clouds)
+        const mat = renderObject.material;
+        const gone = new Promise((res) => { const h = () => { mat?.removeEventListener?.('dispose', h); res(); }; mat?.addEventListener?.('dispose', h); });
+        const p = Promise.race([Promise.all(mine).catch(() => {}), gone]).finally(() => pendingGiant.delete(p));
         p.status = () => { try { const gl = be.gl, prog = be.get(pipe)?.programGPU; if (!gl || !prog) return 'no program';
           const done = be.parallel ? gl.getProgramParameter(prog, be.parallel.COMPLETION_STATUS_KHR) : true;
           return done ? `complete, linked=${gl.getProgramParameter(prog, gl.LINK_STATUS)}` : 'still compiling'; } catch (e) { return `? ${e?.message ?? e}`; } };

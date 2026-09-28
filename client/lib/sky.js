@@ -403,7 +403,12 @@ export const skyPreviewing = () => previewing;
 // 'sky-busy' comes from the sky's own arrival (a stand-in gradient, a tier swap compiling): loading too. Harmless unheard.
 let arriving = false;
 bus.on('sky-busy', (b) => { arriving = !!b; bus.emit('sky-state'); });
-export const skyRendering = () => rendering > 0 || arriving;
+// A render only reads as 'loading…' once it has run past LOAD_SHOW_MS: a rated sky, a real clock or a forecast re-render
+// every second and finish in a frame, and flashing the line at 1 Hz re-rasterised the whole World panel in VR
+// (review 3, M3 / U1). Real builds and swaps take seconds, so they still show.
+const LOAD_SHOW_MS = 400;
+let renderSince = 0;
+export const skyRendering = () => arriving || (rendering > 0 && performance.now() - renderSince >= LOAD_SHOW_MS);
 export const skyDegraded = () => degrade >= 2;
 
 function nowHours() {
@@ -433,8 +438,12 @@ const MAX_SKY_BUILDS = 2;
 // its own idea of how degraded things are, and each building its own sky.
 let renderChain = Promise.resolve();
 function render() {
-  rendering++;
-  bus.emit('sky-state');
+  bus.emit('sky-state');   // the log/preview state changed (readers write only on change)
+  if (rendering++ === 0) {
+    renderSince = performance.now();
+    const at = renderSince;
+    setTimeout(() => { if (rendering > 0 && renderSince === at) bus.emit('sky-state'); }, LOAD_SHOW_MS + 10);
+  }
   renderChain = renderChain.then(renderOnce, renderOnce);
   const done = () => { rendering--; bus.emit('sky-state'); };
   renderChain.then(done, done);

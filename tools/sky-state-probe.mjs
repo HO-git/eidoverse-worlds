@@ -73,6 +73,16 @@ try {
   });
   console.log('    basic-only rows:', JSON.stringify(basic));
   check('on the detailed sky, azimuth and fill are hidden', basic.impl === 'eidoverse' && basic.n === 2 && basic.shown === 0, JSON.stringify(basic));
+  // M3: a rated sky re-renders every second; the you: line must not flash 'loading…' at 1 Hz (a VR panel re-raster each)
+  await log({ hours: 12, rate: 60, clouds: 'clear', weather: 'clear' });
+  await pg.waitForTimeout(1500);
+  const flashes = await pg.evaluate(async () => {
+    const you = document.querySelector('#sec-sky .state-you'); let n = 0;
+    const mo = new MutationObserver(() => { n++; }); mo.observe(you, { childList: true, characterData: true, subtree: true, attributes: true });
+    await new Promise((r) => setTimeout(r, 5000)); mo.disconnect(); return n; });
+  console.log('    rated-sky you: mutations in 5 s:', flashes);
+  check('a rated sky does not flash loading… every second (0 you: writes in 5 s)', flashes === 0, flashes);
+  await log({ hours: 12, rate: 0, clouds: 'clear', weather: 'clear' });
   // M1: with the panel left open, switching to the basic sky brings them back (and back again hides them)
   const rowsNow = () => pg.evaluate(async () => { const impl = (await import('./lib/sky.js')).skyImpl?.();
     const rows = [...document.querySelectorAll('#sec-sky input[type=range]')].map((i) => i.parentNode).filter((r) => /azim|fill/i.test(r.textContent));

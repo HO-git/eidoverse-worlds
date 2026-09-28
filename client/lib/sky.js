@@ -181,15 +181,14 @@ bus.on('xr:state', (on) => {
     if (headsetGradient && !swapping && !building) hideInterimSky();
   }
   headsetGradient = headsetGradient && !!on;
-  // At exit, ONE rebuild covers whatever was held: a held quality rebuilds at that level (and picks up a held world
-  // switch, since the rebuild reads the latest sky args); the cap's own restore below rebuilds too, so when the cap is
-  // active it carries the held world switch and nothing extra runs. (A quality held while capped cannot exist: the
-  // cap turns a 'high' choice into medium before the hold, and any other choice clears the cap.)
+  // At exit, what was held applies: a held quality first (a same-system swap, or a rebuild for 'off'), then a held
+  // sky-world switch once the sky is up (render() rebuilds on its own when the world differs). With the cap active, a
+  // held quality is the cap's stand-in and its restore below replaces it; a held world switch rides after that restore.
   if (!on && (heldQuality || heldRebuild) && !xrCappedFrom) {
-    const q = heldQuality; heldQuality = null; heldRebuild = false;
-    tee(`[sky] VR exit: applying the sky change held during the session (${q ? `clouds → ${q}` : 'sky world'})`);
-    if (q) setCloudQuality(q, { persist: false }).catch((e) => report('sky held change (exit)', e));
-    else { currentWorld = null; skyBuilds = 0; if (clock) render(); }
+    const q = heldQuality, w = heldRebuild; heldQuality = null; heldRebuild = false;
+    tee(`[sky] VR exit: applying the sky change held during the session (${[q && `clouds → ${q}`, w && 'sky world'].filter(Boolean).join(', ')})`);
+    const done = q ? setCloudQuality(q, { persist: false }).catch((e) => report('sky held change (exit)', e)) : Promise.resolve();
+    if (w) applyHeldWorldWhenUp(done);   // review 12b L2: both held used to drop the world
     return;
   }
   // a sky-world switch held while CAPPED survives to the cap's restore below (review 11b M1: it was dropped here; latent
@@ -212,17 +211,28 @@ bus.on('xr:state', (on) => {
     // full rebuild in VR (review 10b M2).
     const w = capWait = { off: null, tm: 0 };
     const go = () => { if (capWait !== w) return; clearCapWait(); if (!xrPresenting || xrCappedFrom !== CAP_FROM) return;
-      setCloudQuality(CAP_TO, { persist: false, capFlip: true }).catch((e) => report('sky VR cap', e)); };
+      setCloudQuality(CAP_TO, { persist: false, capFlip: true }).catch((e) => report('sky VR cap', e));
+      holdLiveInHeadset();   // review 12b M1: a re-entry during the previous session's cap bake left the march on screen until it attached
+    };
     w.off = bus.on('xr:curtain-shown', go); w.tm = setTimeout(go, 4000);
   } else if (!on && xrCappedFrom) {
     const back = xrCappedFrom; xrCappedFrom = null;
     tee(`[sky] VR exit: clouds back to ${back}`);
     bus.emit('cloud-cap', null);
     setCloudQuality(back, { persist: false }).catch((e) => report('sky VR cap (exit)', e))
-      .then(() => { if (!heldWorld || xrPresenting) return; tee('[sky] VR exit: applying the sky world held during the session'); currentWorld = null; skyBuilds = 0; if (clock) render(); });
+      .then(() => { if (heldWorld) applyHeldWorldWhenUp(Promise.resolve()); });
   }
 });
 
+// A held sky-world switch, applied once the preceding change has settled AND the sky is up, and only outside a
+// headset (a new session holds it again). No forced currentWorld reset: render() rebuilds when the world differs
+// (review 12b L1: the forced reset rebuilt twice and could drop the tier chosen while the sky arrived).
+function applyHeldWorldWhenUp(after) {
+  after.then(() => whenSkyUp()).then(() => {
+    if (xrPresenting) { heldRebuild = true; return; }
+    tee('[sky] VR exit: applying the sky world held during the session'); skyBuilds = 0; if (clock) render();
+  });
+}
 /** The VR cap in force, for the sky panel's note: { from, to } or null. */
 export const cloudCap = () => (xrCappedFrom ? { from: xrCappedFrom, to: CAP_TO } : null);
 /** What the person CHOSE — a settings row shows this, not the level the VR cap is running meanwhile. */
@@ -1081,6 +1091,14 @@ async function ensureSkyBake() {
     }
     if (bakeGeneration() !== gen || skyApi !== api) return;   // torn down while baking: a newer build owns the sky now
     if (tier !== cloudQuality) { tee(`[sky] bake for ${tier} finished after the choice moved to ${cloudQuality}: not attached (its own bake will)`); return; }
+    if (!ok && BAKED_TIERS[tier]) {
+      // a failed bake left the target undrawn: attaching would show a black dome. Same policy as a failed attach below:
+      // the live march stays (a costly sky beats no clouds; review 12b L4)
+      attachFailedFor = skyApi;   // or the 1 Hz render's holdLiveInHeadset re-holds them within a second
+      releaseLiveDomes();
+      tee('[sky] bake failed: no baked dome attached, the live cloud march stays (in a headset too)');
+      return;
+    }
     if (BAKED_TIERS[tier]) {
       const { cloudPasses, intervalMs } = BAKED_TIERS[tier];
       if (!attachBakedDome(api, { cloudPasses, intervalMs, noClouds: tier === 'off' })) {

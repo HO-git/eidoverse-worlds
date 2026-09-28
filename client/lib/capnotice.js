@@ -20,9 +20,12 @@ let barRO = null;       // the bar reflows without firing any event
 let barSeen = null;
 function dismissed() { try { return new Set(JSON.parse(localStorage.getItem(LS) || '[]')); } catch { return new Set(); } }
 
+// a card that is the ONLY explanation for a dead canvas can't be silenced for good (review 12a L1): the page stopped
+// reloading and draws nothing, so a remembered 'don't show again' would leave it black and unexplained
+const ESSENTIAL = new Set(['gpu-stop']);
 function show(key, title, body) {
   const seen = dismissed();
-  if (seen.has(key)) return;
+  if (seen.has(key) && !ESSENTIAL.has(key)) return;
   if (!card) {
     card = document.createElement('div'); card.className = 'panel capnotice';
     // DECLARE THE ANCHOR, driven by the SAME breakpoint the stylesheet uses. The card
@@ -126,7 +129,8 @@ function show(key, title, body) {
   item.querySelector('p').textContent = body;
   const close = () => { item.remove(); if (card && !card.childElementCount) { card.remove(); card = null; unwatch?.(); } };
   item.querySelector('.cn-ok').onclick = close;
-  item.querySelector('.cn-never').onclick = () => { try { seen.add(key); localStorage.setItem(LS, JSON.stringify([...seen])); } catch {} close(); };
+  if (ESSENTIAL.has(key)) item.querySelector('.cn-never').remove();
+  else item.querySelector('.cn-never').onclick = () => { try { seen.add(key); localStorage.setItem(LS, JSON.stringify([...seen])); } catch {} close(); };
   card.appendChild(item);
   placeTop?.();   // the card just grew
 }

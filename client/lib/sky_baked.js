@@ -173,13 +173,14 @@ let cycleForced = false;
 let fade = null;       // { from, to, t0, dur }
 let nextAt = 0;
 let lastCycleMs = 0;
-// DRIFT (prototype, ?skydrift=1; owner 09-27: 'if drift is almost free, do that for medium'). A bake is a snapshot, so
+// DRIFT (owner 09-27: 'if drift is almost free, do that for medium'; after a look: 'looks nice … an easy win'). On by
+// default on every baked tier; ?skydrift=0 turns it off. A bake is a snapshot, so
 // between bakes the clouds stood still and then dissolved to where they'd moved. The engine moves them by sampling its
 // cloud field at p + wind·time, so the dome can do the same to the picture: each view ray is carried to the cloud
 // layer, shifted by wind × (sky time since THAT texture was baked), and the shifted direction is sampled. The next bake
 // then lands where the drifted picture already is. The shift fades out toward the horizon (no layer hit, tiny angles)
 // and around the sun (the bake includes the disc and its glow, which must not travel).
-const DRIFT = CONFIG.params.get('skydrift') === '1';
+const DRIFT = CONFIG.params.get('skydrift') !== '0';
 let sysRef = null, cycleSkyT = 0;
 const bakeSkyT = [0, 0];               // sky time each target's picture shows (mid-bake)
 let driftDt = null;                    // [uniform, uniform]: dt for A and B
@@ -397,7 +398,7 @@ export function attachBakedDome(skyApi, opts = {}) {
       return TSL.equirectUV(TSL.normalize(TSL.mix(dirL, TSL.normalize(moved), w)));
     };
     suvA = shifted(driftDt[0]); suvB = shifted(driftDt[1]);
-    tee('[sky] drift on (prototype): the baked clouds follow the wind between bakes, the sun stays put');
+    tee('[sky] drift on: the baked clouds follow the wind between bakes, the sun stays put');
   } else { suvA = suvB = TSL.equirectUV(dirL); }
   mat.colorNode = TSL.mix(
     TSL.texture(A.texture, suvA),

@@ -808,7 +808,7 @@ async function enterVR({ retryOf = null } = {}) {
       camera.updateProjectionMatrix();
       // Defensive: the canvas back to the window's size and ratio (three restores its own record; ours is the truth)
       // a pixel ratio asked for mid-session (the #32 guard deferred it) lands now
-      try { renderer.setPixelRatio(xrPixelRatio?.takeDeferred() ?? Math.min(devicePixelRatio, 2)); renderer.setSize(innerWidth, innerHeight); } catch (e) { report('xr exit resize', e); }
+      try { renderer.setPixelRatio(xrPixelRatio?.takeDeferred() ?? Math.min(devicePixelRatio, 2)); renderer.setSize(innerWidth, innerHeight); bus.emit('xr:exit-resized'); } catch (e) { report('xr exit resize', e); }
       // THE BLACK DESKTOP (owner, 09-06 12:46 → 23:43; reproduced 09-07 00:05 with an emulated headset, smoke/xr-exit-probe.mjs):
       // three's WebGL backend (0.185–0.186) keeps `_currentContext` = the last XR frame's render context after the session
       // ends (that frame's finishRender never ran). Every desktop render then ends with finishRender → _setFramebuffer

@@ -52,7 +52,7 @@
 // not a second meter.
 
 import { renderer, sun, BASE_PIXEL_RATIO } from './core.js';
-import { CONFIG } from './base.js';
+import { CONFIG, bus } from './base.js';
 import { busy as budgetBusy, setShare } from './framebudget.js';
 import { promoteTailPending, modelQuality } from './realize/models.js';
 import { setSlotCap, getSlotCap, maxSlots, litCount,
@@ -87,6 +87,9 @@ let pixelRatio = BASE_PIXEL_RATIO;
 // instead (applyPendingPixelRatio, registered just before 'render').
 let pendingPR = null;
 const setPR = (v) => { pixelRatio = v; pendingPR = v; };
+// VR exit resizes the canvas outside the governor (xr.js); its stored ratio is still the truth (a pinned render scale,
+// a cruise step), so it's re-asserted at the next frame start (final review, MED; the same stale ratio exists on main)
+bus.on('xr:exit-resized', () => { pendingPR = pixelRatio; });
 /** Apply a pixel-ratio change the governor made, BEFORE this frame renders. */
 export function applyPendingPixelRatio() {
   if (pendingPR == null) return;

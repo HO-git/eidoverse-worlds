@@ -822,7 +822,9 @@ function swapTier(from) {
     if (skyApi !== api) return;
     const want = cloudQuality;
     if (want === shownTier) return;
-    if (await swapTierInner(shownTier, want)) shownTier = want;
+    const r = await swapTierInner(shownTier, want);
+    if (r) shownTier = want;   // true: arrived; 'superseded': its dome is gone/held, so the next run takes over from it
+    if (r === 'superseded') tee(`[sky] clouds →${want} superseded by →${cloudQuality} mid-bake; the next swap takes over`);
   });
   swapChain = run.catch(() => {});
   return run.finally(() => { swapping--; announceBusy(); });
@@ -841,8 +843,11 @@ async function swapTierInner(from, to) {
     try { await ensureSkyBake(); } catch (e) { report('sky tier swap', e); }
     if (bakedActive()) await whenBakeReady();
     // a newer choice arrived while this baked: its bake declined to attach (M1), and the queued swap owns the sky now,
-    // so leave the gradient/hold up for it rather than release the live march in between
-    if (skyApi !== api || cloudQuality !== to) return false;
+    // so leave the gradient/hold up for it rather than release the live march in between. 'superseded' marks `to` as
+    // what's SHOWN (the old dome is gone or held): the queued run must not read "already there" and leave the sky on the
+    // gradient (final review H1: medium→low→medium stuck cloudless; a cap swap abandoned at VR exit left sky-busy stuck)
+    if (skyApi !== api) return false;
+    if (cloudQuality !== to) return 'superseded';
     if (!bakedActive()) releaseLiveDomes();
     hideInterimSky();
   } else if (!T) {
@@ -850,6 +855,7 @@ async function swapTierInner(from, to) {
     await compileLiveDomes();
     if (skyApi !== api || BAKED_TIERS[cloudQuality]) return false;
     detachBakedDome();
+    hideInterimSky();                   // a superseded bake swap may have left the gradient up (H1)
     scheduleEnvBake({ force: true });   // the live tier's own env-IBL
   } else {
     // live → baked: the live march stays on screen while the bake runs (in a headset it's held out, the gradient
@@ -859,8 +865,11 @@ async function swapTierInner(from, to) {
     try { await ensureSkyBake(); } catch (e) { report('sky tier swap', e); }
     if (bakedActive()) await whenBakeReady();
     // a newer choice arrived while this baked: its bake declined to attach (M1), and the queued swap owns the sky now,
-    // so leave the gradient/hold up for it rather than release the live march in between
-    if (skyApi !== api || cloudQuality !== to) return false;
+    // so leave the gradient/hold up for it rather than release the live march in between. 'superseded' marks `to` as
+    // what's SHOWN (the old dome is gone or held): the queued run must not read "already there" and leave the sky on the
+    // gradient (final review H1: medium→low→medium stuck cloudless; a cap swap abandoned at VR exit left sky-busy stuck)
+    if (skyApi !== api) return false;
+    if (cloudQuality !== to) return 'superseded';
     if (!bakedActive()) releaseLiveDomes();
     hideInterimSky();
   }

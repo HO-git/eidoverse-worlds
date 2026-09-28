@@ -67,6 +67,12 @@ check('control — desktop, slow: the governor DOES move the pixel ratio', ratio
   check('a change still pending at VR entry is NOT applied mid-session', !decided || ratios.length === w0, { decided, writes: ratios.slice(w0) });
   stub.renderer.xr.isPresenting = false; G.applyPendingPixelRatio();
   check('…it lands after exit', !decided || ratios.length === w0 + 1, { decided, writes: ratios.slice(w0) }); }
+// VR exit resizes outside the governor (xr.js emits 'xr:exit-resized'): the governor's own ratio comes back next frame
+{ stub.renderer.xr.isPresenting = false;
+  const { bus } = await import('../client/lib/base.js');
+  const mine = G.governorDebug().pixelRatio, w0 = ratios.length;
+  bus.emit('xr:exit-resized'); G.applyPendingPixelRatio();
+  check('after VR exit the governor re-asserts its own pixel ratio (a pinned scale survives VR)', ratios.length === w0 + 1 && ratios.at(-1) === mine, { mine, writes: ratios.slice(w0) }); }
 // THE BLACK FRAMES (09-28): a pixel-ratio change resizes (and so clears) the canvas; decided after the draw, it must
 // not reach the renderer until the next frame's apply step, which runs BEFORE render
 { stub.renderer.xr.isPresenting = false;

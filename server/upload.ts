@@ -12,7 +12,7 @@ import { JOIN_TOKEN, UPLOAD_CAP, IMAGE_CAP, ROOT, OPT_DIR, STORE_MIN, LIBRARY_DI
 // merge 2026-09-01 (anima a468cba, geometry LOD): upstream's LOD names ride
 // in; the door stays on R1's aid1JoinIdentity (the HN_*/verifyToken form is
 // what it replaced — the merged body references neither)
-import { isStoreOriginal, ktx2VariantPath, lodVariantPath, storeShadowsMissing, verdictStands, KTX2_RECIPE, LOD_RECIPE } from "./store-variants.ts";
+import { isStoreOriginal, ktx2VariantPath, lodVariantPath, storeShadowsMissing, verdictStands, freshOver, diskIdentity, sourceSidecar, sourceToken, recordedSource, sameIdentity, KTX2_RECIPE, LOD_RECIPE } from "./store-variants.ts";
 import { agentTokens, aid1JoinIdentity } from "./auth.ts";
 import { worlds } from "./world.ts";
 import { atomicWrite } from "./fsutil.ts";
@@ -41,10 +41,10 @@ let lodEncoderWarned = false; // the --lod arm's own once-per-boot note; it neve
  *  bump (a new floor, a new reducer) leaves one generation on disk. */
 function pruneOldLodGenerations(src: string, dest: string) {
   const base = basename(src), dir = dirname(dest);
-  const keep = new Set([dest, `${dest}.failed`, `${dest}.deferred`]);
+  const keep = new Set([dest, `${dest}.failed`, `${dest}.deferred`, `${dest}.srcid`]);
   for (const f of readdirSync(dir)) {
     const p = join(dir, f);
-    if (f.startsWith(`${base}.lod.`) && /\.glb(\.failed|\.deferred)?$/.test(f) && !keep.has(p))
+    if (f.startsWith(`${base}.lod.`) && /\.glb(\.failed|\.deferred|\.srcid)?$/.test(f) && !keep.has(p))
       try { rmSync(p); } catch { /* best effort */ }
   }
 }
@@ -145,20 +145,26 @@ async function pumpOptimize() {
       const { src, dest, mode, force } = optQueue.splice(next < 0 ? 0 : next, 1)[0];
       const base = basename(src);                      // <hash>.glb / <model>.glb
       const failed = `${dest}.failed`;
+      // the file this pass is ABOUT (store-variants.ts freshOver): null for a content-addressed store original and for
+      // the store-min pass, whose shadows are done forever once they exist; the library/overlay file otherwise
+      const source = !mode || dirname(src) === join(OPT_DIR, "store") ? null : src;
       // a size verdict from an older recipe does not stand (store-variants.ts);
-      // nor does ANY verdict older than its source — library files are
-      // mutable, and a re-exported model is a question again (the route
-      // reads the same rule: a stale marker serves provisional, never final)
+      // nor does ANY verdict about a source that has changed since — library
+      // files are mutable, and a re-exported model is a question again (the
+      // route reads the same rule: a stale marker serves provisional, never final)
       const refused = existsSync(failed)
         && (!mode || verdictStands(readFileSync(failed, "utf8"), mode === "--lod" ? LOD_RECIPE : KTX2_RECIPE))
-        && (!mode || !existsSync(src) || statSync(failed).mtimeMs > statSync(src).mtimeMs);
+        && freshOver(failed, source);
       // a FORCED item is a re-ask (↻): a verdict it finds was written after the press, by a run already in flight
       if (!existsSync(src) || (refused && !force)) continue;
       // Store shadows are content-addressed — existing means done forever.
-      // KTX2 variants shadow MUTABLE library files, so a variant older than
-      // its source rebuilds (the sweep filters too, but a file can change
-      // while its item waits behind slow encodes).
-      if (!force && existsSync(dest) && (!mode || statSync(dest).mtimeMs > statSync(src).mtimeMs)) { undefer(dest); continue; }   // done elsewhere: a stale .deferred must not outlive the variant
+      // KTX2 variants shadow MUTABLE library files, so a variant built from
+      // another version of its source rebuilds (the sweep filters too, but a
+      // file can change while its item waits behind slow encodes).
+      if (!force && existsSync(dest) && freshOver(dest, source)) { undefer(dest); continue; }   // done elsewhere: a stale .deferred must not outlive the variant
+      // the identity of what this pass reads, taken BEFORE it runs: a source rewritten mid-pass must not be recorded as
+      // the one the output was built from
+      const srcId = source ? diskIdentity(source) : null;
       // Budget gate: an item this host cannot afford is deferred, not failed,
       // and the rest of the queue keeps going (config.ts OPT_MEM_BUDGET_MB).
       const estMB = Math.ceil(Bun.file(src).size * OPT_COST_FACTOR / 1_000_000);
@@ -206,6 +212,9 @@ async function pumpOptimize() {
         undefer(dest);
         // a verdict that was re-measured and answered differently is history
         if (existsSync(failed)) try { rmSync(failed); } catch { /* best effort */ }
+        // what this variant was built FROM (freshOver); a store original's needs none
+        if (srcId) try { writeFileSync(sourceSidecar(dest), JSON.stringify(srcId)); } catch { /* best effort: reads as legacy (mtime) */ }
+        else if (existsSync(sourceSidecar(dest))) try { rmSync(sourceSidecar(dest)); } catch { /* best effort */ }
         if (mode === "--lod") pruneOldLodGenerations(src, dest);
         const ratio = (Bun.file(src).size / Math.max(1, Bun.file(dest).size)).toFixed(1);
         console.log(mode ? `[ktx2] ${base} → ${basename(dest)} (${ratio}x)` : `[store] optimized ${base} (${ratio}x)`);
@@ -217,17 +226,22 @@ async function pumpOptimize() {
         // typed verdict makes the original this tier's final answer).
         // the TAIL: the verdict line (and its recipe= stamp) is the LAST
         // [optimize] line, and per-texture notes before it can run long
-        writeFileSync(failed, err.slice(-2000) || "not-smaller"); undefer(dest);
-        // a variant OLDER than its source was built from content that is gone
-        // (a re-exported library model): beside a fresh standing verdict the
+        writeFileSync(failed, (err.slice(-2000) || "not-smaller") + (srcId ? `\n${sourceToken(srcId)}` : "")); undefer(dest);
+        // a variant built from OTHER content than this refusal measured (a
+        // re-exported library model): beside a fresh standing verdict the
         // sweep never revisits it, so it would serve the old model's bytes
-        // (ktx2) and read "stale" forever. Equal mtimes are ambiguous — a
-        // forced re-ask refused on unchanged content keeps the variant that
-        // still serves (store-variants.ts classifyVariant).
+        // (ktx2) and read "stale" forever. A forced re-ask refused on
+        // unchanged content (the same identity) keeps the variant that still
+        // serves (store-variants.ts classifyVariant). A variant with no
+        // recorded identity keeps the old rule: removed only if strictly
+        // older than its source (equal mtimes were ambiguous there).
         try {
-          if (existsSync(dest) && statSync(dest).mtimeMs < statSync(src).mtimeMs) {
-            rmSync(dest);
-            console.log(`[${mode ? "ktx2" : "store"}] ${base} — removed ${basename(dest)}: older than its source, and the re-measure refused`);
+          if (srcId && existsSync(dest)) {
+            const rec = recordedSource(dest, (p) => readFileSync(p, "utf8"));
+            if (rec ? !sameIdentity(rec, srcId) : statSync(dest).mtimeMs < srcId.mtimeMs) {
+              rmSync(dest); try { rmSync(sourceSidecar(dest)); } catch { /* none */ }
+              console.log(`[${mode ? "ktx2" : "store"}] ${base} — removed ${basename(dest)}: built from another version of its source, and the re-measure refused`);
+            }
           }
         } catch { /* best effort (the source may have vanished mid-run) */ }
         if (mode === "--lod") pruneOldLodGenerations(src, dest);
@@ -266,7 +280,7 @@ async function pumpOptimize() {
         // file — that would permanently skip every upload made before the
         // first successful `bun install`. Only content failures stick.
         const envFail = /cannot find module|cannot resolve|error: script not found/i.test(err);
-        if (!envFail) { writeFileSync(failed, err.slice(-2000) || `exit ${code}`); undefer(dest); }
+        if (!envFail) { writeFileSync(failed, (err.slice(-2000) || `exit ${code}`) + (srcId ? `\n${sourceToken(srcId)}` : "")); undefer(dest); }
         console.error(`[${mode ? "ktx2" : "store"}] optimize ${envFail ? "unavailable (deps?)" : `FAILED ${base}`}: ${err.split("\n")[0] || `exit ${code}`}`);
         if (envFail) { optQueue.length = 0; break; } // no point grinding the rest
       }
@@ -337,14 +351,14 @@ export function sweepLibrary() {
       // a loose image's variant IS the ktx2 (<rel>.ktx2 — routes.ts serves it
       // as image/ktx2)
       const dest = join(OPT_DIR, mode === "--ktx2-img" ? `${rel}.ktx2` : mode === "--lod" ? lodVariantPath(rel) : `${rel}.ktx2${ext}`);
-      // a standing verdict skips — if it is NEWER than the source it judges
-      // (mutable library files: an updated model is re-measured, exactly as
-      // an updated model's variant is rebuilt below)
+      // a standing verdict skips — if it is about THIS version of the source
+      // (freshOver: mutable library files: an updated model is re-measured,
+      // exactly as an updated model's variant is rebuilt below)
       if (existsSync(`${dest}.failed`) && verdictStands(readFileSync(`${dest}.failed`, "utf8"), mode === "--lod" ? LOD_RECIPE : KTX2_RECIPE)
-        && statSync(`${dest}.failed`).mtimeMs > statSync(p).mtimeMs) continue;
-      // mtime, not mere existence: library files are mutable — an updated
+        && freshOver(`${dest}.failed`, p)) continue;
+      // identity, not mere existence: library files are mutable — an updated
       // model/body/texture rebuilds its variant next boot
-      if (existsSync(dest) && statSync(dest).mtimeMs > statSync(p).mtimeMs) continue;
+      if (existsSync(dest) && freshOver(dest, p)) continue;
       items.push({ src: p, dest, mode });
     }
   };

@@ -14,7 +14,7 @@ import { sfuDiag } from "./sfuadapter.ts";
 import { join, normalize } from "node:path";
 import { randomBytes } from "node:crypto";
 import { ROOT, WORLDS_DIR, LIBRARY_DIR, OPT_DIR, PATCH_DIR, LADDER, JOIN_TOKEN, STORE_MIN } from "./config.ts";
-import { isStoreOriginal, isServingArtifact, variantStatus } from "./store-variants.ts";
+import { isStoreOriginal, isServingArtifact, variantStatus, variantSource, freshOver } from "./store-variants.ts";
 import { glbPerfOfFile } from "./glbperf.ts";
 import { wantsKtx2, KTX2_KEY } from "../shared/ktx2.js";
 import { LOD_RECIPE, lodVariantPath, lodVerdictKind, lodVerdictFinal } from "./store-variants.ts";
@@ -900,7 +900,7 @@ const ROUTES: Route[] = [
           // every optimization's state, from the sweep's own markers (store-variants.ts variantStatus): the
           // library's variants live in the OPT mirror beside where the original's optimized copy would be
           const libOpt = join(OPT_DIR, "eidoverse/assets/models");
-          const libSrc = join(LIBRARY_DIR, "eidoverse/assets/models", f);
+          const libSrc = variantSource(`eidoverse/assets/models/${f}`, { opt: OPT_DIR, library: LIBRARY_DIR })!;
           const rebuildable = existsSync(libSrc);
           return {
             path: `eidoverse/assets/models/${f}`,
@@ -909,8 +909,9 @@ const ROUTES: Route[] = [
             rebuildable,
             // no draco "min" pass exists for library models (only store/ has store-min) — omit it rather than
             // report a pass that will never run as forever "pending". The library file is MUTABLE: a variant or a
-            // verdict older than it is stale, the rule the sweep rebuilds by and the route serves by (#205)
-            opt: (({ min: _none, ...rest }) => rest)(variantStatus(join(libOpt, f), libOpt, { source: rebuildable ? libSrc : null })),
+            // verdict about another version of it is stale — freshOver against variantSource, the rule the sweep
+            // rebuilds by and the route serves by (no library file: nothing is fresh, as at the route)
+            opt: (({ min: _none, ...rest }) => rest)(variantStatus(join(libOpt, f), libOpt, { source: libSrc })),
             // the loupe's rank of the SERVED file, and of the original beside it (glbperf.ts; mtime-cached; null = unreadable)
             ...perfPair(`eidoverse/assets/models/${f}`, join(LIBRARY_DIR, "eidoverse/assets/models", f)),
             // strip the SEO-soup filenames into something a person can read
@@ -1005,12 +1006,13 @@ const ROUTES: Route[] = [
         // library sources are MUTABLE: an updated model with a not-yet-
         // rebuilt variant must fall through provisional, never serve the
         // old body under the new ?v= (the §20c vrm freshness discipline) —
-        // and a VERDICT older than its source is a question again, exactly
-        // like a variant older than its source
-        const src = rel.startsWith("store/") ? null
-          : [[PATCH_DIR, normalize(join(PATCH_DIR, rel))], [OPT_DIR, normalize(join(OPT_DIR, rel))], [LIBRARY_DIR, normalize(join(LIBRARY_DIR, rel))]]
-            .find(([b, p]) => p.startsWith(b) && existsSync(p))?.[1];
-        const freshOverSource = (p: string) => rel.startsWith("store/") || (!!src && Bun.file(p).lastModified > Bun.file(src).lastModified);
+        // and a VERDICT about an older version of its source is a question
+        // again, exactly like such a variant. Compared against the file the
+        // sweep BUILT from (variantSource: the library model — never the OPT
+        // mirror this route may serve at full detail) by recorded identity
+        // (store-variants.ts freshOver), the rule the sweep and the card use
+        const src = variantSource(rel, { opt: OPT_DIR, library: LIBRARY_DIR });
+        const freshOverSource = (p: string) => freshOver(p, src);
         if (l.startsWith(OPT_DIR) && existsSync(l) && freshOverSource(l)) return serveFrom(OPT_DIR, lRel, true, req, versioned, false, { variant: true, headers: { "x-eidoverse-lod": "variant" } });
         const marker = `${l}.failed`;
         if (l.startsWith(OPT_DIR) && existsSync(marker) && freshOverSource(marker)) {
@@ -1028,11 +1030,7 @@ const ROUTES: Route[] = [
         const k = normalize(join(OPT_DIR, kRel));
         if (k.startsWith(OPT_DIR) && existsSync(k)) {
           let fresh = true;
-          if (rel.endsWith(".vrm")) {
-            const orig = [[OPT_DIR, normalize(join(OPT_DIR, rel))], [LIBRARY_DIR, normalize(join(LIBRARY_DIR, rel))]]
-              .find(([base, p]) => p.startsWith(base) && existsSync(p))?.[1];
-            fresh = !!orig && Bun.file(k).lastModified > Bun.file(orig).lastModified;
-          }
+          if (rel.endsWith(".vrm")) fresh = freshOver(k, variantSource(rel, { opt: OPT_DIR, library: LIBRARY_DIR }));
           // a lod-requesting fetch answered by the plain ktx2 variant is
           // PROVISIONAL — the lod may land later under this same URL —
           // UNLESS a typed verdict stands: then the plain variant IS this
@@ -1043,11 +1041,7 @@ const ROUTES: Route[] = [
           // short window, ETag-revalidated); a FINAL answer must not — the
           // verdict may be fresh while the ktx2 bytes are yesterday's model
           let ktx2Stale = false;
-          if (lodFinal && !rel.startsWith("store/")) {
-            const src = [[PATCH_DIR, normalize(join(PATCH_DIR, rel))], [OPT_DIR, normalize(join(OPT_DIR, rel))], [LIBRARY_DIR, normalize(join(LIBRARY_DIR, rel))]]
-              .find(([b, p]) => p.startsWith(b) && existsSync(p))?.[1];
-            ktx2Stale = !src || Bun.file(k).lastModified <= Bun.file(src).lastModified;
-          }
+          if (lodFinal) ktx2Stale = !freshOver(k, variantSource(rel, { opt: OPT_DIR, library: LIBRARY_DIR }));
           const finalHere = lodFinal && !ktx2Stale;
           const header = ktx2Stale ? { "x-eidoverse-lod": `${lodState!.replace(/^refused=/, "provisional; verdict=")}; ktx2=stale` } : lodHeader;
           if (fresh) return serveFrom(OPT_DIR, kRel, true, req, versioned, lodAsked != null && !finalHere, { variant: true, headers: header });

@@ -4,7 +4,7 @@
 // (source in the library, variants in the OPT mirror) and store layout (beside the original) both resolve; anything
 // that is not an original object — traversal, a variant name, a missing file, a non-GLB — is refused, with nothing
 // queued. Then the route: 401 without the token, 400 on a bad path, 200 with the passes named.
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, chmodSync, statSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, chmodSync, statSync, utimesSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 let pass = 0, fail = 0;
@@ -16,6 +16,7 @@ src=""; dest=""; mode=""
 for a in "$@"; do case "$a" in --*) mode="$a";; *) if [ -z "$src" ]; then src="$a"; else dest="$a"; fi;; esac; done
 echo "$mode $dest" >> "${receipts}"
 if [ -f "${root}/refuse-once" ]; then cat "${root}/refuse-once" >&2; rm -f "${root}/refuse-once"; exit 2; fi
+if [ -f "${root}/refuse$mode" ]; then cat "${root}/refuse$mode" >&2; exit 2; fi
 mkdir -p "$(dirname "$dest")"; printf 'rebuilt' > "$dest"; exit 0
 `); chmodSync(fake, 0o755); writeFileSync(receipts, "");
 Object.assign(process.env, { REBUILD_COOLDOWN_MS: "0", SKIP_OPT_SWEEP: "1", WORLDS_DIR: join(root, "worlds"), OPT_DIR: join(root, "opt"), EIDOVERSE_DIR: join(root, "lib"),
@@ -100,6 +101,75 @@ check("store object: variants rebuilt beside the original, .deferred cleared", !
   const firstUp = mine.findIndex((l) => l.includes("up1.glb")), lastForced = mine.map((l) => /m[123]\.glb/.test(l)).lastIndexOf(true);
   check("priority: the upload queued behind the rebuilds ran before the waiting forced passes (only the in-flight one ran first)",
     firstUp === 1 && lastForced > firstUp, mine);
+}
+// 2f. SOURCE IDENTITY (store-variants.ts freshOver): the pump records what each outcome was built from — a variant's
+// .srcid sidecar, a verdict's `source=` line — and freshness is that identity EQUAL to the source's now, at the pump,
+// the route and the card alike. Never marker-vs-source mtime order.
+{
+  await optIdle();
+  const { diskIdentity, sourceSidecar, parseSourceToken, variantStatus, LOD_RECIPE, recipeStamp } = await import("../server/store-variants.ts");
+  const { KTX2_KEY } = await import("../shared/ktx2.js");
+  const { route: rt } = await import("../server/routes.ts");
+  const REL = "eidoverse/assets/models/prop.glb", src = join(lib, "prop.glb");
+  const pK = join(opt, ktx2VariantPath(REL)), pL = join(opt, lodVariantPath(REL));
+  writeFileSync(src, "prop v1 bytes");
+  const lightLine = `[optimize] lod: already light (900 verts < 1000) (3ms) ${recipeStamp(LOD_RECIPE)} — original stays the only representation`;
+  writeFileSync(join(root, "refuse--lod"), lightLine);
+  rebuildAsset(REL); await optIdle();
+  const id0 = diskIdentity(src)!;
+  let side: unknown = null; try { side = JSON.parse(readFileSync(sourceSidecar(pK), "utf8")); } catch { /* absent */ }
+  check("identity: a built variant records its source's identity (size + mtime) in its .srcid sidecar", JSON.stringify(side) === JSON.stringify(id0), [side, id0]);
+  const tok = parseSourceToken(readFileSync(`${pL}.failed`, "utf8"));
+  check("identity: a verdict records it too, on its own `source=` line", JSON.stringify(tok) === JSON.stringify(id0), [tok, id0]);
+  const lodAt = async () => (await rt(new Request(`http://x/library/${REL}?ktx2=${KTX2_KEY}&lod=${LOD_RECIPE}`), {} as any)).headers.get("x-eidoverse-lod");
+  const card = () => variantStatus(join(opt, REL), join(opt, "eidoverse/assets/models"), { source: src });
+  // the flake, made deterministic: a verdict in the SAME mtime tick as its source was "not newer", so not fresh
+  { const t = new Date(id0.mtimeMs); utimesSync(`${pL}.failed`, t, t); }
+  check("identity: a verdict whose mtime EQUALS its source's still stands at the route (refused=light), since it records that source",
+    (await lodAt()) === "refused=light", await lodAt());
+  check("…and on the card (not needed)", card().lod.state === "not-needed", card().lod);
+  // B4: the route used to judge against the FIRST of PATCH/OPT/LIBRARY — the OPT mirror here — while the sweep built
+  // from, and compared against, the LIBRARY file. A newer mirror copy said "stale" forever to a verdict the sweep kept.
+  mkdirSync(join(opt, "eidoverse/assets/models"), { recursive: true });
+  writeFileSync(join(opt, REL), "an optimized mirror copy"); { const f = new Date(Date.now() + 3_600_000); utimesSync(join(opt, REL), f, f); }
+  check("which source: a newer OPT-mirror copy does not unseat a verdict about the LIBRARY file the sweep built from", (await lodAt()) === "refused=light", await lodAt());
+  // the dangerous direction of "newer than": a DIFFERENT source that carries an OLDER mtime (cp -p, rsync -a, tar)
+  writeFileSync(src, "prop v2 — re-exported, and longer"); { const o = new Date(id0.mtimeMs - 86_400_000); utimesSync(src, o, o); }
+  check("identity: a source replaced by a file with an OLDER mtime makes the verdict a question again (provisional)",
+    (await lodAt()) === "provisional", await lodAt());
+  check("…and the card says stale for both arms (the ktx2 variant is newer than that file, but about another)",
+    card().lod.state === "stale" && card().ktx2.state === "stale", card());
+  // the pump's M1 by identity: a refused re-measure removes a variant built from OTHER content — here one NEWER than
+  // its (older-mtime) source, which the old strictly-older rule kept serving
+  writeFileSync(join(root, "refuse--ktx2"), "[optimize] ktx2: no convertible raster images (2ms) — keeping original");
+  rebuildAsset(REL); await optIdle();
+  check("identity: a refused re-measure removes the variant built from another version of its source (and its sidecar)",
+    !existsSync(pK) && !existsSync(sourceSidecar(pK)) && existsSync(`${pK}.failed`), [existsSync(pK), existsSync(sourceSidecar(pK))]);
+  // a forced re-ask refused on UNCHANGED content keeps the variant that still serves (same identity)
+  rmSync(join(root, "refuse--ktx2")); rebuildAsset(REL); await optIdle();
+  writeFileSync(join(root, "refuse--ktx2"), "[optimize] ktx2: no convertible raster images (2ms) — keeping original");
+  rebuildAsset(REL); await optIdle();
+  check("…but a refusal on the SAME source identity keeps the variant that still serves", existsSync(pK) && existsSync(`${pK}.failed`), existsSync(pK));
+  rmSync(join(root, "refuse--ktx2")); rmSync(join(root, "refuse--lod"));
+  // a VRM body's ktx2 variant: served only while its sidecar names the winning original
+  const vrmRel = "eidoverse/assets/vrms/body.vrm", vrmSrc = join(root, "lib", vrmRel), vK = join(opt, `${vrmRel}.ktx2.vrm`);
+  mkdirSync(join(root, "lib", "eidoverse/assets/vrms"), { recursive: true }); mkdirSync(join(opt, "eidoverse/assets/vrms"), { recursive: true });
+  writeFileSync(vrmSrc, "body"); writeFileSync(vK, "ktx2 body"); writeFileSync(sourceSidecar(vK), JSON.stringify(diskIdentity(vrmSrc)));
+  const vrmAt = async () => await (await rt(new Request(`http://x/library/${vrmRel}?ktx2=${KTX2_KEY}`), {} as any)).text();
+  check("VRM: a variant whose sidecar names the current body serves", (await vrmAt()) === "ktx2 body", await vrmAt());
+  writeFileSync(sourceSidecar(vK), JSON.stringify({ size: 1, mtimeMs: 1 }));
+  check("…and one that names another body does not (the original serves)", (await vrmAt()) === "body", await vrmAt());
+  // a content-addressed store original: any standing verdict stands, whatever its mtime (the same bytes forever)
+  writeFileSync(join(store, "ca1.glb"), "orig"); mkdirSync(join(opt, "store-min"), { recursive: true });
+  writeFileSync(join(opt, "store-min", "ca1.glb.failed"), "lean");
+  const caL = lodVariantPath(join(store, "ca1.glb"));
+  writeFileSync(`${caL}.failed`, lightLine); writeFileSync(`${ktx2VariantPath(join(store, "ca1.glb"))}.failed`, "[optimize] ktx2: no convertible raster images (2ms) — keeping original");
+  { const o = new Date(Date.now() - 86_400_000); utimesSync(`${caL}.failed`, o, o); }   // OLDER than the upload
+  const b0 = runs().length;
+  const { queueOptimize: qo } = await import("../server/upload.ts");
+  qo(join(store, "ca1.glb")); await optIdle();
+  check("store (content-addressed): a standing verdict OLDER than the upload's mtime still stands — the pump runs nothing",
+    runs().length === b0, runs().slice(b0));
 }
 // 3. refusals: nothing queued for any of them
 const before = runs().length;

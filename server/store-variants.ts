@@ -171,6 +171,66 @@ export function lodVerdictFinal(content: string, recipe = LOD_RECIPE): boolean {
   return (kind === "structural" || kind === "light") && hasStamp(content, recipe);
 }
 
+// ---- source identity: freshness by EQUALITY, never by mtime order ------------------------------------------------------
+// A variant or a verdict is ABOUT one source file: the one the pump handed the CLI (the LIBRARY model for a library
+// asset — the sweep builds from it; the overlay-first VRM for a body). When the pump writes either, it records that
+// file's identity as it stood when the pass STARTED; the derived file is fresh iff that recorded identity EQUALS the
+// source's identity now. "Marker newer than source" (make-style ordering) was wrong both ways: a replacement that keeps
+// or restores an older mtime (cp -p, rsync -a, tar, a sync) kept a stale verdict standing forever, and a marker written
+// in the same mtime tick as its source read as not-fresh (the "current verdict stands" flake). The redo / Syncthing
+// rule — compare a recorded stat tuple for change — is cheap enough for every request (two stats, one tiny read).
+// Identity = size + mtimeMs (the float, exact through String/JSON): a content hash would be read per REQUEST at the
+// route, for multi-MB models; the inode would churn on every restore or volume move (a mass re-sweep) and is not stable
+// on every filesystem. seats.ts caches its sha256 on the same (size, mtime) pair.
+// A derived file with NO recorded identity (written before this rule) keeps the old rule — strictly newer than its
+// source — so this lands without re-sweeping anything; the next write records an identity. `source` null = a
+// content-addressed original (a store hash): the same bytes forever, so anything derived from it is fresh.
+export type SourceIdentity = { size: number; mtimeMs: number };
+export type StatFn = (p: string) => SourceIdentity | null;
+export const diskIdentity: StatFn = (p) => { try { const s = statSync(p); return { size: s.size, mtimeMs: s.mtimeMs }; } catch { return null; } };
+/** Where a VARIANT's recorded source identity lives (a verdict marker carries its own, inline). */
+export const sourceSidecar = (variant: string) => `${variant}.srcid`;
+export const sameIdentity = (a: SourceIdentity | null, b: SourceIdentity | null) => !!a && !!b && a.size === b.size && a.mtimeMs === b.mtimeMs;
+/** The marker's token for a source identity — its own line, so no reader of the verdict line ever sees it. */
+export const sourceToken = (id: SourceIdentity) => `source=${id.size}:${id.mtimeMs}`;
+export function parseSourceToken(content: string): SourceIdentity | null {
+  const m = /(?:^|\s)source=(\d+):(\d+(?:\.\d+)?)(?:\s|$)/.exec(content);
+  return m ? { size: Number(m[1]), mtimeMs: Number(m[2]) } : null;
+}
+/** The identity a derived file recorded: a `.failed` marker's inline token, a variant's `.srcid` sidecar. */
+export function recordedSource(derived: string, read: (p: string) => string): SourceIdentity | null {
+  if (derived.endsWith(".failed")) return parseSourceToken(read(derived));
+  try {
+    const j = JSON.parse(read(sourceSidecar(derived)) || "null");
+    return j && Number.isFinite(j.size) && Number.isFinite(j.mtimeMs) ? { size: j.size, mtimeMs: j.mtimeMs } : null;
+  } catch { return null; }
+}
+const readOrEmpty = (p: string) => { try { return readFileSync(p, "utf8"); } catch { return ""; } };
+/** THE freshness rule, for the sweep, the pump, the route and the catalog alike. */
+export function freshOver(derived: string, source: string | null,
+  { read = readOrEmpty, stat = diskIdentity }: { read?: (p: string) => string; stat?: StatFn } = {}): boolean {
+  if (source == null) return true;
+  const cur = stat(source);
+  if (!cur) return false;                     // the source is gone: nothing current to be fresh over
+  const rec = recordedSource(derived, read);
+  if (rec) return sameIdentity(rec, cur);
+  const d = stat(derived);                    // legacy: no identity recorded — the old strictly-newer rule
+  return !!d && d.mtimeMs > cur.mtimeMs;
+}
+/** The source a library/store rel's variants and verdicts are ABOUT — the file the sweep hands the pump, so the route
+ *  and the catalog compare against the same file the build read. null = content-addressed (store/). A GLB is built
+ *  from the LIBRARY file (the /library route's OPT mirror and PATCH copy are never a build input); a VRM from the
+ *  overlay if it has one, else the library (sweepLibrary walks the overlay first). */
+export function variantSource(rel: string, dirs: { opt: string; library: string }): string | null {
+  if (rel.startsWith("store/")) return null;
+  const inside = (base: string) => { const p = join(base, rel); return p.startsWith(base) ? p : null; };
+  if (rel.endsWith(".vrm")) {
+    const o = inside(dirs.opt);
+    if (o && existsSync(o)) return o;
+  }
+  return inside(dirs.library) ?? "";   // outside the tree: no file, so nothing is fresh over it
+}
+
 /** A geometry-LOD serving artifact — ANY recipe generation's, not only the
  *  current one (old generations must stay unlisted and uncatalogued too). */
 export function isLodVariant(name: string): boolean {
@@ -206,11 +266,12 @@ export function isKtx2Variant(name: string): boolean {
 /** Anything the opt tree holds that is not an asset a client addresses by
  *  name: a KTX2 variant, a `.failed` marker (the pump's diagnostic verdict on
  *  a pass), a `.tmp` (a pass mid-write), a `.deferred` (a pass this host
- *  could not afford — upload.ts). None is a listing entry — the
+ *  could not afford — upload.ts), a `.srcid` (a variant's recorded source
+ *  identity — freshOver). None is a listing entry — the
  *  prefetcher pushes every listed store path as a fetch, and a marker fetched
  *  as a model is a 404 on a good day. */
 export function isServingArtifact(name: string): boolean {
-  return isKtx2Variant(name) || isLodVariant(name) || /\.(failed|tmp|deferred)$/i.test(name);
+  return isKtx2Variant(name) || isLodVariant(name) || /\.(failed|tmp|deferred|srcid)$/i.test(name);
 }
 
 /** Is this store/ entry an upload, as opposed to a variant of one? The
@@ -260,8 +321,8 @@ export function storeShadowsMissing(
 //   unsupported  refused by contract (bodies, animated, morphs — LOD v1, PR #142/#156)
 //   refused      the pass ran and its result failed a gate (not smaller, ineffective, preservation, heavier on the
 //                GPU) — reason attached
-//   stale        a size verdict from an older recipe, or a variant/verdict older than the (library) model it judges:
-//                the sweep will re-measure it
+//   stale        a size verdict from an older recipe, or a variant/verdict about a (library) model that has changed
+//                since (freshOver): the sweep will re-measure it
 //   deferred     this host could not afford the pass (upload.ts `.deferred`)
 //   pending      nothing on disk yet: the sweep has not reached it
 export type VariantState = "built" | "not-needed" | "unsupported" | "refused" | "stale" | "deferred" | "pending";
@@ -277,18 +338,14 @@ const failedReason = (raw: string): string => verdictLine(raw).replace(/^\[optim
 
 /** How classifyVariant reads one pass. `lod`: the marker is read through lodVerdictKind — the route's own reader of the
  *  reducer's grammar, so the card and the x-eidoverse-lod header name the same verdict. `source`: the MUTABLE file the
- *  pass judges (a library model); a variant or a marker NOT newer than it is `stale`, the rule the sweep and the pump
- *  use (upload.ts: strictly newer) and the route serves by (an older one answers provisional). Store originals are
- *  content-addressed, so they pass no source. `mtime` is injectable for tests. */
-export type ClassifyOpts = { lod?: boolean; source?: string | null; mtime?: (p: string) => number | null };
-const diskMtime = (p: string): number | null => { try { return statSync(p).mtimeMs; } catch { return null; } };
+ *  pass judges (a library model, variantSource); a variant or a marker not freshOver it is `stale` — the one rule the
+ *  sweep, the pump and the route use. Store originals are content-addressed, so they pass no source. `stat` is
+ *  injectable for tests (the recorded identity is read through `read`). */
+export type ClassifyOpts = { lod?: boolean; source?: string | null; stat?: StatFn };
 
 export function classifyVariant(path: string, exists: (p: string) => boolean, read: (p: string) => string, recipe?: string,
   opts: ClassifyOpts = {}): VariantStatus {
-  const mtime = opts.mtime ?? diskMtime;
-  const srcAt = opts.source ? mtime(opts.source) : null;
-  // an unreadable mtime on either side is not proof of freshness — but with no source there is nothing to be older than
-  const fresh = (p: string) => srcAt === null || (mtime(p) ?? -Infinity) > srcAt;
+  const fresh = (p: string) => freshOver(p, opts.source ?? null, { read, stat: opts.stat });
   const failed = `${path}.failed`;
   const failedNow = exists(failed);
   if (exists(path)) {
@@ -328,19 +385,19 @@ export function variantStatus(
   original: string,
   minDir: string,
   { exists = existsSync, read = (p: string) => { try { return readFileSync(p, "utf8"); } catch { return ""; } },
-    simplifyOf = lodSimplifyOf, source = null, mtime }: {
+    simplifyOf = lodSimplifyOf, source = null, stat }: {
     exists?: (p: string) => boolean; read?: (p: string) => string; simplifyOf?: (p: string) => string | null;
-    source?: string | null; mtime?: (p: string) => number | null;
+    source?: string | null; stat?: StatFn;
   } = {},
 ): { min: VariantStatus; ktx2: VariantStatus; lod: VariantStatus } {
   const lodPath = lodVariantPath(original);
-  let lod = classifyVariant(lodPath, exists, read, LOD_RECIPE, { lod: true, source, mtime });
+  let lod = classifyVariant(lodPath, exists, read, LOD_RECIPE, { lod: true, source, stat });
   // a Permissive LOD collapsed across UV/normal seams (optimize.ts): it serves, but it may read darker or faceted —
   // say so in the hover rather than let it pass as an ordinary build
   if (lod.state === "built" && simplifyOf(lodPath) === "permissive") lod = { state: "built", reason: "permissive: collapsed across UV seams" };
   return {
     min: classifyVariant(join(minDir, basename(original)), exists, read),
-    ktx2: classifyVariant(ktx2VariantPath(original), exists, read, KTX2_RECIPE, { source, mtime }),
+    ktx2: classifyVariant(ktx2VariantPath(original), exists, read, KTX2_RECIPE, { source, stat }),
     lod,
   };
 }

@@ -41,7 +41,7 @@ import { join, dirname } from "node:path";
 import { Document, NodeIO } from "@gltf-transform/core";
 import { PNG } from "pngjs";
 import { isLodVariant, isServingArtifact, isStoreOriginal, lodVariantPath, ktx2VariantPath, storeShadowsMissing,
-  LOD_RECIPE, LOD_MIN_VERTS, recipeStamp, lodVerdictKind, lodVerdictFinal, lodRecipeFor } from "../server/store-variants.ts";
+  LOD_RECIPE, LOD_MIN_VERTS, recipeStamp, lodVerdictKind, lodVerdictFinal, lodRecipeFor, sourceToken, diskIdentity } from "../server/store-variants.ts";
 import { lodExclusion, findKtx2Encoder, optimizeGlbLod, lodNodesSig, lodMatsSig } from "../server/optimize.ts";
 import { lodFromVersion, withLod, keyFromVersion, negotiate } from "../shared/ktx2.js";
 
@@ -688,7 +688,9 @@ console.log("\n  the library arm — the sweep queues LODs, and mutable sources 
           if (remeasured) {
             await sleep(1100);
             const t3 = new Date(); utimesSync(join(LIB, REL2), t3, t3);                                   // source newer than the ktx2 variant…
-            const t4 = new Date(t3.getTime() + 2000); utimesSync(lMarker2, t4, t4);                       // …but the verdict newer still
+            // …but the verdict re-measured over THIS source (it records the identity it judged — freshOver; touching the
+            // marker's mtime no longer makes it fresh, only a recorded identity equal to the source's does)
+            writeFileSync(lMarker2, readFileSync(lMarker2, "utf8").replace(/source=\S+/, sourceToken(diskIdentity(join(LIB, REL2))!)));
             const f4 = await S.get(withLod(negotiate(REL2, S.key), S.lod));
             check("a fresh verdict over a STALE ktx2 variant is NOT final: provisional, and the header names the stale arm",
               f4.cc === "no-cache" && f4.lod === "provisional; verdict=light; ktx2=stale", `cc=${f4.cc} lod=${f4.lod}`);

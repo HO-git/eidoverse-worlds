@@ -14,7 +14,7 @@ import { sendVerb } from './net.js';
 import { flashHint } from './ui.js';
 import { selectRow } from './rows.js';
 import { previewSky, skyArgs, skyImpl, WEATHERS, CLOUDS, SKY_WORLDS,
-  CLOUD_QUALITY, getCloudChoice, setCloudQuality } from './sky.js';
+  CLOUD_QUALITY, getCloudChoice, setCloudQuality, cloudCap, skyInXR } from './sky.js';
 import { GRASS_QUALITY, getGrassQuality, setGrassQuality,
   getGrassDensity, getGrassShed, getGrassApplied } from './terrain.js';
 import { MODEL_QUALITY } from './lod_policy.js';
@@ -113,10 +113,30 @@ export function paintSky(body) {
   // volumetric march is the most expensive thing the client draws and its cost
   // is per-fragment, so a big high-refresh display pays several times what a
   // small window does for the same sky.
-  const { row: cqRow } = selectRow('clouds⚙', CLOUD_QUALITY, getCloudChoice(),
+  const { row: cqRow, select: cq } = selectRow('clouds⚙', CLOUD_QUALITY, getCloudChoice(),
     (v) => { setCloudQuality(v); flashHint(`clouds: ${v} (yours only). The first time a setting is used, your GPU may pause a few seconds to compile it`); });
   cqRow.title = 'local performance setting — not shared with the world';
   body.appendChild(cqRow);
+  // In a headset 'live' is unavailable (owner, 09-27): greyed, and when it's YOUR choice, a note says what runs instead
+  // and why. Shown only in VR; it goes away at exit.
+  const cqNote = document.createElement('div');
+  cqNote.className = 'cloud-cap-note';
+  cqNote.style.cssText = 'font-size:10px;color:var(--dim);padding:0 2px 4px;line-height:1.35';
+  cqNote.hidden = true;
+  body.appendChild(cqNote);
+  let inXR = skyInXR();   // the panel may first paint mid-session
+  const syncCap = () => {
+    const live = [...cq.options].find((o) => o.value === 'live');
+    if (live && live.disabled !== inXR) live.disabled = inXR;
+    const cap = cloudCap();
+    const text = inXR && cap ? `In VR your clouds run at high (baked). Live clouds march every pixel for each eye, which halves a headset's frame rate; your live setting comes back when you leave VR.` : '';
+    if (cqNote.textContent !== text) cqNote.textContent = text;
+    if (cqNote.hidden !== !text) cqNote.hidden = !text;
+    cq.value = getCloudChoice();
+  };
+  bus.on('xr:state', (on) => { inXR = !!on; syncCap(); });
+  bus.on('cloud-cap', syncCap);
+  syncCap();
 
   // The meadow budget is likewise YOURS (#60) — a persisted cap on how much
   // of the field this machine draws. Species/seed/extent stay world state;

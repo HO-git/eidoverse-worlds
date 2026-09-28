@@ -91,16 +91,19 @@ export let dayness = 1;
 // verb: how many cloud passes your GPU can afford has nothing to do with what
 // the world looks like, and one person's laptop must not dictate everyone
 // else's sky. Stored locally, applied at build.
-export const CLOUD_QUALITY = ['off', 'low', 'medium', 'high'];
+export const CLOUD_QUALITY = ['off', 'low', 'medium', 'high', 'live'];
 const QUALITY_OPTS = {
   off: { cloudPasses: 1 },                     // plus setClouds('clear') below
   low: { cloudPasses: 1, stormSamples: 6 },
   medium: { cloudPasses: 3 },
   high: {},                                    // sky_system's own defaults (8)
+  live: {},                                    // the same, marched live every frame
 };
-// Baked-tier bake parameters. Anything listed here shows the baked dome. 'high' joined on 09-27: as the live march it
-// needed the one program no other tier builds (a 1–2 MB shader whose first compile stalled the owner's GPU process
-// ~5 s even on the async path, and ran her at 40 fps), so no tier builds it now; high re-bakes more often instead. One resolution/pass
+// Baked-tier bake parameters. Anything listed here shows the baked dome; 'live' is deliberately absent. Until 09-27
+// 'high' WAS the live march; it's now the full-quality bake (at ground level nearly indistinguishable, per the owner),
+// and the live march is its own top tier, 'live', for people who want truly volumetric clouds (parallax, flying into
+// them, continuous motion, full sharpness) and have the GPU: its program is a 1–2 MB shader whose first compile stalls
+// the GPU process for seconds, and it marches every pixel every frame (40 fps on the owner's desktop card). One resolution/pass
 // choice PER SESSION per tier: bakeEnv keys its cached node graph on
 // (W, H, passes), so every bake call must repeat the same values or each
 // re-bake would rebuild and recompile the whole march pipeline.
@@ -124,12 +127,14 @@ let cloudQuality = localStorage.getItem('ew-cloud-quality') ?? 'medium';
 const BAND_BUDGET = 0.4e6;   // texels x passes per boot-bake band — sky_baked's cadence budget (~a few ms a strip)
 export const getCloudQuality = () => cloudQuality;
 
-// VR CAP: in a headset on the WEBGL backend, clouds never run 'high'. High is the live volumetric march, per pixel
+// VR CAP: in a headset on the WEBGL backend, clouds never run 'live' (it falls back to 'high', the baked panorama).
+// 'live' is the volumetric march, per pixel
 // PER EYE at the headset's full size (5920x2960 on the reporting headset) — 12-13 fps — and each eye marches from its
-// own origin with its own noise, so the two eyes see different skies (sky double-vision, the world fine). 'medium' is
+// own origin with its own noise, so the two eyes see different skies (sky double-vision, the world fine). 'high' is
 // the baked panorama both eyes look AT: stereo-correct and cheap. The saved choice is untouched and comes back on exit.
-// ⚑ WEBGPU: deliberately NOT capped — the question is open again there; revisit when VR rides WebGPU-XR (measure fps
-// and eye agreement before extending this rule).
+// ⚑ REVISIT WITH WEBGPU (owner, 09-27: 'not a mode in VR for the foreseeable future … revisit when WebGPU is more
+// standard'). Live in VR is a giant per-eye cost on WebGL; once VR rides WebGPU-XR, measure fps and eye agreement with
+// live clouds and lift this cap if they hold. WebGPU sessions aren't capped by this line today because VR runs WebGL.
 let xrPresenting = false;
 let xrCappedFrom = null;          // the level the cap replaced, restored on exit
 const vrCapApplies = () => xrPresenting && !!renderer.backend?.isWebGLBackend;
@@ -156,7 +161,7 @@ bus.on('xr:state', (on) => {
   // At exit, ONE rebuild covers whatever was held: a held quality rebuilds at that level (and picks up a held world
   // switch, since the rebuild reads the latest sky args); the cap's own restore below rebuilds too, so when the cap is
   // active it carries the held world switch and nothing extra runs. (A quality held while capped cannot exist: the
-  // cap turns a 'high' choice into medium before the hold, and a non-high choice clears the cap.)
+  // cap turns a 'live' choice into high before the hold, and a non-live choice clears the cap.)
   if (!on && (heldQuality || heldRebuild) && !xrCappedFrom) {
     const q = heldQuality; heldQuality = null; heldRebuild = false;
     tee(`[sky] VR exit: applying the sky change held during the session (${q ? `clouds → ${q}` : 'sky world'})`);
@@ -165,20 +170,27 @@ bus.on('xr:state', (on) => {
     return;
   }
   if (!on) { heldQuality = null; heldRebuild = false; }
-  if (on && vrCapApplies() && cloudQuality === 'high') {
-    xrCappedFrom = 'high';
-    tee('[sky] VR on WebGL: clouds capped high → medium for the session (the saved choice stays high)');
+  if (on && vrCapApplies() && cloudQuality === 'live') {
+    xrCappedFrom = 'live';
+    tee('[sky] VR on WebGL: clouds capped live → high (baked) for the session (the saved choice stays live)');
+    bus.emit('cloud-cap', { from: 'live', to: 'high' });
     rebuildInXR = true;
-    setCloudQuality('medium', { persist: false }).catch((e) => report('sky VR cap', e)).finally(() => { rebuildInXR = false; });
+    setCloudQuality('high', { persist: false }).catch((e) => report('sky VR cap', e)).finally(() => { rebuildInXR = false; });
   } else if (!on && xrCappedFrom) {
     const back = xrCappedFrom; xrCappedFrom = null;
     tee(`[sky] VR exit: clouds back to ${back}`);
+    bus.emit('cloud-cap', null);
     setCloudQuality(back, { persist: false }).catch((e) => report('sky VR cap (exit)', e));
   }
 });
 
+/** The VR cap in force, for the sky panel's note: { from, to } or null. */
+export const cloudCap = () => (xrCappedFrom ? { from: xrCappedFrom, to: 'high' } : null);
 /** What the person CHOSE — a settings row shows this, not the level the VR cap is running meanwhile. */
-export const getCloudChoice = () => heldQuality ?? xrCappedFrom ?? cloudQuality;   // a choice made in the headset shows at once
+// the cap's memory first: choosing the capped level in a headset HOLDS its stand-in (live → high held), and the choice
+// is still live (sky-cap-ui-probe caught 'high' shown)
+export const getCloudChoice = () => xrCappedFrom ?? heldQuality ?? cloudQuality;   // a choice made in the headset shows at once
+export const skyInXR = () => xrPresenting;
 
 /** Change the local cloud budget. Rebuilds the sky, since passes are baked in
  *  at construction. */
@@ -214,15 +226,16 @@ function endPhases() {
 
 export async function setCloudQuality(level, { persist = true } = {}) {
   if (!CLOUD_QUALITY.includes(level)) return;
-  // asking for 'high' INSIDE a WebGL headset session: remember it for the exit, run medium now
-  if (level === 'high' && vrCapApplies()) {
-    xrCappedFrom = 'high';
+  // asking for 'live' INSIDE a WebGL headset session: remember it for the exit, run the baked 'high' now
+  if (level === 'live' && vrCapApplies()) {
+    xrCappedFrom = 'live';
     if (persist) localStorage.setItem('ew-cloud-quality', level);
-    tee('[sky] VR on WebGL: high clouds held at medium until exit');
-    level = 'medium';
+    tee('[sky] VR on WebGL: live clouds held at high (baked) until exit');
+    bus.emit('cloud-cap', { from: 'live', to: 'high' });
+    level = 'high';
     persist = false;
   }
-  else if (persist && xrPresenting) xrCappedFrom = null;   // a deliberate non-high choice in the headset replaces the cap's memory
+  else if (persist && xrPresenting && xrCappedFrom) { xrCappedFrom = null; bus.emit('cloud-cap', null); }   // a deliberate non-live choice in the headset replaces the cap's memory
   if (persist) localStorage.setItem('ew-cloud-quality', level);   // before the no-op return: choosing the level already running is still a choice
   if (level === cloudQuality) { heldQuality = null; return; }
   if (xrPresenting && !rebuildInXR) {
@@ -776,7 +789,7 @@ async function ensureSkyBake() {
     const strips = opts.width ? bandCuts(opts.width, opts.height, opts.cloudPasses ?? 8, BAND_BUDGET).length - 1 : 0;
     tee(`[sky] boot bake: ${band ? 'banding' : CONFIG.params.get('skyband') !== '0' ? 'one-shot, precompiled' : 'ONE-SHOT'} (skyband=${CONFIG.params.get('skyband') ?? 'default'}, ${opts.width}x${opts.height}, passes ${opts.cloudPasses ?? 8}, ${strips} strips, inner ${skyInner ? 'yes' : 'NO'})`);
     let seen = 0;
-    // ONE-SHOT bakes (a tier with no baked dome — 'high' bakes only the env, at bakeEnv's default size — or a bake too
+    // ONE-SHOT bakes (a tier with no baked dome — 'live' bakes only the env, at bakeEnv's default size — or a bake too
     // small to band) still compile their pipeline OFF the render path first: the owner's GPU, 09-24, switch → high:
     // "render-path build 1295 ms (BLOCKING) NodeMaterial fs 925288 chars". Same bytes, same single draw — only the
     // compile moves earlier (compileAsync, as the banded path already does). ?skyband=0 keeps the old path untouched.
@@ -885,7 +898,7 @@ function applyLive(a) {
   const h = nowHours();
   skyApi.setTime?.(h);
   // Baked tiers re-bake on their own cadence (which covers TOD drift too);
-  // the debounced TOD bake only serves the live 'high' tier's env-IBL.
+  // the debounced TOD bake only serves the 'live' tier's env-IBL.
   if (!bakedActive()) scheduleEnvBake();
   let changed = false;
   // A dusk/dawn VERB used to wait out the 9s bake cadence before the

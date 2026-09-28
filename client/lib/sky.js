@@ -400,7 +400,10 @@ export async function previewSky(args) {
 let logged = null, previewing = false, rendering = 0;
 export const loggedSky = () => logged;
 export const skyPreviewing = () => previewing;
-export const skyRendering = () => rendering > 0;
+// 'sky-busy' comes from the sky's own arrival (a stand-in gradient, a tier swap compiling): loading too. Harmless unheard.
+let arriving = false;
+bus.on('sky-busy', (b) => { arriving = !!b; bus.emit('sky-state'); });
+export const skyRendering = () => rendering > 0 || arriving;
 export const skyDegraded = () => degrade >= 2;
 
 function nowHours() {

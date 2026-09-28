@@ -209,6 +209,10 @@ function atSkySnapshot(snap, draw) {
   for (const [u, v, obj] of snap) { if (obj) u.value.copy(v); else u.value = v; }
   try { return draw(); } finally { snap.forEach(([u, , obj], i) => { if (obj) u.value.copy(keep[i]); else u.value = keep[i]; }); }
 }
+/** A bake option (symbol: the engine never reads it) carrying `() => restore`: installed INSIDE the bake lock, right
+ *  before that bake runs (review 7, B1: a renderAsync interceptor patched outside the lock caught whichever bake held
+ *  it, and its own bake then went out as one full-quad draw). Object spread copies it through the api's opts copy. */
+export const BAKE_INTERCEPT = Symbol.for('ew.bakeIntercept');
 let bootBakeSkyT = null;   // the time the last banded boot/swap bake was pinned to (attach adopts it for target A)
 /** Drift state (probes, the debug panel): null when off, else the seconds each texture has drifted. */
 export const bakedDrift = () => (driftDt ? [driftDt[0].value, driftDt[1].value] : null);   // how long the last bake cycle took (bands + pump spacing)
@@ -693,9 +697,9 @@ function maybeRefreshGraph() {
   const gen = bakeGen, alive = () => gen === bakeGen;
   // bakeEnv's single full-quad renderAsync becomes cost-weighted strips (the boot bake's treatment, sky.js):
   // one 4096x2048 multi-pass draw is past what a GPU watchdog tolerates. Strips pause while presenting.
-  const origRA = renderer.renderAsync;
-  const outer = renderer.getRenderTarget();
-  renderer.renderAsync = function (sc, cam) {
+  let origRA = renderer.renderAsync;
+  let outer = renderer.getRenderTarget();
+  const interceptor = function (sc, cam) {
     if (sc !== sys?._envBake?.scene) return origRA.call(this, sc, cam);
     renderer.renderAsync = origRA;
     const target = renderer.getRenderTarget();
@@ -704,9 +708,11 @@ function maybeRefreshGraph() {
     return bandedBakeRender(renderer, sc, cam, target, { cloudPasses: cfg.cloudPasses, passTexelBudget: cfg.passTexelBudget, nextFrame: nextDesktopFrame, budget: true, alive, sys })
       .then((n) => { const ti = targets?.indexOf?.(target) ?? -1; if (ti >= 0 && bootBakeSkyT != null) bakeSkyT[ti] = bootBakeSkyT; refreshStats.bands = n; tee(`[sky] graph refresh baked in ${n} bands over ${(performance.now() - t0).toFixed(0)} ms`); renderer.setRenderTarget(target); });
   };
+  const install = () => { origRA = renderer.renderAsync; outer = renderer.getRenderTarget(); renderer.renderAsync = interceptor;
+    return () => { if (renderer.renderAsync === interceptor) renderer.renderAsync = origRA; }; };
   Promise.resolve(sys.bakeEnv(renderer, {
-    width: A.width, height: A.height, cloudPasses: cfg.cloudPasses,
-  })).finally(() => { renderer.renderAsync = origRA; }).then(() => {
+    width: A.width, height: A.height, cloudPasses: cfg.cloudPasses, [BAKE_INTERCEPT]: install,
+  })).then(() => {
     if (!alive()) return;             // torn down meanwhile: this dome, its targets and its state are someone else's now
     const bake = sys._envBake;
     const bakeMat = bake?.scene?.children?.[0]?.material;

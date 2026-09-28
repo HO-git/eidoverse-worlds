@@ -54,15 +54,23 @@ try {
     mo.disconnect(); return n;
   });
   check('unrelated log entries leave the readout untouched (0 mutations)', quiet === 0, quiet);
-  // a real clock: time and rate grey out and say why; back to the authored clock, they come back
+  // a real clock: time and rate are hidden (they can't act); back to the authored clock, they come back
   const clockUi = async (clock) => { await log({ hours: 12, rate: 0, clouds: 'clear', weather: 'clear', ...clock }); return pg.evaluate(() => {
-    const row = (k) => { const i = [...document.querySelectorAll('#sec-sky input[type=range]')][k === 'hours' ? 0 : 1]; return { dis: i.disabled, op: i.parentNode.style.opacity, why: i.parentNode.title }; };
+    const row = (k) => { const i = [...document.querySelectorAll('#sec-sky input[type=range]')][k === 'hours' ? 0 : 1]; return { dis: i.disabled, shown: getComputedStyle(i.parentNode).display !== 'none' }; };
     return { hours: row('hours'), rate: row('rate') }; }); };
   const realUi = await clockUi({ clock: 'real', tz: 'America/Los_Angeles' });
   const backUi = await clockUi({ clock: undefined, tz: undefined });
   console.log('   ', JSON.stringify({ realUi, backUi }));
-  check('a real clock greys out time and rate, and says why', realUi.hours.dis && realUi.rate.dis && parseFloat(realUi.hours.op) === 0.45 && /real time/.test(realUi.hours.why), JSON.stringify(realUi));
-  check('…and the authored clock brings them back', !backUi.hours.dis && !backUi.rate.dis && backUi.hours.op === '' && backUi.rate.why === '', JSON.stringify(backUi));
+  check('a real clock hides time and rate', realUi.hours.dis && realUi.rate.dis && !realUi.hours.shown && !realUi.rate.shown, JSON.stringify(realUi));
+  check('…and the authored clock brings them back', !backUi.hours.dis && !backUi.rate.dis && backUi.hours.shown && backUi.rate.shown, JSON.stringify(backUi));
+  // azimuth and fill only act on the basic sky: on the detailed sky they're hidden
+  const basic = await pg.evaluate(async () => {
+    const impl = (await import('./lib/sky.js')).skyImpl?.();
+    const rows = [...document.querySelectorAll('#sec-sky input[type=range]')].map((i) => i.parentNode).filter((r) => /azim|fill/i.test(r.textContent));
+    return { impl, n: rows.length, shown: rows.filter((r) => getComputedStyle(r).display !== 'none').length };
+  });
+  console.log('    basic-only rows:', JSON.stringify(basic));
+  check('on the detailed sky, azimuth and fill are hidden', basic.impl === 'eidoverse' && basic.n === 2 && basic.shown === 0, JSON.stringify(basic));
   check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | ') || 'none');
 } catch (e) { check('probe ran', false, String(e).slice(0, 300)); }
 finally { await browser.close(); await world.close(); }

@@ -253,8 +253,8 @@ export function paintSky(body) {
 
   // Sliders that only the BASIC sky answers. On the real sky the engine owns
   // sun direction and supplies its own bounce fill (sky.js documents the
-  // ownership boundary) — a slider that does nothing must say so, not sit
-  // there lying. sun/ambient/fog work on BOTH paths now: fog density was
+  // ownership boundary), so there they're hidden: a slider that can't do
+  // anything is clutter (owner, 09-27: hide what doesn't apply, don't grey it). sun/ambient/fog work on BOTH paths now: fog density was
   // always ours, and sun/ambient ride as post-update multipliers (§12.6).
   const BASIC_ONLY = new Set(['azimuth', 'fill']);
   const basicRows = [];
@@ -262,8 +262,8 @@ export function paintSky(body) {
     const dead = skyImpl() === 'eidoverse';
     for (const { row, input } of basicRows) {
       input.disabled = dead;
-      row.style.opacity = dead ? '.45' : '';
-      row.title = dead ? 'the detailed sky drives this itself — basic sky only' : '';
+      const d = dead ? 'none' : '';
+      if (row.style.display !== d) row.style.display = d;   // style, not [hidden]: a .row display rule would beat the attribute
     }
   };
 
@@ -315,16 +315,16 @@ export function paintSky(body) {
   }).catch((e) => report('sky clocks', e));
   fillClocks();
   bus.on('defs-updated', fillClocks);
-  // Under a real clock the world's hour IS that city's time, so time and rate do nothing: greyed like the basic-only
-  // rows, and they say why (owner, 09-27: 'gray out time and whatever other sliders are inoperable'). The presets
-  // still set weather/clouds/light, but not their hour.
+  // Under a real clock the world's hour IS that city's time, so time and rate do nothing: hidden like the basic-only
+  // rows (owner, 09-27: first 'gray out … inoperable', then 'hide settings that aren't relevant'); the clock row itself
+  // says what's driving the hour. The presets still set weather/clouds/light, but not their hour.
   const syncClockUi = () => {
     const real = ck.value !== '';
     for (const k of ['hours', 'rate']) {
       const input = inputs[k], row = input?.parentNode; if (!input || !row) continue;
       input.disabled = real;
-      row.style.opacity = real ? '.45' : '';
-      row.title = real ? `the clock follows real time (${ck.value}); set clock to the authored option to use ${k === 'hours' ? 'time' : 'rate'}` : '';
+      const d = real ? 'none' : '';
+      if (row.style.display !== d) row.style.display = d;
     }
     presetWrap.title = real ? 'under a real clock the presets set the look, not the hour' : '';
   };

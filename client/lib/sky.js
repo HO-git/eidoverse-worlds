@@ -192,6 +192,9 @@ bus.on('xr:state', (on) => {
     else { currentWorld = null; skyBuilds = 0; if (clock) render(); }
     return;
   }
+  // a sky-world switch held while CAPPED survives to the cap's restore below (review 11b M1: it was dropped here; latent
+  // today, SKY_WORLDS is earth only). A quality held while capped is the cap's own stand-in, which the restore replaces.
+  const heldWorld = !on && heldRebuild && !!xrCappedFrom;
   if (!on) { heldQuality = null; heldRebuild = false; }
   // the tier the sky is running OR about to arrive as: a 'high' chosen on the desktop while the sky was arriving is
   // still only pending at entry, and was adopted inside the headset with no cap (review 10b H3: the per-eye live march
@@ -215,7 +218,8 @@ bus.on('xr:state', (on) => {
     const back = xrCappedFrom; xrCappedFrom = null;
     tee(`[sky] VR exit: clouds back to ${back}`);
     bus.emit('cloud-cap', null);
-    setCloudQuality(back, { persist: false }).catch((e) => report('sky VR cap (exit)', e));
+    setCloudQuality(back, { persist: false }).catch((e) => report('sky VR cap (exit)', e))
+      .then(() => { if (!heldWorld || xrPresenting) return; tee('[sky] VR exit: applying the sky world held during the session'); currentWorld = null; skyBuilds = 0; if (clock) render(); });
   }
 });
 

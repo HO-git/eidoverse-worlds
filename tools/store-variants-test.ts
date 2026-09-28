@@ -52,7 +52,7 @@ import { Document, NodeIO } from "@gltf-transform/core";
 import { PNG } from "pngjs";
 import { isStoreOriginal, isKtx2Variant, isServingArtifact, ktx2VariantPath, storeShadowsMissing, KTX2_SUFFIX,
   capTexels, verdictStands, recipeStamp, KTX2_TEXEL_CAP, KTX2_RECIPE,
-  LOD_RECIPE, LOD_GEN, LOD_MIN_VERTS, lodRecipeFor, lodVariantPath, isLodVariant, lodVerdictKind, lodVerdictFinal, hasStamp } from "../server/store-variants.ts";
+  LOD_RECIPE, LOD_GEN, LOD_MIN_VERTS, lodRecipeFor, lodVariantPath, isLodVariant, lodVerdictKind, lodVerdictFinal, hasStamp, readVerdict } from "../server/store-variants.ts";
 import { findKtx2Encoder, isKtx2Container, lodGpuRefusal } from "../server/optimize.ts";
 import { toolsStamp, toolsDigest, toolVersions, currentToolsDigest, hasToolsStamp } from "../server/tools-stamp.ts";
 import { KTX2_KEY, KTX2_QUERY, wantsKtx2, withKtx2, keyFromVersion, negotiate } from "../shared/ktx2.js";
@@ -156,6 +156,16 @@ console.log("\nthe store's KTX2 shadow (store-variants.ts, shared/ktx2.js):\n");
   check("a content verdict stands regardless (nothing to convert)", verdictStands("[optimize] ktx2: no convertible raster images (12ms) — keeping original"));
   check("…and so does a hard failure", verdictStands("exit 1") && verdictStands(""));
 
+  // every refusal the CLI can exit 2 with names its KIND on a [verdict] line (the record's source of truth) — read from
+  // the emitter itself, not a hand-kept list: a new exit-2 site without one is a record typed only by grammar
+  {
+    const cliSrc = readFileSync(join(import.meta.dir, "..", "server", "optimize.ts"), "utf8");
+    const main = cliSrc.slice(cliSrc.indexOf("if (import.meta.main)"));
+    const exits = [...main.matchAll(/process\.exit\(2\)/g)].map((m) => main.slice(Math.max(0, m.index! - 400), m.index!));
+    const bare = exits.filter((pre) => !/console\.error\(verdictLine\([^\n]*\);\s*$/.test(pre));
+    check(`every exit-2 site in the CLI (${exits.length}) emits a typed [verdict] line just before it`, exits.length >= 6 && bare.length === 0,
+      bare.map((b) => b.split("\n").slice(-2).join(" ").trim().slice(0, 120)));
+  }
   // the LOD recipe DERIVES from its parameters — a floor change is a generation change by construction
   check("LOD_RECIPE derives from (gen, ratio, error, texel, floor)",
     LOD_RECIPE === lodRecipeFor() && LOD_RECIPE === `lod${LOD_GEN}-r25e01-texel${KTX2_TEXEL_CAP}-min${LOD_MIN_VERTS}`, LOD_RECIPE);
@@ -447,6 +457,8 @@ console.log("\n  the optimizer, against the fake encoder:");
     // a size refusal names its recipe
     r = await runKtx2(two, ktx2VariantPath(two) + ".bloat", { KTX2_TOKTX: FAKE_TOKTX, FAKE_TOKTX_MODE: "bloat" });
     check("a size refusal (exit 2) carries the recipe stamp — a later recipe can tell it is stale", r.code === 2 && !r.wrote && r.err.includes(recipeStamp()), `exit ${r.code}: ${r.err.split("\n").pop()}`);
+    check("…and a typed [verdict] line: kind `size`, measured under this recipe, with these tools (the record the pump writes)",
+      readVerdict(r.err).kind === "size" && readVerdict(r.err).recipe === KTX2_RECIPE && readVerdict(r.err).toolsDigest === toolsDigest(toolVersions(FAKE_TOKTX)), readVerdict(r.err));
     check("…and the stamp of the tools the CLI ran with (this encoder) — a new encoder can tell it is stale",
       r.err.includes(`${recipeStamp()} ${toolsStamp(toolsDigest(toolVersions(FAKE_TOKTX)))}`), r.err.split("\n").pop());
 

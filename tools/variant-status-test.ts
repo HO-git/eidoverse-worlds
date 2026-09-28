@@ -3,7 +3,7 @@
 // The LOD arm reads its marker through lodVerdictKind — the SAME reader the route names x-eidoverse-lod with (#205) — so
 // the card and the wire cannot disagree. A changed floor or reducer is a new recipe (LOD_GEN, lodRecipeFor): a new
 // filename, so an older generation's marker is simply never looked up here; there is no per-kind re-opening any more.
-import { classifyVariant, variantStatus, lodVariantPath, ktx2VariantPath, lodRecipeFor, LOD_RECIPE, LOD_MIN_VERTS, KTX2_RECIPE, recipeStamp, sourceSidecar, sourceToken, freshOver, variantSource } from "../server/store-variants.ts";
+import { classifyVariant, variantStatus, lodVariantPath, ktx2VariantPath, lodRecipeFor, LOD_RECIPE, LOD_MIN_VERTS, KTX2_RECIPE, recipeStamp, sourceSidecar, sourceToken, freshOver, variantSource, verdictMarker, verdictLine, readVerdict, lodVerdictKind, lodVerdictFinal, verdictStands } from "../server/store-variants.ts";
 import { toolsStamp, toolsDigest, toolVersions } from "../server/tools-stamp.ts";
 
 let pass = 0, fail = 0;
@@ -144,6 +144,45 @@ for (const [name, files, state, reason] of cases) {
   check("variantSource: a store hash → null (content-addressed)", variantSource("store/abc.glb", dirs) === null, variantSource("store/abc.glb", dirs));
   check("variantSource: a VRM with no overlay copy → the library file", variantSource("eidoverse/assets/vrms/b.vrm", dirs) === "/lib/eidoverse/assets/vrms/b.vrm", null);
   check("variantSource: a rel escaping the tree names no file", variantSource("../../etc/passwd.glb", dirs) === "", variantSource("../../etc/passwd.glb", dirs));
+}
+// STRUCTURED records (store-variants.ts verdictMarker / readVerdict): the kind is a closed enum named by the CLI where it
+// mints the phrase; the prose is display only. The legacy grammar above still reads every older marker.
+{
+  const cli = (kind: Parameters<typeof verdictLine>[0], reason: string, human = `[optimize] lod: ${reason} (5ms) — original stays the only representation`) =>
+    `warn: something first\n${human}\n${verdictLine(kind, reason, LOD_RECIPE)}`;
+  const rec = (kind: Parameters<typeof verdictLine>[0], reason: string, exit = 2) => verdictMarker(cli(kind, reason), exit, null);
+  const st = (m: string, lod = true) => { const f = fs({ [`${L}.failed`]: m }); return classifyVariant(L, f.exists, f.read, LOD_RECIPE, { lod }); };
+  const r = JSON.parse(rec("light", `already light (927 verts < ${LOD_MIN_VERTS})`));
+  check("a record: v 1, the CLI's kind, the display reason, recipe + tools + their text stamp, the raw tail",
+    r.v === 1 && r.kind === "light" && r.reason === `already light (927 verts < ${LOD_MIN_VERTS})` && r.recipe === LOD_RECIPE
+    && r.stamp === `${recipeStamp(LOD_RECIPE)} ${toolsStamp()}` && r.toolsDigest && r.tools?.meshoptimizer && r.exit === 2 && r.tail.includes("warn: something first"), r);
+  check("records classify on the card: light → not-needed, structural → unsupported (prefix dropped), ineffective → refused",
+    st(rec("light", "already light (927 verts < 1000)")).state === "not-needed"
+    && st(rec("structural", "unsupported: skinned/avatar asset (skins)")).reason === "skinned/avatar asset (skins)"
+    && st(rec("ineffective", "reduction ineffective (20280 -> 13728 verts)")).state === "refused", null);
+  // the B1/B2 class: a NEW phrase no grammar knows is still typed — the kind came from the producer, not a regex
+  const novel = cli("ineffective", "the reducer found a brand-new way to fail");
+  check("a phrase NO grammar knows still reads as the kind the CLI named (no silent classification miss)",
+    lodVerdictKind(novel) === "ineffective" && lodVerdictKind(verdictMarker(novel, 2, null)) === "ineffective", readVerdict(novel));
+  check("final is read from the record: light under the running recipe is final, under another recipe not",
+    lodVerdictFinal(rec("light", "already light (9 verts < 1000)")) && !lodVerdictFinal(JSON.stringify({ ...JSON.parse(rec("light", "x")), recipe: "lod9-x" })), null);
+  const ineff = rec("ineffective", "reduction ineffective (20280 -> 13728 verts)");
+  check("tools are read from the record: the reducer's refusal stands under its tools and not under others",
+    verdictStands(ineff, LOD_RECIPE) && !verdictStands(ineff, LOD_RECIPE, "000000000000")
+    && st(JSON.stringify({ ...JSON.parse(ineff), toolsDigest: "000000000000" })).state === "stale", null);
+  check("the KTX2 arm reads records too: nothing → not-needed, size under this recipe → refused, under another → stale",
+    st(verdictMarker(`x\n${verdictLine("nothing", "ktx2: no convertible raster images", KTX2_RECIPE)}`, 2, null), false).state === "not-needed"
+    && classifyVariant(K, fs({ [`${K}.failed`]: verdictMarker(verdictLine("size", "not smaller (1 -> 2)", KTX2_RECIPE), 2, null) }).exists,
+      fs({ [`${K}.failed`]: verdictMarker(verdictLine("size", "not smaller (1 -> 2)", KTX2_RECIPE), 2, null) }).read, KTX2_RECIPE).state === "refused"
+    && classifyVariant(K, fs({ [`${K}.failed`]: verdictMarker(verdictLine("size", "not smaller (1 -> 2)", "texel2048"), 2, null) }).exists,
+      fs({ [`${K}.failed`]: verdictMarker(verdictLine("size", "not smaller (1 -> 2)", "texel2048"), 2, null) }).read, KTX2_RECIPE).state === "stale", null);
+  const crash = verdictMarker("[optimize] lod: already light (9 verts < 1000) (1ms)\nSegmentation fault", 139, null);
+  check("a crash is `failure` even when its stderr happens to contain a verdict phrase — never final, never `not needed`",
+    readVerdict(crash).kind === "failure" && !lodVerdictFinal(crash) && lodVerdictKind(crash) === null && st(crash).state === "refused", readVerdict(crash));
+  check("an empty crash still names its exit", readVerdict(verdictMarker("", 1, null)).reason === "exit 1", readVerdict(verdictMarker("", 1, null)));
+  const srcRec = verdictMarker(cli("light", "already light (9 verts < 1000)"), 2, { size: 5, mtimeMs: 7.5 });
+  check("the record carries the source identity freshOver compares", JSON.stringify(readVerdict(srcRec).source) === '{"size":5,"mtimeMs":7.5}', readVerdict(srcRec).source);
+  check("a malformed record falls back to the text grammar, never throws", readVerdict("{not json [optimize] lod: already light (9 verts < 1000) (1ms)").kind === "light", null);
 }
 // a Permissive LOD serves, but the hover says how it was made; an ordinary one says nothing
 {

@@ -12,7 +12,7 @@ import { JOIN_TOKEN, UPLOAD_CAP, IMAGE_CAP, ROOT, OPT_DIR, STORE_MIN, LIBRARY_DI
 // merge 2026-09-01 (anima a468cba, geometry LOD): upstream's LOD names ride
 // in; the door stays on R1's aid1JoinIdentity (the HN_*/verifyToken form is
 // what it replaced — the merged body references neither)
-import { isStoreOriginal, ktx2VariantPath, lodVariantPath, storeShadowsMissing, verdictStands, freshOver, diskIdentity, sourceSidecar, sourceToken, recordedSource, sameIdentity, KTX2_RECIPE, LOD_RECIPE } from "./store-variants.ts";
+import { isStoreOriginal, ktx2VariantPath, lodVariantPath, storeShadowsMissing, verdictStands, freshOver, diskIdentity, sourceSidecar, recordedSource, sameIdentity, verdictMarker, readVerdict, KTX2_RECIPE, LOD_RECIPE } from "./store-variants.ts";
 import { agentTokens, aid1JoinIdentity } from "./auth.ts";
 import { worlds } from "./world.ts";
 import { atomicWrite } from "./fsutil.ts";
@@ -228,9 +228,11 @@ async function pumpOptimize() {
         // stops re-measuring it. For --lod the marker's content is READ at
         // serve time too (store-variants.ts lodVerdictFinal: a standing
         // typed verdict makes the original this tier's final answer).
-        // the TAIL: the verdict line (and its recipe= stamp) is the LAST
-        // [optimize] line, and per-texture notes before it can run long
-        writeFileSync(failed, (err.slice(-2000) || "not-smaller") + (srcId ? `\n${sourceToken(srcId)}` : "")); undefer(dest);
+        // a RECORD (store-variants.ts verdictMarker): the CLI's typed kind,
+        // its recipe and tools, the source identity this pass read, and the
+        // raw TAIL for diagnosis (per-texture notes before the verdict can
+        // run long; the verdict is last)
+        writeFileSync(failed, verdictMarker(err, 2, srcId)); undefer(dest);
         // a variant built from OTHER content than this refusal measured (a
         // re-exported library model): beside a fresh standing verdict the
         // sweep never revisits it, so it would serve the old model's bytes
@@ -249,7 +251,7 @@ async function pumpOptimize() {
           }
         } catch { /* best effort (the source may have vanished mid-run) */ }
         if (mode === "--lod") pruneOldLodGenerations(src, dest);
-        console.log(mode ? `[ktx2] ${base} — no variant (${err.split("\n").pop()?.replace(/^\[optimize\]\s*/, "") || "not smaller"})`
+        console.log(mode ? `[ktx2] ${base} — no variant (${readVerdict(err).kind}: ${readVerdict(err).reason})`
           : `[store] ${base} already lean — serving original`);
       } else if (code === 4) {
         // Output failed its own container check — the pass corrupted its
@@ -284,7 +286,7 @@ async function pumpOptimize() {
         // file — that would permanently skip every upload made before the
         // first successful `bun install`. Only content failures stick.
         const envFail = /cannot find module|cannot resolve|error: script not found/i.test(err);
-        if (!envFail) { writeFileSync(failed, (err.slice(-2000) || `exit ${code}`) + (srcId ? `\n${sourceToken(srcId)}` : "")); undefer(dest); }
+        if (!envFail) { writeFileSync(failed, verdictMarker(err, code, srcId)); undefer(dest); }   // kind "failure": never final
         console.error(`[${mode ? "ktx2" : "store"}] optimize ${envFail ? "unavailable (deps?)" : `FAILED ${base}`}: ${err.split("\n")[0] || `exit ${code}`}`);
         if (envFail) { optQueue.length = 0; break; } // no point grinding the rest
       }

@@ -41,7 +41,7 @@ import { join, dirname } from "node:path";
 import { Document, NodeIO } from "@gltf-transform/core";
 import { PNG } from "pngjs";
 import { isLodVariant, isServingArtifact, isStoreOriginal, lodVariantPath, ktx2VariantPath, storeShadowsMissing,
-  LOD_RECIPE, LOD_MIN_VERTS, recipeStamp, lodVerdictKind, lodVerdictFinal, lodRecipeFor, sourceToken, diskIdentity, freshOver } from "../server/store-variants.ts";
+  LOD_RECIPE, LOD_MIN_VERTS, recipeStamp, lodVerdictKind, lodVerdictFinal, lodRecipeFor, diskIdentity, freshOver, readVerdict } from "../server/store-variants.ts";
 import { lodExclusion, findKtx2Encoder, optimizeGlbLod, lodNodesSig, lodMatsSig } from "../server/optimize.ts";
 import { toolsStamp, toolsDigest, toolVersions } from "../server/tools-stamp.ts";
 import { lodFromVersion, withLod, keyFromVersion, negotiate } from "../shared/ktx2.js";
@@ -545,7 +545,12 @@ console.log("\n  the store door — the tier URL carries the generation:");
       // the marker's CONTENT is the gate — mutation controls on the real file, each restored
       const saved = readFileSync(lMarker, "utf8");
       const stamp = recipeStamp(LOD_RECIPE);
-      check("the real marker carries the stamp the gate reads", saved.includes(stamp) && lodVerdictKind(saved) === "light", saved.slice(0, 100));
+      // the real marker is a RECORD (store-variants.ts verdictMarker): the CLI named the kind where it minted the phrase
+      let savedRec: any = null; try { savedRec = JSON.parse(saved); } catch { /* not JSON */ }
+      const withRecipe = (r: string | null) => JSON.stringify({ ...savedRec, recipe: r });
+      check("the real marker is a JSON record carrying the kind, the recipe and the tools the gate reads",
+        savedRec?.v === 1 && savedRec.kind === "light" && savedRec.recipe === LOD_RECIPE && savedRec.toolsDigest === toolsDigest(toolVersions(FAKE_TOKTX))
+        && lodVerdictKind(saved) === "light" && lodVerdictFinal(saved), saved.slice(0, 160));
       writeFileSync(lMarker, `[optimize] lod: reduction ineffective (14000 -> 9000 verts) (80ms) ${stamp} — original stays the only representation`);
       const inef = await S.get(lUrl);
       check("a reducer-dependent verdict (ineffective) is NOT final: provisional, and named", inef.cc === "no-cache" && inef.lod === "provisional; verdict=ineffective", `cc=${inef.cc} lod=${inef.lod}`);
@@ -557,13 +562,13 @@ console.log("\n  the store door — the tier URL carries the generation:");
       writeFileSync(lMarker, `[optimize] lod: not lighter on the GPU (textures 1.33 -> 5.33 MB, 912ms) ${stamp} — original stays the only representation`);
       const gpu = await S.get(lUrl);
       check("the GPU gate's refusal is named `gpu` and NOT final (it depends on the encoder and the host)", gpu.cc === "no-cache" && gpu.lod === "provisional; verdict=gpu", `cc=${gpu.cc} lod=${gpu.lod}`);
-      writeFileSync(lMarker, saved.replace(stamp, ""));
+      writeFileSync(lMarker, withRecipe(null));
       const unst = await S.get(lUrl);
       check("a floor verdict WITHOUT the running recipe's stamp is not final", unst.cc === "no-cache" && unst.lod === "provisional; verdict=light", `cc=${unst.cc} lod=${unst.lod}`);
-      writeFileSync(lMarker, saved.replace(stamp, recipeStamp("lod9-r25e01-texel1024-min12000")));
+      writeFileSync(lMarker, withRecipe("lod9-r25e01-texel1024-min12000"));
       const older = await S.get(lUrl);
       check("…nor one stamped with another generation", older.cc === "no-cache" && older.lod === "provisional; verdict=light", `cc=${older.cc} lod=${older.lod}`);
-      writeFileSync(lMarker, saved.replace(stamp, recipeStamp(`${LOD_RECIPE}0`)));
+      writeFileSync(lMarker, withRecipe(`${LOD_RECIPE}0`));
       const pref = await S.get(lUrl);
       check("…nor a stamp that merely EXTENDS this recipe's (min120000 is not min12000)", pref.cc === "no-cache" && pref.lod === "provisional; verdict=light", `cc=${pref.cc} lod=${pref.lod}`);
       writeFileSync(lMarker, "exit 1");
@@ -616,7 +621,8 @@ console.log("\n  the library arm — the sweep queues LODs, and mutable sources 
       const lightDone = await until(() => existsSync(lMarker2) && existsSync(join(OPT, `${REL2}.ktx2.glb`)), 60_000);
       check("the library sweep wrote the light prop's typed verdict beside its ktx2 variant", lightDone);
       check("…stamped with the recipe AND the tools the CLI ran with (this box's encoder — tools-stamp.ts)", lightDone
-        && readFileSync(lMarker2, "utf8").includes(`${recipeStamp(LOD_RECIPE)} ${toolsStamp(toolsDigest(toolVersions(FAKE_TOKTX)))}`), lightDone && readFileSync(lMarker2, "utf8").split("\n").slice(-2));
+        && readFileSync(lMarker2, "utf8").includes(`${recipeStamp(LOD_RECIPE)} ${toolsStamp(toolsDigest(toolVersions(FAKE_TOKTX)))}`)
+        && readVerdict(readFileSync(lMarker2, "utf8")).toolsDigest === toolsDigest(toolVersions(FAKE_TOKTX)), lightDone && readFileSync(lMarker2, "utf8").slice(0, 200));
       if (lightDone) {
         const f1 = await S.get(withLod(negotiate(REL2, S.key), S.lod));
         check("STANDING VERDICT (library): the lod URL answers the ktx2 variant at the variant tier (short max-age + ETag, never immutable), named",
@@ -694,7 +700,7 @@ console.log("\n  the library arm — the sweep queues LODs, and mutable sources 
             const t3 = new Date(); utimesSync(join(LIB, REL2), t3, t3);                                   // source newer than the ktx2 variant…
             // …but the verdict re-measured over THIS source (it records the identity it judged — freshOver; touching the
             // marker's mtime no longer makes it fresh, only a recorded identity equal to the source's does)
-            writeFileSync(lMarker2, readFileSync(lMarker2, "utf8").replace(/source=\S+/, sourceToken(diskIdentity(join(LIB, REL2))!)));
+            writeFileSync(lMarker2, JSON.stringify({ ...JSON.parse(readFileSync(lMarker2, "utf8")), source: diskIdentity(join(LIB, REL2)) }));
             const f4 = await S.get(withLod(negotiate(REL2, S.key), S.lod));
             check("a fresh verdict over a STALE ktx2 variant is NOT final: provisional, and the header names the stale arm",
               f4.cc === "no-cache" && f4.lod === "provisional; verdict=light; ktx2=stale", `cc=${f4.cc} lod=${f4.lod}`);

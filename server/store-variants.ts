@@ -39,7 +39,7 @@
 
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
-import { currentToolsDigest, hasToolsStamp } from "./tools-stamp.ts";
+import { currentToolsDigest, toolVersions, toolsStamp } from "./tools-stamp.ts";
 
 /** The variant suffix. `<hash>.glb` + this = the KTX2 shadow's file name. */
 export const KTX2_SUFFIX = ".ktx2.glb";
@@ -83,8 +83,11 @@ export const recipeStamp = (recipe = KTX2_RECIPE) => `recipe=${recipe}`;
  *  prefix: `recipe=…-min12000` must not answer for `…-min120000` (a marker
  *  written by a newer CLI into a filename the older running server chose,
  *  in a pull-before-restart window). */
-export const hasStamp = (content: string, recipe: string) =>
-  new RegExp(`(^|\\s)${recipeStamp(recipe).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s|$)`).test(content);
+export const hasStamp = (content: string, recipe: string) => {
+  const v = structuredVerdict(content);   // a JSON marker / the CLI's [verdict] line: its recipe field, exactly
+  if (v) return v.recipe === recipe;
+  return new RegExp(`(^|\\s)${recipeStamp(recipe).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s|$)`).test(content);
+};
 
 // ---- the geometry LOD (objects only — v1 contract, PR #142 thread) ---------
 // A far or VRAM-pressed client can ask for a decimated variant of a PLACEABLE
@@ -151,18 +154,13 @@ export const LOD_RECIPE = lodRecipeFor();   // "lod2-r25e01-texel1024-min1000"
 // it depends on the encoder and on whether the texel cap could be honoured on this host (sharp presence on a
 // ktx-create box) — neither is in the URL — so it is non-final, like "ineffective".
 export type LodVerdictKind = "structural" | "light" | "ineffective" | "preservation" | "gpu";
-/** Which class of typed refusal a lod `.failed` marker records (the
- *  reducer's phrases, optimize.ts) — or null for anything else. The ONE
- *  reader of that grammar: the route (serve time) and classifyVariant (the
- *  catalog's card) both call it, so the wire and the card cannot disagree. */
+const LOD_KINDS = new Set<string>(["structural", "light", "ineffective", "preservation", "gpu"]);
+/** Which class of typed refusal a lod `.failed` marker records — or null for anything else. Read through readVerdict,
+ *  the ONE reader: the route (serve time) and classifyVariant (the catalog's card) both call it, so the wire and the
+ *  card cannot disagree. */
 export function lodVerdictKind(content: string): LodVerdictKind | null {
-  if (/\bunsupported: (skinned\/avatar asset|morph targets|animated object)/i.test(content)) return "structural";
-  if (/\balready light \(\d+ verts < \d+\)/i.test(content)) return "light";
-  // ", permissive too": the reducer tried the Permissive retry as well (optimize.ts reduce)
-  if (/\breduction ineffective \(\d+ -> \d+ verts(, permissive too)?\)/i.test(content)) return "ineffective";
-  if (/\bpreservation failed:/i.test(content)) return "preservation";
-  if (/\bnot lighter on the GPU \(textures /i.test(content)) return "gpu";
-  return null;
+  const k = readVerdict(content).kind;
+  return LOD_KINDS.has(k) ? k as LodVerdictKind : null;
 }
 /** Does this marker make the original the FINAL answer under `recipe`? A
  *  content-only class (structural, light) stamped with the running recipe —
@@ -200,7 +198,7 @@ export function parseSourceToken(content: string): SourceIdentity | null {
 }
 /** The identity a derived file recorded: a `.failed` marker's inline token, a variant's `.srcid` sidecar. */
 export function recordedSource(derived: string, read: (p: string) => string): SourceIdentity | null {
-  if (derived.endsWith(".failed")) return parseSourceToken(read(derived));
+  if (derived.endsWith(".failed")) return readVerdict(read(derived)).source;
   try {
     const j = JSON.parse(read(sourceSidecar(derived)) || "null");
     return j && Number.isFinite(j.size) && Number.isFinite(j.mtimeMs) ? { size: j.size, mtimeMs: j.mtimeMs } : null;
@@ -232,6 +230,98 @@ export function variantSource(rel: string, dirs: { opt: string; library: string 
   return inside(dirs.library) ?? "";   // outside the tree: no file, so nothing is fresh over it
 }
 
+// ---- the verdict RECORD: structured markers, one reader ---------------------------------------------------------
+// A `.failed` marker was the CLI's stderr tail, and every reader re-derived the verdict's class from its prose with its
+// own regexes — two classifiers that already disagreed (B1: "permissive too"; B2: "not lighter on the GPU"; C3), and
+// every new phrase a silent miss. The standard is a typed record whose machine identity is a closed enum and whose
+// human text is display only: RFC 9457 §3.1.4, "Consumers SHOULD NOT parse the "detail" member for information";
+// REAPI's ActionResult keeps exit_code/status in typed fields and stdout/stderr as blobs. So:
+//   - the CLI names each refusal's kind WHERE IT MINTS THE PHRASE, on a `[verdict] {json}` line after the human one;
+//   - the pump writes the marker as JSON: {v, kind, reason, stamp, recipe, toolsDigest, tools, source, exit, tail, at};
+//     `reason` is display, `tail` is the raw stderr (diagnosis), `stamp` the old text form for grep — readers use
+//     `recipe` / `toolsDigest` / `source`;
+//   - readVerdict is the ONE parser: a JSON marker, else a CLI's `[verdict]` line, else the legacy text grammar (markers
+//     written before this, and stand-in optimizers) — so nothing on disk is re-swept by the format change.
+// `failure` (a crash — any exit but 2) is its own kind, never a verdict: it never classifies as structural/light, so
+// it is never final, and it is re-asked when the tools change (REAPI: a non-OK status "MUST NOT be cached").
+export type VerdictKind = LodVerdictKind | "size" | "nothing" | "unsupported" | "unsuitable" | "failure" | "unknown";
+const VERDICT_KINDS = new Set<string>(["structural", "light", "ineffective", "preservation", "gpu", "size", "nothing", "unsupported", "unsuitable", "failure", "unknown"]);
+/** The refusals a different tool could overturn (verdictStands re-asks them when the tools change). A content fact — a
+ *  skinned body, under the floor, no raster images, a non-POT image — is not: it is about the file (tools-stamp.ts). */
+const TOOL_KINDS = new Set<string>(["size", "ineffective", "preservation", "gpu", "failure"]);
+export type Verdict = {
+  kind: VerdictKind; reason: string; recipe: string | null; toolsDigest: string | null;
+  tools: Record<string, string> | null; source: SourceIdentity | null; exit: number | null;
+};
+export const VERDICT_PREFIX = "[verdict] ";
+/** The CLI's machine line for a refusal it just printed: kind, display reason, the recipe and the tools it ran with. */
+export function verdictLine(kind: VerdictKind, reason: string, recipe: string | null): string {
+  return VERDICT_PREFIX + JSON.stringify({ kind, reason, recipe, toolsDigest: currentToolsDigest(), tools: toolVersions() });
+}
+const asId = (x: any): SourceIdentity | null => x && Number.isFinite(x.size) && Number.isFinite(x.mtimeMs) ? { size: x.size, mtimeMs: x.mtimeMs } : null;
+function fromJson(j: any, exit: number | null = null): Verdict | null {
+  if (!j || typeof j !== "object" || !VERDICT_KINDS.has(j.kind)) return null;
+  return {
+    kind: j.kind, reason: typeof j.reason === "string" && j.reason ? j.reason : "refused (no reason recorded)",
+    recipe: typeof j.recipe === "string" ? j.recipe : null, toolsDigest: typeof j.toolsDigest === "string" ? j.toolsDigest : null,
+    tools: j.tools && typeof j.tools === "object" ? j.tools : null, source: asId(j.source), exit: Number.isInteger(j.exit) ? j.exit : exit,
+  };
+}
+/** A structured verdict in `content` — a JSON marker (v 1), or the LAST `[verdict]` line of a CLI's stderr — or null. */
+function structuredVerdict(content: string): Verdict | null {
+  const t = content.trimStart();
+  if (t.startsWith("{")) { try { const j = JSON.parse(t); if (j?.v === 1) return fromJson(j); } catch { /* not a record */ } }
+  const line = content.split("\n").reverse().find((l) => l.startsWith(VERDICT_PREFIX));
+  if (line) { try { return fromJson(JSON.parse(line.slice(VERDICT_PREFIX.length))); } catch { /* malformed: the text reads it */ } }
+  return null;
+}
+// ---- the legacy text grammar (markers written before the record; stand-in optimizers) — read HERE and nowhere else
+function textKind(content: string): VerdictKind {
+  if (/\bunsupported: (skinned\/avatar asset|morph targets|animated object)/i.test(content)) return "structural";
+  if (/\balready light \(\d+ verts < \d+\)/i.test(content)) return "light";
+  // ", permissive too": the reducer tried the Permissive retry as well (optimize.ts reduce)
+  if (/\breduction ineffective \(\d+ -> \d+ verts(, permissive too)?\)/i.test(content)) return "ineffective";
+  if (/\bpreservation failed:/i.test(content)) return "preservation";
+  if (/\bnot lighter on the GPU \(textures /i.test(content)) return "gpu";
+  if (/not smaller/i.test(content)) return "size";
+  if (/no convertible|nothing to/i.test(content)) return "nothing";
+  if (/unsupported:/i.test(content)) return "unsupported";
+  return "unknown";
+}
+// the CLI's line: "[optimize] <pass>: <verdict> (<ms>ms) — <tail>" — keep the verdict, drop the log dressing. The verdict
+// is the LAST "[optimize]" line (the pump logs the same one): a warning printed before it (the no-sharp resize note, a
+// gltf-transform logger line) must not become the card's reason
+const textReason = (raw: string): string => {
+  const ls = raw.split("\n").filter((l) => !l.startsWith("source=")), line = [...ls].reverse().find((l) => /^\[optimize\]/.test(l)) ?? ls[0] ?? "";
+  return line.replace(/^\[optimize\]\s*(?:lod:\s*)?/, "").replace(/\s*\(\d+ms\).*$/, "").replace(/,\s*\d+ms\)/, ")").replace(/\s+—\s+.*$/, "")
+    .replace(/\s*recipe=\S+/, "").replace(/\s*tools=\S+/, "").trim() || "refused (no reason recorded)";
+};
+/** THE reader of a verdict, whatever its vintage. Never null: unreadable content is kind `unknown` (not final, stands
+ *  as the old rule did). */
+export function readVerdict(content: string): Verdict {
+  const v = structuredVerdict(content);
+  if (v) return v;
+  return {
+    kind: textKind(content), reason: textReason(content),
+    recipe: /(?:^|\s)recipe=(\S+)/.exec(content)?.[1] ?? null, toolsDigest: /(?:^|\s)tools=([0-9a-f]+)(?:\s|$)/.exec(content)?.[1] ?? null,
+    tools: null, source: parseSourceToken(content), exit: null,
+  };
+}
+/** The marker the pump writes for a pass that exited `exit` with stderr `err`: the CLI's own record when it printed one,
+ *  else its text read by the legacy grammar (an older or stand-in optimizer); a non-2 exit is a `failure`, stamped with
+ *  THIS process's tools (the CLI printed no verdict). `source`: what the pass read (freshOver), null for a store hash. */
+export function verdictMarker(err: string, exit: number, source: SourceIdentity | null, now = new Date()): string {
+  const v = readVerdict(err);
+  const failure = exit !== 2;
+  const kind: VerdictKind = failure ? "failure" : v.kind;
+  const toolsDigest = failure ? currentToolsDigest() : v.toolsDigest;
+  const tools = v.tools ?? (failure ? toolVersions() : null);
+  const reason = failure ? (err.trim() ? v.reason : `exit ${exit}`) : v.reason;
+  const stamp = [v.recipe ? recipeStamp(v.recipe) : "", toolsDigest ? toolsStamp(toolsDigest) : ""].filter(Boolean).join(" ");
+  return JSON.stringify({ v: 1, kind, reason, stamp, recipe: v.recipe, toolsDigest, tools, source, exit,
+    tail: err.slice(-2000), at: now.toISOString() });
+}
+
 /** A geometry-LOD serving artifact — ANY recipe generation's, not only the
  *  current one (old generations must stay unlisted and uncatalogued too). */
 export function isLodVariant(name: string): boolean {
@@ -253,18 +343,17 @@ export function lodVariantPath(original: string, recipe = LOD_RECIPE): string {
  *  on a `ktx create` host). A content fact — a skinned body, under the floor, no raster images — is not: it is about
  *  the file, whatever reads it (tools-stamp.ts). */
 export function toolDependent(content: string): boolean {
-  if (/not smaller/i.test(content)) return true;
-  const k = lodVerdictKind(content);
-  return k === "ineffective" || k === "preservation" || k === "gpu";
+  return TOOL_KINDS.has(readVerdict(content).kind);
 }
 /** Does a `.failed` verdict still stand under the current recipe AND tools? A size verdict ("not smaller") stands only
- *  if it carries the current recipe stamp; a tool-dependent verdict only if it carries the current TOOLS stamp (a new
- *  encoder, reducer or sharp re-asks it once — without renaming a single variant URL); anything else stands
- *  regardless. A tool-dependent verdict from before the tools stamp is re-asked once, like one from an older recipe:
- *  there are few (refusals only — no built variant is touched), and "unknown tools" must not stand forever. */
+ *  if it was measured under the current recipe; a tool-dependent verdict only under the current TOOLS (a new encoder,
+ *  reducer or sharp re-asks it once — without renaming a single variant URL); anything else stands regardless. A
+ *  tool-dependent verdict from before the tools stamp is re-asked once, like one from an older recipe: there are few
+ *  (refusals only — no built variant is touched), and "unknown tools" must not stand forever. */
 export function verdictStands(content: string, recipe = KTX2_RECIPE, tools = currentToolsDigest()): boolean {
-  if (/not smaller/i.test(content) && !hasStamp(content, recipe)) return false;
-  if (toolDependent(content) && !hasToolsStamp(content, tools)) return false;
+  const v = readVerdict(content);
+  if (v.kind === "size" && !hasStamp(content, recipe)) return false;
+  if (TOOL_KINDS.has(v.kind) && v.toolsDigest !== tools) return false;
   return true;
 }
 
@@ -342,12 +431,7 @@ export type VariantState = "built" | "not-needed" | "unsupported" | "refused" | 
 export type VariantStatus = { state: VariantState; reason: string | null };
 
 /** Classify one variant from what is on disk beside it. `recipe` is the one its size verdicts are stamped with. */
-// the CLI's line: "[optimize] <pass>: <verdict> (<ms>ms) — <tail>" — keep the verdict, drop the log dressing
-// the verdict is the LAST "[optimize]" line (the pump logs the same one): a warning printed before it (the no-sharp resize
-// note, a gltf-transform logger line) must not become the card's reason
-const verdictLine = (raw: string): string => { const ls = raw.split("\n"); return [...ls].reverse().find((l) => /^\[optimize\]/.test(l)) ?? ls[0]; };
-const failedReason = (raw: string): string => verdictLine(raw).replace(/^\[optimize\]\s*(?:lod:\s*)?/, "").replace(/\s*\(\d+ms\).*$/, "")
-  .replace(/,\s*\d+ms\)/, ")").replace(/\s+—\s+.*$/, "").replace(/\s*recipe=\S+/, "").replace(/\s*tools=\S+/, "").trim() || "refused (no reason recorded)";
+// (a legacy marker's reason is read by readVerdict: the verdict is the LAST "[optimize]" line, minus the log dressing)
 
 /** How classifyVariant reads one pass. `lod`: the marker is read through lodVerdictKind — the route's own reader of the
  *  reducer's grammar, so the card and the x-eidoverse-lod header name the same verdict. `source`: the MUTABLE file the
@@ -368,25 +452,27 @@ export function classifyVariant(path: string, exists: (p: string) => boolean, re
     // An older recipe's verdict beside a variant is just history — a later build succeeded.
     if (failedNow && recipe !== undefined) {
       const raw = read(failed);
-      if (verdictStands(raw, recipe) && fresh(failed)) return { state: "refused", reason: `rebuild refused (${failedReason(raw)}); the earlier variant still serves` };
+      if (verdictStands(raw, recipe) && fresh(failed)) return { state: "refused", reason: `rebuild refused (${readVerdict(raw).reason}); the earlier variant still serves` };
     }
     return { state: "built", reason: null };
   }
   if (failedNow) {
     const raw = read(failed);
-    const reason = failedReason(raw);
+    const verdict = readVerdict(raw), reason = verdict.reason;
     if (recipe !== undefined && !verdictStands(raw, recipe)) return { state: "stale", reason };
     if (!fresh(failed)) return { state: "stale", reason: `the model changed after this verdict: ${reason}` };
     if (opts.lod) {
-      switch (lodVerdictKind(raw)) {
+      switch (verdict.kind) {   // the LOD arm's grammar is the LOD kinds alone: a "nothing to" here is not a content verdict
         case "structural": return { state: "unsupported", reason: reason.replace(/^unsupported:\s*/i, "") };
         case "light": return { state: "not-needed", reason };
         default: return { state: "refused", reason };   // ineffective / preservation / gpu, and anything unclassified
       }
     }
-    if (/no convertible|nothing to/i.test(raw)) return { state: "not-needed", reason };
-    if (/unsupported:/i.test(raw)) return { state: "unsupported", reason: reason.replace(/^unsupported:\s*/i, "") };
-    return { state: "refused", reason };
+    switch (verdict.kind) {
+      case "nothing": return { state: "not-needed", reason };
+      case "structural": case "unsupported": return { state: "unsupported", reason: reason.replace(/^unsupported:\s*/i, "") };
+      default: return { state: "refused", reason };
+    }
   }
   if (exists(`${path}.deferred`)) return { state: "deferred", reason: read(`${path}.deferred`).trim().slice(0, 200) || null };
   return { state: "pending", reason: null };

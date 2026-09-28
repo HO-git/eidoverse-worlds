@@ -17,6 +17,7 @@ for a in "$@"; do case "$a" in --*) mode="$a";; *) if [ -z "$src" ]; then src="$
 echo "$mode $dest" >> "${receipts}"
 if [ -f "${root}/refuse-once" ]; then cat "${root}/refuse-once" >&2; rm -f "${root}/refuse-once"; exit 2; fi
 if [ -f "${root}/refuse$mode" ]; then cat "${root}/refuse$mode" >&2; exit 2; fi
+if [ -f "${root}/crash$mode" ]; then echo "TypeError: boom at parse" >&2; exit 1; fi
 mkdir -p "$(dirname "$dest")"; printf 'rebuilt' > "$dest"; exit 0
 `); chmodSync(fake, 0o755); writeFileSync(receipts, "");
 Object.assign(process.env, { REBUILD_COOLDOWN_MS: "0", SKIP_OPT_SWEEP: "1", WORLDS_DIR: join(root, "worlds"), OPT_DIR: join(root, "opt"), EIDOVERSE_DIR: join(root, "lib"),
@@ -108,7 +109,7 @@ check("store object: variants rebuilt beside the original, .deferred cleared", !
 // the route and the card alike. Never marker-vs-source mtime order.
 {
   await optIdle();
-  const { diskIdentity, sourceSidecar, parseSourceToken, variantStatus, LOD_RECIPE, recipeStamp } = await import("../server/store-variants.ts");
+  const { diskIdentity, sourceSidecar, readVerdict, variantStatus, LOD_RECIPE, recipeStamp } = await import("../server/store-variants.ts");
   const { KTX2_KEY } = await import("../shared/ktx2.js");
   const { route: rt } = await import("../server/routes.ts");
   const REL = "eidoverse/assets/models/prop.glb", src = join(lib, "prop.glb");
@@ -120,8 +121,14 @@ check("store object: variants rebuilt beside the original, .deferred cleared", !
   const id0 = diskIdentity(src)!;
   let side: unknown = null; try { side = JSON.parse(readFileSync(sourceSidecar(pK), "utf8")); } catch { /* absent */ }
   check("identity: a built variant records its source's identity (size + mtime) in its .srcid sidecar", JSON.stringify(side) === JSON.stringify(id0), [side, id0]);
-  const tok = parseSourceToken(readFileSync(`${pL}.failed`, "utf8"));
-  check("identity: a verdict records it too, on its own `source=` line", JSON.stringify(tok) === JSON.stringify(id0), [tok, id0]);
+  const tok = readVerdict(readFileSync(`${pL}.failed`, "utf8")).source;
+  check("identity: a verdict records it too (its record's `source`)", JSON.stringify(tok) === JSON.stringify(id0), [tok, id0]);
+  // a stand-in optimizer printed only TEXT (no [verdict] line): the pump still writes a typed record, read by the
+  // legacy grammar once, at write time
+  let rec: any = null; try { rec = JSON.parse(readFileSync(`${pL}.failed`, "utf8")); } catch { /* not JSON */ }
+  check("records: the pump writes the verdict as JSON {v, kind, reason, stamp, recipe, source, exit, tail} — kind from a text-only CLI too",
+    rec?.v === 1 && rec.kind === "light" && rec.reason === "already light (900 verts < 1000)" && rec.recipe === LOD_RECIPE && rec.exit === 2
+    && rec.stamp === recipeStamp(LOD_RECIPE) && rec.tail.includes("already light"), rec);
   const lodAt = async () => (await rt(new Request(`http://x/library/${REL}?ktx2=${KTX2_KEY}&lod=${LOD_RECIPE}`), {} as any)).headers.get("x-eidoverse-lod");
   const card = () => variantStatus(join(opt, REL), join(opt, "eidoverse/assets/models"), { source: src });
   // the flake, made deterministic: a verdict in the SAME mtime tick as its source was "not newer", so not fresh
@@ -171,6 +178,23 @@ check("store object: variants rebuilt beside the original, .deferred cleared", !
   qo(join(store, "ca1.glb")); await optIdle();
   check("store (content-addressed): a standing verdict OLDER than the upload's mtime still stands — the pump runs nothing",
     runs().length === b0, runs().slice(b0));
+}
+// 2g. a CRASH (any exit but 2) is a `failure` record — never a verdict: never final, and re-asked when the tools change
+{
+  await optIdle();
+  const { readVerdict, verdictStands, lodVerdictKind, KTX2_RECIPE } = await import("../server/store-variants.ts");
+  const { currentToolsDigest } = await import("../server/tools-stamp.ts");
+  writeFileSync(join(lib, "crashy.glb"), "orig");
+  const cK = join(opt, ktx2VariantPath("eidoverse/assets/models/crashy.glb"));
+  writeFileSync(join(root, "crash--ktx2"), "");
+  rebuildAsset("eidoverse/assets/models/crashy.glb"); await optIdle();
+  let rec: any = null; try { rec = JSON.parse(readFileSync(`${cK}.failed`, "utf8")); } catch { /* absent */ }
+  check("records: a crash (exit 1) is kind `failure`, stamped with the tools that crashed, its stderr kept as the tail",
+    rec?.kind === "failure" && rec.exit === 1 && rec.toolsDigest === currentToolsDigest() && rec.tail.includes("TypeError: boom") && rec.reason.includes("boom"), rec);
+  const raw = existsSync(`${cK}.failed`) ? readFileSync(`${cK}.failed`, "utf8") : "";
+  check("…it stands under the same tools (no crash loop every boot) and falls under new ones; it is never a LOD kind",
+    verdictStands(raw, KTX2_RECIPE) && !verdictStands(raw, KTX2_RECIPE, "000000000000") && lodVerdictKind(raw) === null && readVerdict(raw).kind === "failure");
+  rmSync(join(root, "crash--ktx2"));
 }
 // 3. refusals: nothing queued for any of them
 const before = runs().length;

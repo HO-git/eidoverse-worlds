@@ -28,7 +28,7 @@ import { ALL_EXTENSIONS, KHRTextureBasisu } from "@gltf-transform/extensions";
 import { dedup, prune, resample, textureCompress, draco, listTextureSlots, weld, simplify } from "@gltf-transform/functions";
 import { MeshoptSimplifier } from "meshoptimizer";
 import draco3d from "draco3dgltf";
-import { capTexels, recipeStamp, LOD_RECIPE, LOD_MIN_VERTS, LOD_RATIO, LOD_ERROR } from "./store-variants.ts";
+import { capTexels, recipeStamp, verdictLine, LOD_RECIPE, KTX2_RECIPE, LOD_MIN_VERTS, LOD_RATIO, LOD_ERROR, type LodVerdictKind, type VerdictKind } from "./store-variants.ts";
 import { findKtx2Encoder, resolveNestedSharp, toolsStamp } from "./tools-stamp.ts";
 export { findKtx2Encoder, resolveNestedSharp };
 import { glbPerf } from "./glbperf.ts";
@@ -382,7 +382,9 @@ const sceneBounds = (doc: Document): [number[], number[]] => {
 export const lodGpuRefusal = (origTexMB: number, lodTexMB: number, ms: number): string =>
   `[optimize] lod: not lighter on the GPU (textures ${origTexMB} -> ${lodTexMB} MB, ${ms}ms) ${recipeStamp(LOD_RECIPE)} ${toolsStamp()} — original stays the only representation`;
 
-export type LodResult = { out: Uint8Array | null; verdict: string | null; before: number; after: number; permissive?: boolean };
+// `kind`: the typed class of a refusal, named HERE where the phrase is minted (store-variants.ts readVerdict) — the marker
+// records it, and no reader has to re-derive it from the text
+export type LodResult = { out: Uint8Array | null; verdict: string | null; kind?: LodVerdictKind; before: number; after: number; permissive?: boolean };
 
 /** MeshoptSimplifier with 'Permissive' added to every simplify() call — gltf-transform's simplify() only ever passes
  *  LockBorder, and wrapping the simplifier keeps its weld/dequantize/compaction handling intact. */
@@ -416,7 +418,7 @@ export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, 
   const none = { eligible: 0, converted: 0, failed: [] as string[] };
   const rawJson = parseGlb(bytes).json;
   const excluded = lodExclusion(rawJson);
-  if (excluded) return { out: null, verdict: excluded, before: 0, after: 0, ...none };
+  if (excluded) return { out: null, verdict: excluded, kind: "structural", before: 0, after: 0, ...none };
   // a textured object on an encoder-less box is environmental — and known
   // from the raw container, BEFORE any expensive transform runs (the pump
   // retries this every boot; it must cost a JSON parse, not a simplify)
@@ -451,21 +453,21 @@ export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, 
   };
   let r = await reduce(false);
   const before = r.before;
-  if (before < LOD_MIN_VERTS) return { out: null, verdict: `already light (${before} verts < ${LOD_MIN_VERTS})`, before, after: before, ...none };
+  if (before < LOD_MIN_VERTS) return { out: null, verdict: `already light (${before} verts < ${LOD_MIN_VERTS})`, kind: "light", before, after: before, ...none };
   let permissive = false;
   if (r.after > before * 0.6) { r = await reduce(true); permissive = true; }
   const { doc, preNodes, preMats } = r;
   const [preMin, preMax] = r.bounds;
   const after = r.after;
-  if (lodNodesSig(doc) !== preNodes) return { out: null, verdict: "preservation failed: node hierarchy/transforms changed", before, after, ...none };
-  if (lodMatsSig(doc) !== preMats) return { out: null, verdict: "preservation failed: material assignments changed", before, after, ...none };
+  if (lodNodesSig(doc) !== preNodes) return { out: null, verdict: "preservation failed: node hierarchy/transforms changed", kind: "preservation", before, after, ...none };
+  if (lodMatsSig(doc) !== preMats) return { out: null, verdict: "preservation failed: material assignments changed", kind: "preservation", before, after, ...none };
   const [postMin, postMax] = sceneBounds(doc);
   for (let i = 0; i < 3; i++) {
     const tol = Math.max((preMax[i] - preMin[i]) * 0.02, 0.01);
     if (Math.abs(postMin[i] - preMin[i]) > tol || Math.abs(postMax[i] - preMax[i]) > tol)
-      return { out: null, verdict: `preservation failed: bounds moved on axis ${i}`, before, after, ...none };
+      return { out: null, verdict: `preservation failed: bounds moved on axis ${i}`, kind: "preservation", before, after, ...none };
   }
-  if (after > before * 0.6) return { out: null, verdict: `reduction ineffective (${before} -> ${after} verts${permissive ? ", permissive too" : ""})`, before, after, ...none };
+  if (after > before * 0.6) return { out: null, verdict: `reduction ineffective (${before} -> ${after} verts${permissive ? ", permissive too" : ""})`, kind: "ineffective", before, after, ...none };
   // textures: the ktx2 arm's rules verbatim — all eligible convert or nothing ships
   let tally: Ktx2Tally = none;
   if (encoder) {
@@ -985,6 +987,7 @@ if (import.meta.main) {
       const r = await transcodeImageKtx2(src, inPath, encoder!);
       if ("skip" in r) {
         console.error(`[optimize] ktx2-img: ${r.skip} — keeping original`);
+        console.error(verdictLine("unsuitable", `ktx2-img: ${r.skip}`, KTX2_RECIPE));
         process.exit(2);
       }
       console.log(`[optimize] ktx2-img: ${basename(inPath)} → ${r.uastc ? "uastc" : "etc1s"}/${r.srgb ? "srgb" : "linear"}, flip baked`);
@@ -993,6 +996,7 @@ if (import.meta.main) {
       const r = await transcodeVrmKtx2(src, encoder!);
       if (r.converted === 0) {
         console.error(`[optimize] ktx2-vrm: no convertible raster images (${Math.round(performance.now() - t0)}ms) — keeping original`);
+        console.error(verdictLine("nothing", "ktx2-vrm: no convertible raster images", KTX2_RECIPE));
         process.exit(2);
       }
       console.log(`[optimize] ktx2-vrm: ${r.converted} image(s) → ${r.etc1s} etc1s + ${r.uastc} uastc`);
@@ -1005,6 +1009,7 @@ if (import.meta.main) {
       }
       if (r.verdict) {   // a typed content refusal — fail closed, marker's business; stamped with the recipe like the ktx2 size verdict
         console.error(`[optimize] lod: ${r.verdict} (${Math.round(performance.now() - t0)}ms) ${recipeStamp(LOD_RECIPE)} ${toolsStamp()} — original stays the only representation`);
+        console.error(verdictLine(r.kind ?? "unknown", r.verdict, LOD_RECIPE));
         process.exit(2);
       }
       if (!r.out) {
@@ -1017,6 +1022,7 @@ if (import.meta.main) {
       const r = await optimizeGlbKtx2(src, encoder!);
       if (r.eligible === 0) {
         console.error(`[optimize] ktx2: no convertible raster images (${Math.round(performance.now() - t0)}ms) — keeping original`);
+        console.error(verdictLine("nothing", "ktx2: no convertible raster images", KTX2_RECIPE));
         process.exit(2);
       }
       if (!r.out) {
@@ -1044,6 +1050,7 @@ if (import.meta.main) {
       const a = glbPerf(src), b = glbPerf(out);
       if (b.texMB > a.texMB) {
         console.error(lodGpuRefusal(a.texMB, b.texMB, ms));
+        console.error(verdictLine("gpu", `not lighter on the GPU (textures ${a.texMB} -> ${b.texMB} MB)`, LOD_RECIPE));
         process.exit(2);
       }
       console.log(`[optimize] lod: GPU textures ${a.texMB} -> ${b.texMB} MB, tris ${a.tris} -> ${b.tris}; download ${(out.length / src.length).toFixed(2)}x the original`);
@@ -1052,6 +1059,7 @@ if (import.meta.main) {
       // a new encoder re-measures it (store-variants.ts verdictStands)
       // instead of inheriting the refusal
       console.error(`[optimize] not smaller (${src.length} -> ${out.length}, ${ms}ms)${ktx2Mode ? ` ${recipeStamp(mode === "--lod" ? LOD_RECIPE : undefined)} ${toolsStamp()}` : ""} — keeping original`);
+      console.error(verdictLine("size", `not smaller (${src.length} -> ${out.length})`, ktx2Mode ? (mode === "--lod" ? LOD_RECIPE : KTX2_RECIPE) : null));
       process.exit(2);
     }
     // …and the same care about CONTENT: a GLB whose images are not images is

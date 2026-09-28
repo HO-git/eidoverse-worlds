@@ -252,7 +252,23 @@ export async function setCloudQuality(level, { persist = true } = {}) {
   // low, medium and high construct the SAME sky system (audit, 09-27): a switch among them swaps what's shown instead of
   // tearing down and re-linking identical giant programs (every rebuild re-linked them, and three's WebGL backend never
   // frees a GL program, so each one also leaked in the GPU process). The VR cap's entry/exit flip rides this too.
-  if (SAME_SYSTEM.has(cloudQuality) && SAME_SYSTEM.has(level) && skyApi && impl === 'eidoverse' && !interimFor && !building) {
+  if (SAME_SYSTEM.has(cloudQuality) && SAME_SYSTEM.has(level) && skyApi && impl === 'eidoverse' && !building) {
+    // Still arriving (the gradient's up, finishSky running): wait for it, THEN swap. A rebuild here threw the arriving
+    // sky away, the VR cap's prebuilt program with it (owner's rig 09-27 22:05: VR entry 9 s after load, the medium
+    // bake then compiled cold from scratch). The latest choice wins if several arrive meanwhile.
+    if (interimFor) {
+      pendingTier = level;
+      tee(`[sky] clouds → ${level} once the sky has arrived (no rebuild)`);
+      const api = skyApi;
+      whenSkyUp().then(() => {
+        if (skyApi !== api || pendingTier !== level) return;
+        pendingTier = null;
+        if (level === cloudQuality) return;
+        const from = cloudQuality; cloudQuality = level;
+        swapTier(from, level).catch((e) => report('sky tier swap', e));
+      });
+      return;
+    }
     const from = cloudQuality;
     cloudQuality = level;
     return swapTier(from, level);
@@ -516,7 +532,7 @@ function teardownSky({ rebuilding = false } = {}) {
   // A rebuild keeps a gradient up through the teardown and the new build's module/texture loads (audit M2: a black gap on
   // every quality flip, and in the headset). The palette uniforms are plain objects and outlive the system. A teardown
   // to the basic sky drops it. A pending finishSky sees skyApi change and stops.
-  interimFor = null;
+  interimFor = null; pendingTier = null; markSkyUp();   // anyone waiting for the old build: it's gone (they check skyApi)
   if (rebuilding && skyInner?.uniforms) showInterimSky(skyInner.uniforms); else hideInterimSky();
   // Held domes are taken, not put back (audit M5): never compiled, they must not reach the scene on the way out.
   const held = takeHeldDomes();
@@ -612,6 +628,8 @@ async function finishSky(api) {
   phase('apply');
   await worldSettled();
   if (skyApi !== api) return;            // torn down / rebuilt while we waited: the newer build owns the sky
+  // a tier chosen while we waited (the VR cap at an early entry): same system, so just arrive as that tier
+  if (pendingTier) { tee(`[sky] arriving as ${pendingTier} (chosen while the sky was loading)`); cloudQuality = pendingTier; pendingTier = null; }
   const bake = beginWork('sky bake');
   if (!BAKED_TIERS[cloudQuality]) {
     // the live tier: its env bake only lights reflections, so the clouds don't wait for it. On the owner's rig (09-27
@@ -631,6 +649,7 @@ async function finishSky(api) {
   interimFor = null;
   hideInterimSky();
   tee(`[sky] the real sky is up (${bakedActive() ? 'baked dome' : 'live domes'}); the interim gradient is gone`);
+  markSkyUp();
   if (!BAKED_TIERS[cloudQuality] && capPrebuiltFor !== api) prebuildCapBakeWhenHeadset(api);   // a build that wasn't under the splash
 }
 
@@ -675,6 +694,15 @@ export async function prebuildBakeProgram(cloudPasses, opts = {}) {
 }
 
 let interimFor = null;    // the sky build the interim gradient is standing in for
+let pendingTier = null;   // a tier chosen while the sky was still arriving, swapped in once it has
+let skyUpResolve = null, skyUpP = null;
+/** Resolves once the current sky build has arrived (finishSky done), at once if nothing is arriving. */
+function whenSkyUp() {
+  if (!interimFor) return Promise.resolve();
+  if (!skyUpP) skyUpP = new Promise((r) => { skyUpResolve = r; });
+  return skyUpP;
+}
+function markSkyUp() { const r = skyUpResolve; skyUpResolve = null; skyUpP = null; r?.(); }
 /** Nearby world first: boot finished and no loading work queued, for a second in a row (at most 60 s). */
 async function worldSettled() {
   const t0 = performance.now(); let calm = 0;

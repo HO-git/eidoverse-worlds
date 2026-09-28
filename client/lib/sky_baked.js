@@ -173,6 +173,8 @@ let cycleForced = false;
 let fade = null;       // { from, to, t0, dur }
 let nextAt = 0;
 let lastCycleMs = 0;
+let refreshing = false;
+export const bakedRefreshing = () => refreshing;
 // DRIFT (owner 09-27: 'if drift is almost free, do that for medium'; after a look: 'looks nice … an easy win'). On by
 // default on every baked tier; ?skydrift=0 turns it off. A bake is a snapshot, so
 // between bakes the clouds stood still and then dissolved to where they'd moved. The engine moves them by sampling its
@@ -693,6 +695,9 @@ function maybeRefreshGraph() {
   }
   refreshHeldLogged = false;
   state = 'refreshing';
+  // the clear→cloudy graph refresh compiles the cloud program (seconds; minutes cold): the sky panel's 'loading…'
+  // should say so (review 3, M4). sky.js folds this into 'sky-busy'.
+  refreshing = true; bus.emit('sky-refreshing', true);
   const A = targets[0];
   const gen = bakeGen, alive = () => gen === bakeGen;
   // bakeEnv's single full-quad renderAsync becomes cost-weighted strips (the boot bake's treatment, sky.js):
@@ -736,7 +741,7 @@ function maybeRefreshGraph() {
     console.warn('[sky] bake graph refresh failed', e?.message ?? e);
     pinnedCloudsOn = wantClouds;   // stop retrying every cycle
     state = 'idle';
-  });
+  }).finally(() => { refreshing = false; bus.emit('sky-refreshing', false); });
   return true;
 }
 

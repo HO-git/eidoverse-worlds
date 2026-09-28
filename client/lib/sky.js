@@ -22,7 +22,7 @@ import { loadEidoModule, primeFiles, listLibrary, fetchBytes } from './assets.js
 import { markPhase } from './boot.js';
 import { bandCuts, bandedBakeRender, bakeGeneration } from './sky_baked.js';
 import { BAKE_INTERCEPT, attachBakedDome, detachBakedDome, setBakeInterval, updateBakedDome, bakedActive, requestBake, holdLiveDomes, releaseLiveDomes, liveDomesHeld, takeHeldDomes,
-  envTexture, adoptEnvironment, whenBakeReady } from './sky_baked.js';
+  envTexture, adoptEnvironment, whenBakeReady, bakedRefreshing } from './sky_baked.js';
 import { beginWork } from './loadwork.js';
 import { showInterimSky, updateInterimSky, hideInterimSky, interimSkyShown } from './sky_interim.js';
 import { busy as loadingBusy } from './framebudget.js';
@@ -734,10 +734,11 @@ async function worldSettled() {
 // baking). The World › sky panel shows 'loading…' from it; nothing depends on anyone listening.
 let swapping = 0, busyShown = false;
 function announceBusy() {
-  const b = interimSkyShown() || swapping > 0;
+  const b = interimSkyShown() || swapping > 0 || bakedRefreshing();
   if (b !== busyShown) { busyShown = b; bus.emit('sky-busy', b); }
 }
 bus.on('sky-interim', announceBusy);
+bus.on('sky-refreshing', announceBusy);
 export const skyBusy = () => busyShown;
 /** Probes only: the api and the engine object. */
 export const skyForProbe = () => ({ api: skyApi, sys: skyInner });

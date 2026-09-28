@@ -84,23 +84,39 @@ const stats = (globalThis.__xrMirror = { passes: 0, last: null });   // harness:
 // WHY THE DESKTOP STOPPED, said for as long as it's true (owner, 09-27: an 8 s toast 'isn't on the screen for very long
 // and could be easily missed'). A banner centred on the desktop from the moment the mirror switches itself off until
 // the session ends; nobody in the headset sees it, and whoever is at the monitor can't miss it.
-let banner = null;
-function showMirrorBanner(why) {
+let banner = null, bannerKind = null;
+// Mirror set to OFF by choice: the desktop is black for the whole session, which reads as a crash to whoever's at the
+// monitor (owner, 09-27: 'a generic in VR label … same style'). Neutral colour; the self-kill banner above outranks it.
+function showInVRLabel() {
+  if (typeof document === 'undefined' || bannerKind === 'killed') return;
+  showMirrorBanner(null, 'inVR');
+}
+function showMirrorBanner(why, kind = 'killed') {
   if (typeof document === 'undefined') return;
   if (!banner) {
     banner = document.createElement('div'); banner.className = 'xr-mirror-off'; banner.setAttribute('role', 'status');
     banner.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:90;max-width:min(460px,86vw);'
       + 'padding:14px 18px;border-radius:10px;text-align:center;font-size:15px;line-height:1.45;pointer-events:none;'
-      + 'background:color-mix(in srgb, var(--attn, #e0a040) 14%, var(--bg, #101818));color:var(--fg, #ebebe9);'
-      + 'border:1px solid color-mix(in srgb, var(--attn, #e0a040) 70%, transparent)';
+      + 'color:var(--fg, #ebebe9);';
     document.body.appendChild(banner);
   }
-  banner.innerHTML = '<b>Desktop view paused while you\'re in VR</b><br>' + why + '<br><span style="opacity:.75;font-size:13px">It comes back on your next entry (Settings › VR › desktop view).</span>';
+  bannerKind = kind;
+  const tone = kind === 'killed' ? 'var(--attn, #e0a040)' : 'var(--accent, #6fb3d2)';
+  banner.style.background = `color-mix(in srgb, ${tone} 14%, var(--bg, #101818))`;
+  banner.style.border = `1px solid color-mix(in srgb, ${tone} 70%, transparent)`;
+  banner.innerHTML = kind === 'killed'
+    ? '<b>Desktop view paused while you\'re in VR</b><br>' + why + '<br><span style="opacity:.75;font-size:13px">It comes back on your next entry (Settings › VR › desktop view).</span>'
+    : '<b>In VR</b><br><span style="opacity:.75;font-size:13px">The desktop view is off (Settings › VR › desktop view).</span>';
 }
-const hideMirrorBanner = () => { banner?.remove(); banner = null; };
+const hideMirrorBanner = () => { banner?.remove(); banner = null; bannerKind = null; };
+const syncInVRLabel = () => {
+  if (isPresenting() && xrPrefs.mirror === 'off') showInVRLabel();
+  else if (bannerKind === 'inVR') hideMirrorBanner();
+};
+bus.on('xr:prefs', syncInVRLabel);
 export const mirrorBannerText = () => banner?.textContent ?? null;   // probe
 
-bus.on('xr:state', (on) => { if (on) { mirrorKilled = false; failed = false; slowFrames = 0; lastTick = 0; teed = false; } else hideMirrorBanner(); });   // 'off for this session' means THIS session
+bus.on('xr:state', (on) => { if (on) { mirrorKilled = false; failed = false; slowFrames = 0; lastTick = 0; teed = false; hideMirrorBanner(); syncInVRLabel(); } else hideMirrorBanner(); });   // 'off for this session' means THIS session
 export function tickXRMirror() {
   if (!isPresenting() || xrPrefs.mirror === 'off' || mirrorKilled || failed) return;
   if (xrCurtainOn()) return;   // entry: the curtain is up and pipelines are building; no desktop pass on top of that

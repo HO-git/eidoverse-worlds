@@ -224,7 +224,12 @@ export async function bandedBakeRender(r, bakeScene, bakeCam, target, { cloudPas
     { const prev = r.getRenderTarget(); r.setRenderTarget(target);
       const tc = performance.now();
       try { await r.compileAsync(bs, bakeCam).catch((e) => tee(`[sky] band bake: compileAsync rejected: ${e?.message ?? e}`)); } finally { r.setRenderTarget(prev ?? null); }
-      tee(`[sky] band bake: compiled in ${(performance.now() - tc).toFixed(0)} ms, ${meshes.length} bands to draw`); }
+      // …and LINKED: a giant program the syncgate backstop deferred earlier (a render into this target during the
+      // build) may still be linking; drawing now would skip every band and leave the dome black (09-27 18:10)
+      const tl = performance.now();
+      await globalThis.__syncGate?.whenGiantLinked?.();
+      const waited = performance.now() - tl;
+      tee(`[sky] band bake: compiled in ${(performance.now() - tc).toFixed(0)} ms${waited > 50 ? ` (waited ${waited.toFixed(0)} ms for a deferred link)` : ''}, ${meshes.length} bands to draw`); }
     for (let i = 0; i < meshes.length; i++) {
       // budget: each band is a gpu unit of the shared per-frame budget (the client's callers; the probe paces itself).
       // Nothing is bound across this wait: other frames render meanwhile.

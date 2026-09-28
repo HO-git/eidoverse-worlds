@@ -32,6 +32,7 @@ export function installSyncGate(renderer, { tee = () => {}, gate = true } = {}) 
   if (!orig) return null;
   const stats = { renderPath: 0, deferred: 0, intoTarget: 0, slow: [], parallel: !!be.parallel, gate };
   be.__syncGate = stats;
+  const pendingGiant = new Set();
 
   be.createRenderPipeline = (renderObject, promises) => {
     if (promises != null) {                                              // compileAsync: three polls already
@@ -67,6 +68,17 @@ export function installSyncGate(renderer, { tee = () => {}, gate = true } = {}) 
     if (deferring) {
       ret = orig(renderObject, mine);
       if (mine.length) stats.deferred++;
+      // a giant program still linking: anyone about to DRAW with it into a one-shot target (a bake) must wait, or the
+      // draw is silently skipped and the target stays black (the owner's sky, 09-27 18:10). compileAsync can't be
+      // used for that: once the pipeline exists, it resolves at once, linked or not.
+      if (mine.length && fsLen > GIANT_FS) {
+        const pipe = renderObject.pipeline;
+        const p = Promise.all(mine).catch(() => {}).finally(() => pendingGiant.delete(p));
+        p.status = () => { try { const gl = be.gl, prog = be.get(pipe)?.programGPU; if (!gl || !prog) return 'no program';
+          const done = be.parallel ? gl.getProgramParameter(prog, be.parallel.COMPLETION_STATUS_KHR) : true;
+          return done ? `complete, linked=${gl.getProgramParameter(prog, gl.LINK_STATUS)}` : 'still compiling'; } catch (e) { return `? ${e?.message ?? e}`; } };
+        pendingGiant.add(p);
+      }
     } else {
       ret = orig(renderObject, null);
     }
@@ -95,5 +107,16 @@ export function installSyncGate(renderer, { tee = () => {}, gate = true } = {}) 
   };
 
   tee(`[syncgate] installed: parallel-compile ${stats.parallel ? 'yes' : 'NO (gate inert: links block)'}; gate ${gate ? 'on' : 'off (?syncgate=0, census only)'}`);
+  // resolves when every giant link pending now has landed; after maxMs it gives up, saying what the GL reports (a black
+  // baked sky on the owner's rig, 09-27 18:10, with no 'linked after' line: this is the witness)
+  stats.whenGiantLinked = (maxMs = 120000) => {
+    const list = [...pendingGiant];
+    if (!list.length) return Promise.resolve(true);
+    let timer = 0;
+    return Promise.race([
+      Promise.all(list).then(() => true),
+      new Promise((r) => { timer = setTimeout(() => { tee(`[syncgate] giant link still pending after ${maxMs} ms: ${list.map((p) => p.status?.() ?? '?').join(' | ')}`, true); r(false); }, maxMs); }),
+    ]).finally(() => clearTimeout(timer));
+  };
   return stats;
 }

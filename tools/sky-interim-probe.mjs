@@ -18,7 +18,7 @@ try {
   await pg.evaluate(() => localStorage.setItem('ew-cloud-quality', 'off'));
   await pg.goto(`${world.origin}/?world=staging&name=interim&key=${world.key}&lite=0`, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await pg.waitForFunction(() => globalThis.__ewEngineUp, null, { timeout: 120000 });
-  await pg.evaluate(async () => { const { sendVerb } = await import('./lib/net.js'); sendVerb('sky', { hours: 17, rate: 0, clouds: 'cumulus' }); });
+  await pg.evaluate(async () => { const { sendVerb } = await import('./lib/net.js'); sendVerb('sky', { hours: 17, rate: 22.5, clouds: 'cumulus' }); });
   await pg.waitForTimeout(1500);
   await pg.reload({ waitUntil: 'domcontentloaded' });
   const t1 = Date.now();
@@ -50,6 +50,8 @@ try {
   const owns = lines.find((l) => /build owns/.test(l)) ?? '';
   const later = owns.match(/\w+=later/g) ?? [];
   check('exactly the two big domes (spheres) skip the warm conductor, for later', later.length === 2 && later.every((x) => /^SphereGeometry/.test(x)), owns.match(/\w+=later/g)?.join(' ') ?? owns.slice(0, 200));
+  await pg.waitForTimeout(6000);   // a few more rated-sky seconds after the bake
+  check('a baked tier never runs the full-quad env re-bake (the synchronous giant-program caller)', !lines.some((l) => /env re-bake/.test(l)), lines.filter((l) => /env re-bake/.test(l)).slice(0, 2).join(' | '));
   check('the real sky replaces it: gradient gone, nothing left held', up && !after.interim && !after.held, JSON.stringify(after));
   check('no page errors', errs.length === 0, errs.slice(0, 3).join(' | '));
 } catch (e) { check('probe ran', false, e.message); }

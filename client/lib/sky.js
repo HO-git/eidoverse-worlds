@@ -803,6 +803,7 @@ async function ensureSkyBake() {
         const target = renderer.getRenderTarget();
         const t0 = performance.now();
         return renderer.compileAsync(sc, cam).catch(() => {})
+          .then(() => globalThis.__syncGate?.whenGiantLinked?.())   // a deferred giant link must land before the one draw (09-27)
           .then(() => { tee(`[sky] one-shot bake precompiled in ${(performance.now() - t0).toFixed(0)} ms`); renderer.setRenderTarget(target); return origRA.call(renderer, sc, cam); });
       }
       const target = renderer.getRenderTarget();
@@ -870,6 +871,11 @@ async function runEnvBake() {
   // On baked tiers the crossfade loop owns the re-bake clock — a stray
   // timer must not blocking-render a full-quad bake on top of it.
   if (bakedActive()) return requestBake();
+  // …and a baked tier whose dome hasn't attached YET (the interim wait, world-first) must not either: this full-quad
+  // bake was the synchronous caller of the 1.76 MB bake program the owner's GPU froze on (09-27, runEnvBake in the
+  // backstop's caller stack), and its deferred draw left the first target black. The boot bake covers env there.
+  if (BAKED_TIERS[cloudQuality] || interimFor) return;
+  tee(`[sky] env re-bake (${cloudQuality} tier, live env)`);
   lastBakeAt = performance.now();
   lastBakeHours = nowHours();
   try {
@@ -899,7 +905,7 @@ function applyLive(a) {
   skyApi.setTime?.(h);
   // Baked tiers re-bake on their own cadence (which covers TOD drift too);
   // the debounced TOD bake only serves the 'live' tier's env-IBL.
-  if (!bakedActive()) scheduleEnvBake();
+  if (!bakedActive() && !BAKED_TIERS[cloudQuality] && !interimFor) scheduleEnvBake();   // the 'live' tier only
   let changed = false;
   // A dusk/dawn VERB used to wait out the 9s bake cadence before the
   // visible dome moved (§18b) — a clock JUMP asks for a bake now. Circular

@@ -92,8 +92,54 @@ export const recipeStamp = (recipe = KTX2_RECIPE) => `recipe=${recipe}`;
 // exact tool versions. Named nodes, materials, and bounds are asserted
 // unchanged after the reduce — a failed assert is a typed verdict too, not
 // a half-valid object.
-export const LOD_RECIPE = "lod1-r25e01-texel1024";   // ratio 0.25, error 0.01, ktx2 texel budget
-export const LOD_MIN_VERTS = 12_000;                 // under this, there is nothing worth reducing
+export const LOD_GEN = 1;           // the REDUCER's generation: bump when weld/simplify semantics or the tool change
+export const LOD_RATIO = 0.25;      // meshopt-simplify target ratio
+export const LOD_ERROR = 0.01;      // meshopt-simplify error bound
+export const LOD_MIN_VERTS = 12_000;   // under this, there is nothing worth reducing
+
+/** The recipe string DERIVES from every parameter a variant or a verdict
+ *  depends on — the reducer generation, ratio, error, the texel budget, and
+ *  the vertex floor. The recipe is in the URL and in every filename, so a
+ *  change to any of these is a new generation BY CONSTRUCTION: fresh
+ *  filenames, a fresh sweep, and nothing pinned under yesterday's address.
+ *  The floor used to live only inside the marker's text: lowering it under
+ *  the same string would have left every "already light" verdict standing
+ *  and the sweep skipping exactly the models the change was for. */
+export function lodRecipeFor({ gen = LOD_GEN, ratio = LOD_RATIO, error = LOD_ERROR, texel = KTX2_TEXEL_CAP, minVerts = LOD_MIN_VERTS } = {}): string {
+  const pct = (x: number) => String(Math.round(x * 100)).padStart(2, "0");   // 0.25 → 25, 0.01 → 01
+  return `lod${gen}-r${pct(ratio)}e${pct(error)}-texel${texel}-min${minVerts}`;
+}
+export const LOD_RECIPE = lodRecipeFor();   // "lod1-r25e01-texel1024-min12000"
+
+// ---- standing verdicts -------------------------------------------------------
+// A flagged fetch that falls through is provisional — the doctrine that keeps
+// a later variant from being locked out of a pinned cache entry. But a typed
+// refusal is not "not yet": a body is a body, and a 981-vertex prop is under
+// the floor, for as long as the content and the recipe are what they are —
+// and BOTH are in the URL (a store hash, the recipe). Such a verdict may be
+// final: the original is THE answer for this tier, cacheable like the plain
+// ktx2 answer. Two classes are not, because they depend on something the
+// URL does not carry: "reduction ineffective" and a preservation failure
+// depend on the reducer (a better meshoptimizer may succeed tomorrow), so
+// they stay provisional until LOD_GEN is bumped for that tool. Anything
+// unclassified stays provisional — the safe default.
+export type LodVerdictKind = "structural" | "light" | "ineffective" | "preservation";
+/** Which class of typed refusal a lod `.failed` marker records (the
+ *  reducer's phrases, optimize.ts) — or null for anything else. */
+export function lodVerdictKind(content: string): LodVerdictKind | null {
+  if (/\bunsupported: (skinned\/avatar asset|morph targets|animated object)/i.test(content)) return "structural";
+  if (/\balready light \(\d+ verts < \d+\)/i.test(content)) return "light";
+  if (/\breduction ineffective \(\d+ -> \d+ verts\)/i.test(content)) return "ineffective";
+  if (/\bpreservation failed:/i.test(content)) return "preservation";
+  return null;
+}
+/** Does this marker make the original the FINAL answer under `recipe`? A
+ *  content-only class (structural, light) stamped with the running recipe —
+ *  the filename binds the recipe too; the stamp is the belt to that brace. */
+export function lodVerdictFinal(content: string, recipe = LOD_RECIPE): boolean {
+  const kind = lodVerdictKind(content);
+  return (kind === "structural" || kind === "light") && content.includes(recipeStamp(recipe));
+}
 
 /** A geometry-LOD serving artifact — ANY recipe generation's, not only the
  *  current one (old generations must stay unlisted and uncatalogued too). */

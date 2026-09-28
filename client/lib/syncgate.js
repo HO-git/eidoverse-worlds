@@ -73,7 +73,10 @@ export function installSyncGate(renderer, { tee = () => {}, gate = true } = {}) 
         lights: renderObject.lightsNode?.getLights?.()?.length ?? null,
       };
       if (ms >= SLOW_MS) stats.slow.push(row);
-      if (ms >= SLOW_MS || row.fs > 60000) tee(`[syncgate] render-path build ${row.ms} ms${deferring ? ' (deferred link)' : ' (BLOCKING)'} ${row.object} ${row.material} vs ${row.vs} fs ${row.fs} chars skinned=${row.skinned} morphs=${row.morphs} lights=${row.lights}`);
+      // a BLOCKING build over a second: who asked for it (09-27: an 89 s 1.76 MB build into a target froze the owner's
+      // GPU process and its caller wasn't in the log). The stack is only taken on this rare path.
+      const who = !deferring && ms >= 1000 ? ` via ${String(new Error().stack ?? '').split('\n').slice(2, 12).map((l) => l.trim().replace(/^at /, '').replace(/\(?https?:\/\/[^/]+\/(lib\/)?/, '').replace(/\)$/, '')).join(' < ')}` : '';
+      if (ms >= SLOW_MS || row.fs > 60000) tee(`[syncgate] render-path build ${row.ms} ms${deferring ? ' (deferred link)' : ' (BLOCKING)'} ${row.object} ${row.material} vs ${row.vs} fs ${row.fs} chars skinned=${row.skinned} morphs=${row.morphs} lights=${row.lights}${who}`, ms >= 1000);
       // how long a big deferred program took to link, i.e. how long its object stayed off screen
       if (deferring && row.fs > 60000 && mine.length) Promise.all(mine).then(
         () => tee(`[syncgate] linked after ${(performance.now() - t0).toFixed(0)} ms: ${row.object} ${row.material} fs ${row.fs} chars`),

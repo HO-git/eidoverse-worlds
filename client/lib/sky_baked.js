@@ -35,7 +35,7 @@
 // degraded performance, never a broken sky.
 
 import { THREE, TSL, scene, camera, renderer } from './core.js';
-import { tee, bus } from './base.js';
+import { tee, bus, CONFIG } from './base.js';
 import { warm, P_AMBIENT } from './warmqueue.js';
 import { bandCuts } from './sky_bands.js';
 import { ask, spent, turn } from './framebudget.js';
@@ -172,7 +172,20 @@ let cycleStart = 0;
 let cycleForced = false;
 let fade = null;       // { from, to, t0, dur }
 let nextAt = 0;
-let lastCycleMs = 0;   // how long the last bake cycle took (bands + pump spacing)
+let lastCycleMs = 0;
+// DRIFT (prototype, ?skydrift=1; owner 09-27: 'if drift is almost free, do that for medium'). A bake is a snapshot, so
+// between bakes the clouds stood still and then dissolved to where they'd moved. The engine moves them by sampling its
+// cloud field at p + wind·time, so the dome can do the same to the picture: each view ray is carried to the cloud
+// layer, shifted by wind × (sky time since THAT texture was baked), and the shifted direction is sampled. The next bake
+// then lands where the drifted picture already is. The shift fades out toward the horizon (no layer hit, tiny angles)
+// and around the sun (the bake includes the disc and its glow, which must not travel).
+const DRIFT = CONFIG.params.get('skydrift') === '1';
+let sysRef = null, cycleSkyT = 0;
+const bakeSkyT = [0, 0];               // sky time each target's picture shows (mid-bake)
+let driftDt = null;                    // [uniform, uniform]: dt for A and B
+const skyTimeNow = () => sysRef?.uniforms?.time?.value ?? 0;
+/** Drift state (probes, the debug panel): null when off, else the seconds each texture has drifted. */
+export const bakedDrift = () => (driftDt ? [driftDt[0].value, driftDt[1].value] : null);   // how long the last bake cycle took (bands + pump spacing)
 // The re-bake interval, never shorter than a bake takes plus room to dissolve (audit M1: in a headset one 4096x2048
 // 8-pass bake takes ~6.2 s at the pump's 40 ms band spacing, longer than high's 6 s interval, so it baked back to back).
 const cadenceMs = () => Math.max(cfg.intervalMs, lastCycleMs > 0 ? lastCycleMs + 2500 : 0);
@@ -364,10 +377,27 @@ export function attachBakedDome(skyApi, opts = {}) {
   // uv→dir mapping is authored as the exact inverse of three's equirectUV()
   // (that is what lets the same texture serve as scene.environment).
   blendU = TSL.uniform(0);
-  const suv = TSL.equirectUV(TSL.normalize(TSL.positionLocal));
+  const dirL = TSL.normalize(TSL.positionLocal);
+  const U = s.uniforms ?? {};
+  sysRef = s;
+  let suvA, suvB;
+  if (DRIFT && U.skyWind && U.time && U.sunDir && U.cloudStart && U.cloudHeight) {
+    bakeSkyT[0] = bakeSkyT[1] = skyTimeNow();   // A holds the boot bake (just drawn); B starts as its copy
+    driftDt = [TSL.uniform(0), TSL.uniform(0)];
+    const layerH = U.cloudStart.add(U.cloudHeight.mul(0.5)).sub(2);   // the bake's eye sits at y=2
+    const sunKeep = TSL.smoothstep(Math.cos(14 * Math.PI / 180), Math.cos(6 * Math.PI / 180), TSL.dot(dirL, TSL.normalize(U.sunDir)));
+    const w = TSL.smoothstep(0.03, 0.15, dirL.y).mul(TSL.float(1).sub(sunKeep));
+    const shifted = (dt) => {
+      const hit = dirL.mul(layerH.div(TSL.max(dirL.y, 0.03)));
+      const moved = hit.add(TSL.vec3(U.skyWind.x.mul(dt), 0, U.skyWind.z.mul(dt)));
+      return TSL.equirectUV(TSL.normalize(TSL.mix(dirL, TSL.normalize(moved), w)));
+    };
+    suvA = shifted(driftDt[0]); suvB = shifted(driftDt[1]);
+    tee('[sky] drift on (prototype): the baked clouds follow the wind between bakes, the sun stays put');
+  } else { suvA = suvB = TSL.equirectUV(dirL); }
   mat.colorNode = TSL.mix(
-    TSL.texture(A.texture, suv),
-    TSL.texture(B.texture, suv),
+    TSL.texture(A.texture, suvA),
+    TSL.texture(B.texture, suvB),
     blendU,
   ).rgb;
 
@@ -509,7 +539,7 @@ function xrPumpTick() {
       if (!maybeRefreshGraph()) {
         cycleForced = pendingForce;
         pendingForce = false;
-        cycleStart = now;
+        cycleStart = now; cycleSkyT = skyTimeNow();
         nextAt = now + cadenceMs();
         bandIdx = 0;
         state = 'baking';
@@ -544,6 +574,7 @@ export function updateBakedDome(now = performance.now()) {
   // the eye's WORLD position — in XR camera.position is rig-local, which left the dome centred near the world origin
   camera.getWorldPosition(_domeEye);
   dome.position.set(_domeEye.x, 0, _domeEye.z);
+  if (driftDt) { const t = skyTimeNow(); driftDt[0].value = t - bakeSkyT[0]; driftDt[1].value = t - bakeSkyT[1]; }
 
   const presenting = Boolean(renderer.xr?.isPresenting);
   if (presenting) scheduleXrPump();        // renders happen between XR frames
@@ -576,7 +607,7 @@ export function updateBakedDome(now = performance.now()) {
     if (maybeRefreshGraph()) return;   // clear↔cloudy flip: rebuild first
     cycleForced = pendingForce;
     pendingForce = false;
-    cycleStart = now;
+    cycleStart = now; cycleSkyT = skyTimeNow();
     nextAt = now + cadenceMs();
     bandIdx = 0;
     state = 'baking';
@@ -702,6 +733,7 @@ function renderBand(i) {
 function finishBake(now) {
   lastCycleMs = now - cycleStart;
   const back = targets[1 - front];
+  bakeSkyT[1 - front] = (cycleSkyT + skyTimeNow()) / 2;
   blitEnvFrom(back);   // IBL + reflection fallback follow the freshest bake
 
   // Dissolve toward the fresh bake across the remainder of the interval so
@@ -732,7 +764,7 @@ export function detachBakedDome() {
     scene.remove(dome);
     dome.geometry.dispose();
     mat.dispose();
-    dome = null;
+    dome = null; driftDt = null; sysRef = null;
     mat = null;
   }
   if (bandGeos) {

@@ -39,9 +39,17 @@ for (const [name, img, mime, filler] of [["png", png, "image/png", 2_000_000], [
   const whole = glbPerf(new Uint8Array(readFileSync(f))), byFile = glbPerfOfFile(f);
   check(`${name}: same numbers as the whole-file rank, texture sized (512×256)`, JSON.stringify(whole) === JSON.stringify(byFile)
     && whole.unsizedImages === 0 && whole.texMB > 0.6, { whole, byFile });
-  const limit = name === "png" ? 70_000 : 150_000;   // header + JSON + ≤64 KB head (+ the one JPEG, retried whole)
+  const limit = name === "png" ? 70_000 : 150_000;   // header + JSON + ≤64 KB head (+ the one JPEG, retried up to 1 MB)
   check(`${name}: read ${glbPerfIo.bytes} bytes of a ${readFileSync(f).length}-byte file (≤ ${limit})`, glbPerfIo.bytes <= limit, glbPerfIo.bytes);
 }
+// a JPEG whose SOF sits behind ~3 MB of APP blocks: the retry stops at its 1 MB ceiling and bills it unsized, rather
+// than reading the whole image on the sequencer thread (Greptile #207)
+{ const blocks = []; for (let i = 0; i < 48; i++) blocks.push(...app(65000));
+  const deep = new Uint8Array([0xff, 0xd8, ...blocks, ...sof]);
+  const f = join(dir, "jpeg-deep-sof.glb"); writeFileSync(f, glb(deep, "image/jpeg", 1000));
+  const p = glbPerfOfFile(f);
+  check(`a JPEG with its SOF ${(deep.length / 1e6).toFixed(1)} MB deep: read ${glbPerfIo.bytes} bytes (≤ 1.2 MB), billed unsized`,
+    glbPerfIo.bytes <= 1_200_000 && p?.unsizedImages === 1, [glbPerfIo.bytes, p?.unsizedImages]); }
 // an image nothing can size (here AVIF) is unsized from its head; only a JPEG is ever re-read whole
 { const f = join(dir, "avif.glb"); writeFileSync(f, glb(new Uint8Array(900_000).fill(7), "image/avif", 1000));
   const p = glbPerfOfFile(f);

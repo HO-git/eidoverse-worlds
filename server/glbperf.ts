@@ -50,7 +50,10 @@ function ktx2Info(b: Uint8Array, bptc = true): { dims: [number, number]; bpp: nu
 /** The first `max` bytes of a bufferView (null = out of range). The ranker only needs image HEADERS, so the file path
  *  reads those by offset instead of the whole GLB (the catalog route runs on the sequencer thread). */
 type ViewReader = (bv: any, max: number) => Uint8Array | null;
-const IMAGE_HEAD = 65536;   // PNG/WebP/KTX2 headers are < 1 KB; only a JPEG's SOF can sit past this (it retries whole)
+const IMAGE_HEAD = 65536;   // PNG/WebP/KTX2 headers are < 1 KB; only a JPEG's SOF can sit past this (it retries, bounded)
+// the JPEG retry's ceiling: a SOF behind big EXIF/ICC blocks is found, but a pathological (or hostile) upload can't make
+// a catalog request read a whole multi-MB image on the sequencer thread (Greptile #207). Past it: billed unsized.
+const JPEG_RETRY_MAX = 1 << 20;
 
 export function glbPerf(bytes: Uint8Array, opts: { bptc?: boolean } = {}): GlbPerf {
   const { json, bin } = parseGlb(bytes);
@@ -114,7 +117,7 @@ function perfOf(json: any, view: ViewReader, { bptc = true }: { bptc?: boolean }
       return { k, dims: !b ? null : k?.dims ?? (mime === "image/webp" ? webpDims(b) : rasterDims(b, mime)) };
     };
     let { k: k2, dims } = dimsOf(bv ? view(bv, IMAGE_HEAD) : null);
-    if (!dims && mime === "image/jpeg" && bv && bv.byteLength > IMAGE_HEAD) ({ k: k2, dims } = dimsOf(view(bv, Infinity)));
+    if (!dims && mime === "image/jpeg" && bv && bv.byteLength > IMAGE_HEAD) ({ k: k2, dims } = dimsOf(view(bv, JPEG_RETRY_MAX)));
     if (!dims) { unsizedImages++; continue; }
     const sampler = json.samplers?.[t.sampler];
     const mips = !(sampler?.minFilter === NEAREST || sampler?.minFilter === LINEAR);

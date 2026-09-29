@@ -37,6 +37,14 @@ try {
     document.querySelector('#sec-build .head').click();
     for (let i = 0; i < 40 && !document.querySelector('#sec-build input[type=search]'); i++) await new Promise((res) => setTimeout(res, 100));
     const input = document.querySelector('#sec-build input[type=search]');
+    // the empty box: the curated starters, carrying the catalog's rank like any search result (Greptile #207)
+    const { starterModels } = await import('./lib/palette.js');
+    const stems = starterModels().map((m) => m.path.split('/').pop().replace(/\.glb$/, '').toLowerCase());
+    const sj = await (await fetch(`/library-models?q=${encodeURIComponent(stems.join(' '))}`)).json();
+    const want = new Map(starterModels().map((m) => [m.name, sj.find((h) => h.path === m.path)?.perf?.rank ?? null]));
+    const starterRanks = () => [...document.querySelectorAll('#sec-build .grid .card')].map((c) => [c.querySelector('span')?.textContent, c.querySelector('.opt-rank')?.dataset.rank ?? null]);
+    for (let i = 0; i < 40 && starterRanks().filter(([, rk]) => rk != null).length < [...want.values()].filter((v) => v != null).length; i++) await new Promise((res) => setTimeout(res, 100));
+    const starters = { got: starterRanks(), want: [...want] };
     input.value = Q; input.dispatchEvent(new Event('input'));
     const json = await (await fetch(`/library-models?q=${Q}`)).json();
     for (let i = 0; i < 60 && document.querySelectorAll('#sec-build .grid .card').length < json.length; i++) await new Promise((res) => setTimeout(res, 100));
@@ -62,7 +70,7 @@ try {
       everyCard: [...document.querySelectorAll('#sec-build .grid .card')].every((c) => !!c.querySelector('.opt-rebuild') !== (c.querySelector('span')?.textContent === 'zz synthetic overlay only')),
       overlayHasNone: (() => { const c = [...document.querySelectorAll('#sec-build .grid .card')].find((c) => c.querySelector('span')?.textContent === 'zz synthetic overlay only'); return !!c && !c.querySelector('.opt-rebuild'); })(),
       token: CONFIG.token ?? '', tip: chip?.title ?? null, toast: toasts.find((t) => /rebuild/.test(t)) ?? null, after: chip?.textContent };
-    return { json, cards, reb };
+    return { json, cards, reb, starters };
   });
   // by INDEX, not name: display names truncate at 48 chars and two library files share one (paint keeps order)
   let mism = [];
@@ -81,6 +89,9 @@ try {
     for (const v of Object.values(h.opt)) if (v.reason && !c.title.includes(v.reason)) mism.push(`${h.name}: hover lacks "${v.reason}"`);
   }
   console.log(`  ${r.json.length} entries, ${r.cards.length} cards; chips ⚠ ${counts.warn}, LOD ${counts.lod}, none ${counts.none}`);
+  { const w = new Map(r.starters.want), rated = [...w.values()].filter((v) => v != null).length;
+    const bad = r.starters.got.filter(([n, rk]) => w.has(n) && String(w.get(n) ?? null) !== String(rk ?? null));
+    check(`the starter view (empty box) carries the catalog's rank on each starter (${rated} rated of ${w.size})`, rated > 0 && bad.length === 0 && r.starters.got.length === w.size, { bad, got: r.starters.got }); }
   check('the page rendered every catalog entry for the query', r.cards.length === r.json.length && r.json.length > 10, `${r.cards.length} vs ${r.json.length}`);
   check('each card\'s chip matches its status (⚠ refused/deferred/stale; LOD when built; else none)', mism.filter((m) => /chip/.test(m)).length === 0, mism.filter((m) => /chip/.test(m)).slice(0, 3));
   check('every reason the server gave is in the card\'s hover', mism.filter((m) => /hover/.test(m)).length === 0, mism.filter((m) => /hover/.test(m)).slice(0, 3));

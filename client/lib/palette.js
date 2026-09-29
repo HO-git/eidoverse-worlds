@@ -165,13 +165,30 @@ async function paintBuild(body) {
   // catalog instead of a list of filenames.
   const starter = () => STARTER.map(([name, path]) =>
     ({ name, path, preview: path.replace(/\.glb$/, '_preview.jpg') }));
+  // the starters are painted at once from the list, then again with the catalog's record for each (opt / perf /
+  // rebuildable), so the view the panel opens on carries the same rank, chips and ↻ as a search (Greptile #207). One
+  // request: the route scores filename tokens, and each starter's full stem matches only itself. Curated names and
+  // order are kept; a starter the catalog doesn't know stays plain.
+  const enrichStarters = async () => {
+    const rows = starter();
+    const stems = STARTER.map(([, p]) => p.split('/').pop().replace(/\.glb$/, '').toLowerCase());
+    try {
+      const hits = await (await fetch(`/library-models?q=${encodeURIComponent(stems.join(' '))}`)).json();
+      const by = new Map(hits.map((h) => [h.path, h]));
+      return rows.map((r) => { const h = by.get(r.path); return h ? { ...h, name: r.name, preview: r.preview } : r; });
+    } catch (e) { report('catalog', e); return rows; }
+  };
+  const showStarters = () => {
+    paint(starter());
+    enrichStarters().then((rows) => { if (!search.value.trim()) paint(rows); });   // not over a search typed meanwhile
+  };
 
   let timer = null;
   const run = async (q) => {
     // An empty box shows the curated starters, not an alphabetical dump of the
     // whole library — otherwise opening the panel greets you with four
     // varieties of apocalyptic rubble.
-    if (!q) { paint(starter()); return; }
+    if (!q) { showStarters(); return; }
     try {
       const r = await fetch(`/library-models?q=${encodeURIComponent(q)}`);
       paint(await r.json());
@@ -179,7 +196,7 @@ async function paintBuild(body) {
   };
   search.oninput = () => { clearTimeout(timer); timer = setTimeout(() => run(search.value.trim()), 160); };
 
-  paint(starter());
+  showStarters();
 }
 
 // Assets uploaded into the world join the palette live, for everyone.

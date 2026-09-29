@@ -80,6 +80,9 @@ function casters() {
 
 let slowFrames = 0, lastTick = 0, mirrorKilled = false, teed = false, failed = false;
 const stats = (globalThis.__xrMirror = { passes: 0, last: null });   // harness: xr-mirror-probe counts the mirror's own passes
+// holdKill: a HARNESS switch (xr-mirror-probe) so the killswitch can't end the specimen mid-sample on a slow headless
+// frame clock (antra's #206 review: on a slower host it killed the mirror before the screenshot). It still counts and
+// records wouldKill; the probe checks the switch itself in a separate run with the hold off.
 
 // WHY THE DESKTOP STOPPED, said for as long as it's true (owner, 09-27: an 8 s toast 'isn't on the screen for very long
 // and could be easily missed'). A banner centred on the desktop from the moment the mirror switches itself off until
@@ -122,7 +125,7 @@ export function tickXRMirror() {
   if (xrCurtainOn()) return;   // entry: the curtain is up and pipelines are building; no desktop pass on top of that
   // THE MIRROR MUST NEVER COST THE HEADSET (owner, 09-08 01:19: fps 17 → frozen with the mirror on). 30 consecutive
   // frames over 30 ms while it runs → off for the session, said out loud. The pref is untouched.
-  { const now = performance.now(); if (lastTick && now - lastTick > 30) { if (++slowFrames >= 30) { mirrorKilled = true; stats.killed = true; tee(`[xr] mirror: OFF for this session — 30 frames over 30 ms (mode ${xrPrefs.mirror})`); showMirrorBanner('Mirroring your eyes to this screen was costing the headset frames, so it switched itself off to keep VR smooth.'); return; } } else slowFrames = 0; lastTick = now; }
+  { const now = performance.now(); if (lastTick && now - lastTick > 30) { if (++slowFrames >= 30 && !(stats.wouldKill = stats.holdKill)) { mirrorKilled = true; stats.killed = true; tee(`[xr] mirror: OFF for this session — 30 frames over 30 ms (mode ${xrPrefs.mirror})`); showMirrorBanner('Mirroring your eyes to this screen was costing the headset frames, so it switched itself off to keep VR smooth.'); return; } } else slowFrames = 0; lastTick = now; }
   // every frame, as porch-old did: a skipped frame risks the desktop presenting a cleared buffer (a flicker). The pass
   // is desktop-sized now, which was the whole cost; the killswitch above still guards the headset.
   const cw = renderer.domElement.width || 1, ch = renderer.domElement.height || 1;

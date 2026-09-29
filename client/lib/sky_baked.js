@@ -187,7 +187,7 @@ let sysRef = null, cycleSkyT = 0, cycleSnap = null;
 const bakeSkyT = [0, 0];               // sky time each target's picture shows (mid-bake)
 let driftDt = null;                    // [uniform, uniform]: dt for A and B
 const skyTimeNow = () => sysRef?.uniforms?.time?.value ?? 0;
-// ONE SKY TIME PER BAKE (owner, 09-27: the VR sky 'banding' she'd seen for a while). A bake is drawn in strips over many
+// ONE SKY TIME PER BAKE (owner, 09-27: the VR sky 'banding' seen for a while). A bake is drawn in strips over many
 // frames (156 over ~6–20 s in a headset), and each strip used to march the clouds at the sky time of ITS frame: the
 // clouds moved between strips, so strip edges showed as seams, worse the longer the bake. Every strip of a bake now
 // draws at the time the bake began (the uniform is pinned for the draw and restored), and drift measures from it.

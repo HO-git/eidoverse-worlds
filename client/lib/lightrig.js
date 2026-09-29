@@ -286,7 +286,7 @@ export const lampShadowState = () => {
 
 // THE SWITCH IS UNIFORM-LEVEL (owner, 09-27: 'HUGE hang on Video > shadows'). shadowMap.enabled and castShadow are
 // in every lit material's pipeline key (§12.1), so flipping them recompiled the whole scene (a wave of 60 k-char relinks,
-// seconds each on her GPU) and raced three's ShadowNode into 'reading depthTexture of null'. They're now fixed on
+// seconds each on the owner's GPU) and raced three's ShadowNode into 'reading depthTexture of null'. They're now fixed on
 // (below, at boot); 'off' is the shadow's own intensity at 0 with its depth pass stopped (autoUpdate off). The cost: a
 // resident with shadows off still carries the shadow lookup in lit shaders, but no depth pass and no toggle recompile.
 /** Does this light actually draw shadows right now? Shape (castShadow + the map) AND the preference's uniform half. */

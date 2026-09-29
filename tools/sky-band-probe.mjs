@@ -8,7 +8,7 @@
 //   bands    — it really rendered several strips, one per frame (not one draw)
 //   seams    — the rows where strips meet match the one-draw render exactly (checked within 'same', listed)
 // NOT bound here: the sky.js interception on the owner's machine. The headless GPU (SwiftShader) never takes the baked
-// sky tier, so the boot bake does not run headless at all; the live proof is her console's
+// sky tier, so the boot bake does not run headless at all; the live proof is the owner's console's
 // '[sky] boot bake banded: N bands over M ms' line (and ?skyband=0 to compare).
 // Usage: bun tools/sky-band-probe.mjs [origin] [--mutate-gap]   (run under a memory guard: headless Chromium renders on the CPU)
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';

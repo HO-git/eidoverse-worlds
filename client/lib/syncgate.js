@@ -55,7 +55,7 @@ export function installSyncGate(renderer, { tee = () => {}, gate = true } = {}) 
     // boot bake would come out black). Those keep upstream behaviour; their owners warm them (sky_baked compiles its
     // bands with compileAsync first).
     // …and the BACKSTOP (owner, 09-27: 'it simply can't block the rest of the world'): a GIANT program asked for
-    // synchronously into a target defers too, whoever asks. On her GPU a 1.76 MB sky program built this way blocked
+    // synchronously into a target defers too, whoever asks. On the owner's GPU a 1.76 MB sky program built this way blocked
     // 89–94 s, Windows reset the driver, the page reloaded and asked again: a loop that never finishes. Deferred, that
     // one draw into the target is skipped until the program links (a stale or empty texel set, redrawn by its owner's
     // next pass) instead of freezing Chrome. Measured sizes: world materials ~66 k, the sky programs 0.9–1.8 M.

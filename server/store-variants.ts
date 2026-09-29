@@ -106,37 +106,62 @@ export const hasStamp = (content: string, recipe: string) => {
 // the REDUCER's generation: bump when weld/simplify semantics, the gates, or the tool change. 2 = the Permissive retry
 // (optimize.ts reduce: one Permissive pass when UV seams lock the regular one), the GPU gate (a LOD is refused if its
 // textures cost MORE GPU memory than the original's — it replaced the byte gate), and the texel cap honoured on
-// ktx-create hosts (gen-1 LODs built there were 2048² under a texel1024 name).
-export const LOD_GEN = 2;
-export const LOD_RATIO = 0.25;      // meshopt-simplify target ratio
-export const LOD_ERROR = 0.01;      // meshopt-simplify error bound
+// ktx-create hosts (gen-1 LODs built there were 2048² under a texel1024 name). 3 = attribute-aware simplification
+// (normals/UVs/colour in the error metric) and the SCREEN-SPACE budget below, geometry and textures alike.
+export const LOD_GEN = 3;
+export const LOD_RATIO = 0.25;      // meshopt-simplify target ratio: the floor it may reach, not a quota
+// THE SCREEN-SPACE BUDGET (owner, 09-29: "as good a LOD recipe as possible … if we can mipmap them properly all the
+// better"). A LOD is built for the closest distance it can be seen from (shared/lod-distance.js lodNearest), at a
+// headset's pixel density:
+//   geometry — simplification error ≤ LOD_PX screen pixels there, as an absolute world-space bound for the whole model
+//              (gen 2 used 1% of each PRIMITIVE's own extent: a bolt on a truck got 1% of the bolt);
+//   textures — ≤ LOD_TEXELS_PER_PX texels per screen pixel there, measured from the model's own UV texel density: the
+//              mip levels the LOD can never sample are dropped (gen 2 shipped the full model's 1024² chain).
+// Measured 09-29 (notes/eidoverse/reviews/lod-census-2026-09-29/look-px, look-gen3): 2 px kept every model's look and
+// 3 px tore the seams on the stacked pallets; 1 texel/px looked the same as 2 at the eco dial's half distance (a mug's
+// lettering, a door's grain) at a quarter of the memory — ten models, 51.7 MB served → 2.3 MB of LOD textures.
+export const LOD_PX = 2;
+export const LOD_PPD = 25;          // pixels per degree: a Quest 3's centre, stricter than a desktop 55° view
+export const LOD_TEXELS_PER_PX = 1;
+// A TEXTURE-ONLY LOD (owner, 09-29: "even just texture savings is totally worth it … a 4/5th reduction is pretty
+// good"): a model whose vertices cannot come under 0.6× still gets a LOD when its textures come to at most this share
+// of the full tier's GPU texture memory (the KTX2 variant, same encoder: the ratio of texel areas). A wall gate that
+// keeps 85% of its vertices but drops 1024² maps to 128² is a LOD worth fetching.
+export const LOD_TEX_ONLY = 0.5;
 // under this, there is nothing worth reducing. Was 12,000; owner, 09-24: "we can totally build LODs even for simple
 // objects … I WANT to have worlds with thousands of objects" — a 7k-vert desk × 1,000 is 7M verts. Below ~1k a LOD
 // saves less than its own fetch; the "ineffective" gate still refuses what cannot reduce.
 export const LOD_MIN_VERTS = 1_000;
 
 /** The recipe string DERIVES from every parameter a variant or a verdict
- *  depends on — the reducer generation, ratio, error, the texel budget, and
+ *  depends on — the reducer generation, ratio, the screen-space budget, the texel cap, and
  *  the vertex floor. The recipe is in the URL and in every filename, so a
  *  change to any of these is a new generation BY CONSTRUCTION: fresh
  *  filenames, a fresh sweep, and nothing pinned under yesterday's address.
  *  The floor used to live only inside the marker's text: lowering it under
  *  the same string would have left every "already light" verdict standing
  *  and the sweep skipping exactly the models the change was for. */
-export function lodRecipeFor({ gen = LOD_GEN, ratio = LOD_RATIO, error = LOD_ERROR, texel = KTX2_TEXEL_CAP, minVerts = LOD_MIN_VERTS } = {}): string {
-  // the fraction's own decimal digits, every one of them — 0.25 → 25, 0.01 →
-  // 01, 0.014 → 014: two settings the reducer tells apart must never share a
-  // string (a rounded percent read 0.014 as 0.01, and the sweep would have
-  // skipped every existing file under the unchanged address)
+export function lodRecipeFor({ gen = LOD_GEN, ratio = LOD_RATIO, px = LOD_PX, ppd = LOD_PPD, tpp = LOD_TEXELS_PER_PX,
+  texOnly = LOD_TEX_ONLY, texel = KTX2_TEXEL_CAP, minVerts = LOD_MIN_VERTS } = {}): string {
+  // the fraction's own decimal digits, every one of them — 0.25 → 25, 0.014 → 014: two settings the reducer tells
+  // apart must never share a string (a rounded percent read 0.014 as 0.01, and the sweep would have skipped every
+  // existing file under the unchanged address)
   const frac = (x: number, what: string) => {
     const s = x.toString();
     if (!(x > 0 && x < 1) || !/^0\.\d+$/.test(s)) throw new Error(`lod ${what} must be a plain decimal in (0, 1): ${s}`);
     return s.slice(2);
   };
-  if (!Number.isInteger(texel) || !Number.isInteger(minVerts) || !Number.isInteger(gen)) throw new Error("lod gen/texel/minVerts must be integers");
-  return `lod${gen}-r${frac(ratio, "ratio")}e${frac(error, "error")}-texel${texel}-min${minVerts}`;
+  // a positive decimal, every digit kept, the point spelled p: 2 → 2, 1.5 → 1p5, 0.75 → 0p75
+  const dec = (x: number, what: string) => {
+    const s = x.toString();
+    if (!(x > 0) || !/^\d+(\.\d+)?$/.test(s)) throw new Error(`lod ${what} must be a plain positive decimal: ${s}`);
+    return s.replace(".", "p");
+  };
+  if (!Number.isInteger(texel) || !Number.isInteger(minVerts) || !Number.isInteger(gen) || !Number.isInteger(ppd) || !(ppd > 0))
+    throw new Error("lod gen/ppd/texel/minVerts must be integers");
+  return `lod${gen}-r${frac(ratio, "ratio")}-px${dec(px, "px")}ppd${ppd}-tpp${dec(tpp, "tpp")}-tx${frac(texOnly, "texOnly")}-texel${texel}-min${minVerts}`;
 }
-export const LOD_RECIPE = lodRecipeFor();   // "lod2-r25e01-texel1024-min1000"
+export const LOD_RECIPE = lodRecipeFor();   // "lod3-r25-px2ppd25-tpp1-tx5-texel1024-min1000"
 
 // ---- standing verdicts -------------------------------------------------------
 // A flagged fetch that falls through is provisional — the doctrine that keeps

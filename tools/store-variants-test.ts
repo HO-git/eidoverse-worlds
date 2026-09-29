@@ -167,21 +167,21 @@ console.log("\nthe store's KTX2 shadow (store-variants.ts, shared/ktx2.js):\n");
       bare.map((b) => b.split("\n").slice(-2).join(" ").trim().slice(0, 120)));
   }
   // the LOD recipe DERIVES from its parameters — a floor change is a generation change by construction
-  check("LOD_RECIPE derives from (gen, ratio, error, texel, floor)",
-    LOD_RECIPE === lodRecipeFor() && LOD_RECIPE === `lod${LOD_GEN}-r25e01-texel${KTX2_TEXEL_CAP}-min${LOD_MIN_VERTS}`, LOD_RECIPE);
+  check("LOD_RECIPE derives from (gen, ratio, screen budget px/ppd/tpp, texture-only share, texel, floor)",
+    LOD_RECIPE === lodRecipeFor() && LOD_RECIPE === `lod${LOD_GEN}-r25-px2ppd25-tpp1-tx5-texel${KTX2_TEXEL_CAP}-min${LOD_MIN_VERTS}`, LOD_RECIPE);
   check("a lower floor is a NEW recipe — a new URL and a new filename, nothing pinned under the old",
     lodRecipeFor({ minVerts: LOD_MIN_VERTS / 2 }) !== LOD_RECIPE && lodVariantPath("store/x.glb", lodRecipeFor({ minVerts: LOD_MIN_VERTS / 2 })) !== lodVariantPath("store/x.glb"));
-  check("…and so is a reducer generation bump, a ratio, an error bound, a texel budget",
-    new Set([LOD_RECIPE, lodRecipeFor({ gen: LOD_GEN + 1 }), lodRecipeFor({ ratio: 0.5 }), lodRecipeFor({ error: 0.02 }), lodRecipeFor({ texel: 2048 })]).size === 5);
+  check("…and so is a reducer generation bump, a ratio, a pixel budget, a pixel density, a texel density, a texel cap",
+    new Set([LOD_RECIPE, lodRecipeFor({ gen: LOD_GEN + 1 }), lodRecipeFor({ ratio: 0.5 }), lodRecipeFor({ px: 3 }), lodRecipeFor({ ppd: 20 }), lodRecipeFor({ tpp: 2 }), lodRecipeFor({ texOnly: 0.25 }), lodRecipeFor({ texel: 2048 })]).size === 8);
   check("the recipe is URL- and filename-safe, within the client's bound, and isLodVariant recognizes it",
     /^[a-z0-9.-]+$/.test(LOD_RECIPE) && LOD_RECIPE.length <= 64 && isLodVariant(lodVariantPath("store/x.glb")));
-  check("the encoding is INJECTIVE at the reducer's precision: 0.014 is not 0.01, 0.5 is not 0.05 (a rounded percent read them alike)",
-    lodRecipeFor({ error: 0.014 }) !== LOD_RECIPE && lodRecipeFor({ error: 0.014 }).includes("e014-")
-    && lodRecipeFor({ ratio: 0.5 }) !== lodRecipeFor({ ratio: 0.05 }) && lodRecipeFor({ ratio: 0.5 }).includes("-r5e"), lodRecipeFor({ error: 0.014 }));
+  check("the encoding is INJECTIVE at the reducer's precision: 1.5 px is not 15 px, 0.5 is not 0.05 (a rounded percent read them alike)",
+    lodRecipeFor({ px: 1.5 }).includes("-px1p5ppd") && lodRecipeFor({ px: 15 }).includes("-px15ppd") && lodRecipeFor({ px: 1.5 }) !== lodRecipeFor({ px: 15 })
+    && lodRecipeFor({ tpp: 0.5 }).includes("-tpp0p5-") && lodRecipeFor({ ratio: 0.5 }) !== lodRecipeFor({ ratio: 0.05 }) && lodRecipeFor({ ratio: 0.5 }).includes("-r5-"), lodRecipeFor({ px: 1.5 }));
   check("a parameter the string cannot carry faithfully is refused, not mangled",
-    [() => lodRecipeFor({ ratio: 1 }), () => lodRecipeFor({ error: 0 }), () => lodRecipeFor({ error: 1e-7 }), () => lodRecipeFor({ minVerts: 12000.5 })].every((f) => { try { f(); return false; } catch { return true; } }));
-  check("LOD_GEN 2, floor 1,000: the Permissive retry, the GPU gate and the texel cap on ktx-create hosts changed what a gen-1 name built",
-    LOD_GEN === 2 && LOD_MIN_VERTS === 1_000 && LOD_RECIPE.startsWith("lod2-") && LOD_RECIPE.endsWith("-min1000"), LOD_RECIPE);
+    [() => lodRecipeFor({ ratio: 1 }), () => lodRecipeFor({ px: 0 }), () => lodRecipeFor({ px: 1e-7 }), () => lodRecipeFor({ tpp: -1 }), () => lodRecipeFor({ ppd: 25.5 }), () => lodRecipeFor({ minVerts: 12000.5 })].every((f) => { try { f(); return false; } catch { return true; } }));
+  check("LOD_GEN 3, floor 1,000: attribute-aware simplification and the screen-space budget changed what a gen-2 name built",
+    LOD_GEN === 3 && LOD_MIN_VERTS === 1_000 && LOD_RECIPE.startsWith("lod3-") && LOD_RECIPE.endsWith("-min1000"), LOD_RECIPE);
 
   // standing verdicts: which typed refusals make the original the FINAL answer under the running recipe
   {

@@ -23,15 +23,16 @@
 // constructs a Document, swaps image bytes only, and byte-preserves
 // everything else (no draco, no prune, no resample on bodies, ever).
 
-import { NodeIO, Primitive, type Document } from "@gltf-transform/core";
+import { NodeIO, Primitive, getBounds, type Document, type Mesh, type Texture } from "@gltf-transform/core";
 import { ALL_EXTENSIONS, KHRTextureBasisu } from "@gltf-transform/extensions";
 import { dedup, prune, resample, textureCompress, draco, listTextureSlots, weld, compactPrimitive, convertPrimitiveToTriangles, getPrimitiveVertexCount } from "@gltf-transform/functions";
 import { MeshoptSimplifier } from "meshoptimizer";
 import draco3d from "draco3dgltf";
-import { capTexels, recipeStamp, verdictLine, LOD_RECIPE, KTX2_RECIPE, LOD_MIN_VERTS, LOD_RATIO, LOD_ERROR, type LodVerdictKind, type VerdictKind } from "./store-variants.ts";
+import { capTexels, recipeStamp, verdictLine, LOD_RECIPE, KTX2_RECIPE, LOD_MIN_VERTS, LOD_RATIO, LOD_PX, LOD_PPD, LOD_TEXELS_PER_PX, LOD_TEX_ONLY, KTX2_TEXEL_CAP, type LodVerdictKind, type VerdictKind } from "./store-variants.ts";
 import { findKtx2Encoder, resolveNestedSharp, toolsStamp } from "./tools-stamp.ts";
 export { findKtx2Encoder, resolveNestedSharp };
 import { glbPerf } from "./glbperf.ts";
+import { lodNearest } from "../shared/lod-distance.js";
 import { parseGlb, rasterDims, GLB_MAGIC, CHUNK_JSON, CHUNK_BIN, KTX2_ID, align4, type GlbParts } from "./glbparse.ts";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -218,7 +219,7 @@ export const KTX2_TF_MARK = "ktx2Tf";
 export type Ktx2Tally = { eligible: number; converted: number; failed: string[] };
 const KTX2_MAGIC = [0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a];
 export const isKtx2Container = (b: Uint8Array) => b.length >= 12 && KTX2_MAGIC.every((v, i) => b[i] === v);
-async function ktx2CompressTextures(doc: Document, encoder: string): Promise<Ktx2Tally> {
+async function ktx2CompressTextures(doc: Document, encoder: string, caps?: Map<Texture, number>): Promise<Ktx2Tally> {
   const isToktx = basename(encoder).toLowerCase().includes("toktx");
   // sharp converts non-PNG sources (webp/jpeg) and 4-aligns dimensions —
   // KHR_texture_basisu (and WebGPU BC upload) wants width/height % 4 == 0.
@@ -256,7 +257,7 @@ async function ktx2CompressTextures(doc: Document, encoder: string): Promise<Ktx
       // `ktx create` has no such flag, so on that encoder sharp (already the converter here) does it first. Until
       // 2026-09-24 the ktx-create arm logged "encoding at source size" and shipped 2048² under a recipe named
       // texel1024: every KTX2 built on a ktx-create host kept its full-size textures.
-      const resize = capTexels(size as [number, number] | null);
+      const resize = capTexels(size as [number, number] | null, caps?.get(tex) ?? KTX2_TEXEL_CAP);   // caps: a LOD's density budget (lodTexelCaps)
       const sharpResize = !!resize && !isToktx && !!sharp;
       // no sharp on a `ktx create` host: this texture can't be brought under the cap, so it isn't encoded at all (kept
       // as-is), rather than shipped at source size inside a variant whose recipe says texel1024 (Greptile #207)
@@ -371,14 +372,15 @@ const totalVerts = (doc: Document) => {
   for (const m of doc.getRoot().listMeshes()) for (const p of m.listPrimitives()) n += p.getAttribute("POSITION")?.getCount() ?? 0;
   return n;
 };
+// WORLD space (node transforms applied), like the budget it is compared against. Until gen 3 this unioned raw POSITION
+// min/max across meshes with their node transforms ignored: a model of 24 translated parts (store 51e8…) read a 15 cm
+// "shift" that was 0.0 in the world and was refused for it — and the same frame-blind box could miss a real one. A
+// model authored in centimetres under a 0.01 node would also have mixed units against a metre budget.
 const sceneBounds = (doc: Document): [number[], number[]] => {
-  const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
-  for (const m of doc.getRoot().listMeshes()) for (const p of m.listPrimitives()) {
-    const pos = p.getAttribute("POSITION"); if (!pos) continue;
-    const lo = pos.getMin([0, 0, 0]), hi = pos.getMax([0, 0, 0]);
-    for (let i = 0; i < 3; i++) { min[i] = Math.min(min[i], lo[i]); max[i] = Math.max(max[i], hi[i]); }
-  }
-  return [min, max];
+  const scene = doc.getRoot().getDefaultScene() ?? doc.getRoot().listScenes()[0];
+  if (!scene) return [[0, 0, 0], [0, 0, 0]];
+  const { min, max } = getBounds(scene);
+  return [[...min], [...max]];
 };
 
 /** The GPU gate's refusal line — the marker the pump writes (the CLI's last `[optimize]` line). Stamped like every
@@ -390,7 +392,8 @@ export const lodGpuRefusal = (origTexMB: number, lodTexMB: number, ms: number): 
 
 // `kind`: the typed class of a refusal, named HERE where the phrase is minted (store-variants.ts readVerdict) — the marker
 // records it, and no reader has to re-derive it from the text
-export type LodResult = { out: Uint8Array | null; verdict: string | null; kind?: LodVerdictKind; before: number; after: number; permissive?: boolean };
+export type LodResult = { out: Uint8Array | null; verdict: string | null; kind?: LodVerdictKind; before: number; after: number; permissive?: boolean;
+  /** served for its textures alone (LOD_TEX_ONLY): the vertices stayed over 0.6× */ texOnly?: boolean; /** LOD / full-tier texel area */ texRatio?: number };
 
 // ATTRIBUTE-AWARE SIMPLIFICATION. gltf-transform's simplify() hands meshoptimizer POSITIONS ONLY (4.4.2 and 4.5.1), so
 // every collapse was judged on shape alone: across hard-edge normals (a hovercar's wheel arches smeared dark, its rear
@@ -413,11 +416,16 @@ function readFloats(a: NonNullable<ReturnType<Primitive["getAttribute"]>>, width
   const el = new Array(a.getElementSize()).fill(0);
   for (let i = 0, n = a.getCount(); i < n; i++) { a.getElement(i, el); for (let k = 0; k < width; k++) out[i * stride + at + k] = el[k] ?? 0; }
 }
-function simplifyAttributes({ ratio, error, permissive }: { ratio: number; error: number; permissive: boolean }) {
+function simplifyAttributes({ ratio, errWorld, permissive }: { ratio: number; errWorld: number; permissive: boolean }) {
   return async (doc: Document) => {
     await MeshoptSimplifier.ready;
     await doc.transform(weld());
     for (const mesh of doc.getRoot().listMeshes()) {
+      // the budget is WORLD metres; a mesh's positions are in its own frame, so divide by the largest scale any node
+      // draws it at (the strictest instance wins). A mesh no node draws is never seen: left as it is.
+      const s = meshWorldScale(mesh);
+      if (!(s > 0)) continue;
+      const localErr = errWorld / s;
       for (const prim of mesh.listPrimitives()) {
         const mode = prim.getMode();
         if (mode === Primitive.Mode.TRIANGLE_STRIP || mode === Primitive.Mode.TRIANGLE_FAN) convertPrimitiveToTriangles(prim);
@@ -437,7 +445,7 @@ function simplifyAttributes({ ratio, error, permissive }: { ratio: number; error
         const src = ind.getArray()!;
         const idx = src instanceof Uint32Array ? src : new Uint32Array(src);
         const target = Math.floor((ratio * idx.length) / 3) * 3;
-        const [dst] = MeshoptSimplifier.simplifyWithAttributes(idx, P, 3, A, S, weights, null, target, error, ["ErrorClamped", ...(permissive ? ["Permissive" as const] : [])]);
+        const [dst] = MeshoptSimplifier.simplifyWithAttributes(idx, P, 3, A, S, weights, null, target, localErr, ["ErrorClamped", "ErrorAbsolute", ...(permissive ? ["Permissive" as const] : [])]);
         prim.setIndices(ind.clone().setArray(dst));
         if (ind.listParents().length === 1) ind.dispose();
         compactPrimitive(prim);
@@ -446,6 +454,108 @@ function simplifyAttributes({ ratio, error, permissive }: { ratio: number; error
       if (mesh.listPrimitives().length === 0) mesh.dispose();
     }
   };
+}
+
+/** The largest scale any node draws `mesh` at (max column length of its world matrix), or 0 when no node draws it. */
+function meshWorldScale(mesh: Mesh): number {
+  let s = 0;
+  for (const n of mesh.listParents()) {
+    const m = (n as any).getWorldMatrix?.() as number[] | undefined;
+    if (!m) continue;
+    s = Math.max(s, Math.hypot(m[0], m[1], m[2]), Math.hypot(m[4], m[5], m[6]), Math.hypot(m[8], m[9], m[10]));
+  }
+  return s;
+}
+
+/** A LOD's screen-space budget (store-variants.ts LOD_PX / LOD_TEXELS_PER_PX): the model's world diagonal gives the
+ *  closest distance the client ever shows its LOD (shared/lod-distance.js — the client's own geometry), and a
+ *  headset's pixel density turns pixels there into metres. */
+export function lodBudget(doc: Document) {
+  const scene = doc.getRoot().getDefaultScene() ?? doc.getRoot().listScenes()[0];
+  const b = scene ? getBounds(scene) : { min: [0, 0, 0], max: [0, 0, 0] };
+  const diag = Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]);
+  const nearest = lodNearest(diag);
+  const pxPerMetre = (LOD_PPD * 180 / Math.PI) / nearest;
+  return { diag, nearest, errWorld: LOD_PX / pxPerMetre, texelsPerMetre: LOD_TEXELS_PER_PX * pxPerMetre };
+}
+
+/** TEXEL DENSITY: the longest side each texture needs to give `texelsPerMetre` where the model is most detailed.
+ *  Per texture, over every triangle that samples it (world area from the drawing nodes, texel area from its UVs), the
+ *  density sqrt(texels² / m²); the area-weighted 90th percentile is the density to keep — a label or a face gets more
+ *  texels than a plank, and the cap follows the detailed part, not the average. Rounded UP to a power of two, never
+ *  above the house cap, never below 64. A texture this cannot measure keeps the house cap: sampled from a
+ *  texCoord it cannot follow (KHR_texture_transform), or referenced by anything but a core material slot. */
+export function lodTexelCaps(doc: Document, texelsPerMetre: number): Map<Texture, number> {
+  const slotsOf = (mt: any): [Texture | null, any][] => [
+    [mt.getBaseColorTexture(), mt.getBaseColorTextureInfo()], [mt.getEmissiveTexture(), mt.getEmissiveTextureInfo()],
+    [mt.getNormalTexture(), mt.getNormalTextureInfo()], [mt.getOcclusionTexture(), mt.getOcclusionTextureInfo()],
+    [mt.getMetallicRoughnessTexture(), mt.getMetallicRoughnessTextureInfo()]];
+  const samples = new Map<Texture, { d: number; a: number }[]>();
+  const unmeasurable = new Set<Texture>();
+  for (const tex of doc.getRoot().listTextures()) {
+    for (const p of tex.listParents()) {
+      if (p.propertyType === "Root") continue;
+      if (p.propertyType !== "Material" || !slotsOf(p).some(([t]) => t === tex)) unmeasurable.add(tex);
+    }
+  }
+  const P = [0, 0, 0], Q = [0, 0, 0], R = [0, 0, 0], u = [0, 0], v = [0, 0], w = [0, 0];
+  const xf = (m: number[], a: number[]) => [m[0] * a[0] + m[4] * a[1] + m[8] * a[2], m[1] * a[0] + m[5] * a[1] + m[9] * a[2], m[2] * a[0] + m[6] * a[1] + m[10] * a[2]];
+  for (const mesh of doc.getRoot().listMeshes()) {
+    const mats = mesh.listParents().filter((n: any) => n.propertyType === "Node").map((n: any) => n.getWorldMatrix() as number[]);
+    if (!mats.length) continue;
+    for (const prim of mesh.listPrimitives()) {
+      const mt = prim.getMaterial(), pos = prim.getAttribute("POSITION");
+      if (!mt || !pos || prim.getMode() !== Primitive.Mode.TRIANGLES) continue;
+      const idx = prim.getIndices();
+      const n = idx ? idx.getCount() : pos.getCount();
+      for (const [tex, info] of slotsOf(mt)) {
+        if (!tex || unmeasurable.has(tex)) continue;
+        if (info?.getExtension?.("KHR_texture_transform")) { unmeasurable.add(tex); continue; }
+        const uvA = prim.getAttribute(`TEXCOORD_${info?.getTexCoord?.() ?? 0}`);
+        const size = tex.getSize();
+        if (!uvA || !size) { unmeasurable.add(tex); continue; }
+        const texels = size[0] * size[1];
+        const out = samples.get(tex) ?? []; samples.set(tex, out);
+        for (let i = 0; i + 2 < n; i += 3) {
+          const a = idx ? idx.getScalar(i) : i, b = idx ? idx.getScalar(i + 1) : i + 1, c = idx ? idx.getScalar(i + 2) : i + 2;
+          pos.getElement(a, P); pos.getElement(b, Q); pos.getElement(c, R);
+          uvA.getElement(a, u); uvA.getElement(b, v); uvA.getElement(c, w);
+          const uvArea = Math.abs((v[0] - u[0]) * (w[1] - u[1]) - (w[0] - u[0]) * (v[1] - u[1])) / 2;
+          if (!(uvArea > 0)) continue;
+          const e1 = [Q[0] - P[0], Q[1] - P[1], Q[2] - P[2]], e2 = [R[0] - P[0], R[1] - P[1], R[2] - P[2]];
+          for (const m of mats) {
+            const f = xf(m, e1), g = xf(m, e2);
+            const area = Math.hypot(f[1] * g[2] - f[2] * g[1], f[2] * g[0] - f[0] * g[2], f[0] * g[1] - f[1] * g[0]) / 2;
+            if (area > 0) out.push({ d: Math.sqrt((uvArea * texels) / area), a: area });
+          }
+        }
+      }
+    }
+  }
+  const caps = new Map<Texture, number>();
+  for (const [tex, s] of samples) {
+    if (unmeasurable.has(tex) || !s.length) continue;
+    s.sort((x, y) => x.d - y.d);
+    const total = s.reduce((t, x) => t + x.a, 0);
+    let acc = 0, d90 = s[s.length - 1].d;
+    for (const x of s) { acc += x.a; if (acc >= 0.9 * total) { d90 = x.d; break; } }
+    const [W, H] = tex.getSize()!;
+    const need = Math.max(W, H) * Math.min(1, texelsPerMetre / d90);
+    caps.set(tex, Math.min(KTX2_TEXEL_CAP, Math.max(64, 2 ** Math.ceil(Math.log2(need)))));
+  }
+  // an EXTENSION's texture (KHR_materials_specular, clearcoat, sheen …) sits on its material's UV layout: it takes the
+  // largest cap measured on that material's core slots — never measured itself, never above what they were given
+  for (const tex of unmeasurable) {
+    let cap = 0, only = true;
+    for (const p of tex.listParents()) {
+      if (p.propertyType === "Root") continue;
+      const owners = p.propertyType === "Material" ? [] : p.listParents().filter((q: any) => q.propertyType === "Material");
+      if (!owners.length) { only = false; break; }
+      for (const mt of owners) for (const [t] of slotsOf(mt)) if (t && caps.has(t)) cap = Math.max(cap, caps.get(t)!);
+    }
+    if (only && cap > 0) caps.set(tex, cap);
+  }
+  return caps;
 }
 
 /** The node contract, as a signature: names, transforms, mesh-bearing, and
@@ -501,11 +611,12 @@ export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, 
     // what may not change from HERE on is which material each primitive wears
     const preMats = lodMatsSig(doc);
     const bounds = sceneBounds(doc);
+    const budget = lodBudget(doc);
     if (before >= minVerts) {
-      await doc.transform(weld(), simplifyAttributes({ ratio: LOD_RATIO, error: LOD_ERROR, permissive }));
+      await doc.transform(weld(), simplifyAttributes({ ratio: LOD_RATIO, errWorld: budget.errWorld, permissive }));
       mutate?.(doc);   // the mutation-control seam (tests only) — see the param doc
     }
-    return { doc, preNodes, preMats, bounds, before, after: totalVerts(doc) };
+    return { doc, preNodes, preMats, bounds, budget, before, after: totalVerts(doc) };
   };
   let r = await reduce(false);
   const before = r.before;
@@ -519,15 +630,33 @@ export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, 
   if (lodMatsSig(doc) !== preMats) return { out: null, verdict: "preservation failed: material assignments changed", kind: "preservation", before, after, ...none };
   const [postMin, postMax] = sceneBounds(doc);
   for (let i = 0; i < 3; i++) {
-    const tol = Math.max((preMax[i] - preMin[i]) * 0.02, 0.01);
+    // 2% of the extent (1 cm floor), or the screen-space budget if that is larger: a silhouette that moved by less than
+    // 2 px where the LOD is first seen moved by nothing a viewer can see (a 1 m prop: 2 cm gate, 4 cm budget). A LOD
+    // placement owns no collider (lod_policy.js), so the budget is the visible standard here too. Still refused: any
+    // silhouette that moved further — a thin spike collapsed into its base scores cheap in the quadric metric (its side
+    // planes pass near the base), and this is what catches it.
+    const tol = Math.max((preMax[i] - preMin[i]) * 0.02, 0.01, r.budget.errWorld);
     if (Math.abs(postMin[i] - preMin[i]) > tol || Math.abs(postMax[i] - preMax[i]) > tol)
       return { out: null, verdict: `preservation failed: bounds moved on axis ${i}`, kind: "preservation", before, after, ...none };
   }
-  if (after > before * 0.6) return { out: null, verdict: `reduction ineffective (${before} -> ${after} verts${permissive ? ", permissive too" : ""})`, kind: "ineffective", before, after, ...none };
+  // the textures' share of the full tier: the ratio of texel areas, LOD caps against the house cap the KTX2 variant
+  // is encoded at (same encoder, same formats per slot — so the ratio of GPU memory). No textures → nothing to save.
+  const caps = lodTexelCaps(doc, r.budget.texelsPerMetre);
+  let fullArea = 0, lodArea = 0;
+  for (const tex of doc.getRoot().listTextures()) {
+    const size = tex.getSize() as [number, number] | null; if (!size || !tex.getImage()) continue;
+    const area = (s: [number, number] | null) => (s ?? size)[0] * (s ?? size)[1];
+    fullArea += area(capTexels(size)); lodArea += area(capTexels(size, caps.get(tex) ?? KTX2_TEXEL_CAP));
+  }
+  const texRatio = fullArea > 0 ? lodArea / fullArea : 1;
+  const texOnly = after > before * 0.6;
+  if (texOnly && !(texRatio <= LOD_TEX_ONLY))
+    return { out: null, verdict: `reduction ineffective (${before} -> ${after} verts${permissive ? ", permissive too" : ""}; textures ${Math.round(texRatio * 100)}% of the full tier)`, kind: "ineffective", before, after, ...none };
   // textures: the ktx2 arm's rules verbatim — all eligible convert or nothing ships
   let tally: Ktx2Tally = none;
   if (encoder) {
-    tally = await ktx2CompressTextures(doc, encoder);
+    // the mip levels this LOD can never sample stay home: each texture at the density its closest distance needs
+    tally = await ktx2CompressTextures(doc, encoder, caps);
     if (tally.eligible > 0 && tally.converted < tally.eligible) return { out: null, verdict: null, before, after, ...tally };
   } else if (doc.getRoot().listTextures().some((t) => t.getImage())) {
     return { out: null, verdict: "__no_encoder__", before, after, ...none };   // env, the CLI exit-3s
@@ -539,10 +668,10 @@ export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, 
   // the SOURCE's extras survive; ours ride alongside (never clobber a
   // producer's own annotations — review of #156, point 6)
   const asset = doc.getRoot().getAsset();
-  asset.extras = { ...(asset.extras ?? {}), lodOf: srcHash, recipe: LOD_RECIPE, ...(permissive ? { simplify: "permissive" } : {}),
+  asset.extras = { ...(asset.extras ?? {}), lodOf: srcHash, recipe: LOD_RECIPE, ...(permissive ? { simplify: "permissive" } : {}), ...(texOnly ? { lodBasis: "textures" } : {}),
     tools: { meshoptimizer: meshoptVer, encoder: encoder ? basename(encoder) : "none" } };
   await doc.transform(draco());
-  return { out: await io.writeBinary(doc), verdict: null, before, after, permissive, ...tally };
+  return { out: await io.writeBinary(doc), verdict: null, before, after, permissive, texOnly, texRatio, ...tally };
 }
 
 // ---- KTX2 for VRMs (§20c): the surgical container rewrite -------------------
@@ -1098,7 +1227,7 @@ if (import.meta.main) {
     // VRAM), not just wire bytes — accept anything not grossly bigger than
     // the ORIGINAL source (>1.25×).
     // A LOD is judged by what it is FOR (owner, 09-24: "judge LODs by verts/GPU memory instead of file size"): the
-    // vertex cut is already asserted (≤0.6×, optimizeGlbLod) and here its textures must not cost MORE GPU memory
+    // vertex cut — or, for a texture-only LOD, the texture cut — is already asserted (optimizeGlbLod), and here its textures must not cost MORE GPU memory
     // than the original's. Its KTX2 textures are routinely 2–5× LARGER ON DISK than a JPEG original while far
     // smaller in VRAM — the byte gate below refused 7 of 8 real candidates for exactly that. The download ratio is
     // logged on success, because a far placement fetches the LOD first (lod_policy.js) and it is a real trade.

@@ -2,6 +2,8 @@
 // Runs the REAL CLI (real KTX2 encoder) on a textured store model the old byte gate refused (its KTX2 textures are
 // bigger on disk than the JPEG original). Asserts: exit 0, a variant written, vertices ≤ 0.6×, GPU texture memory
 // lower, and the download ratio reported. No fixture or no encoder → FAIL, never a silent pass.
+// Which fixture still qualifies moves with the recipe: at gen 3 (textures sized to the LOD's own distance) store
+// 1550fd3f… no longer does — its LOD came out 0.45× on disk — and store 0a80e1dc… does (4.2× on disk, GPU 16.8 → 4.2 MB).
 import { existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";

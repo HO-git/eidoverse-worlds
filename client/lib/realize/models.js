@@ -38,6 +38,7 @@ import { planReconcile, bandForDistance, mountsTouching, collisionOwnedElsewhere
 // IMPORT then re-export: a bare `export ... from` creates no local binding, and this
 // module uses PORTED itself further down. Same defect as avatar.js/EMOTES, same branch.
 import { PORTED } from './ported.js';   // the taxonomy is data; causes.js needs it without the engine
+import { R_BASE, residencyRadiusFor } from '../../../shared/lod-distance.js';   // shared with the server's LOD budget
 export { PORTED };
 
 /** id → {kind:'model'|'light', lib?, gen} — the realizer's own view of what
@@ -677,7 +678,7 @@ function tierFor(ent, current = null) {
   // lodNegotiable: transcoder + key + recipe + a .glb) — elsewhere the
   // policy sees no recipe, and nothing is asked or reported as asked
   return chooseTier({ dist: entDist(ent), radius: residencyRadius(ent), quality: modelQuality.quality,
-    recipe: lodNegotiable(ent?.lib) ? lodRecipe : null, pressure: gpuPressure(), shed: modelQuality.shed, current });
+    recipe: lodNegotiable(ent?.lib) ? lodRecipe : null, pressure: gpuPressure(), shed: modelQuality.shed, current, scale: ent?.scale ?? 1 });
 }
 /** The models⚙ row's whole behaviour — skypanel.js binds it to the row and
  *  shows what it returns: set the resident's dial, and say honestly whether
@@ -696,9 +697,7 @@ export function dialModelQuality(v) {
  *  is a demote-and-promote with the placeholder frame skipped. */
 const canRetier = (id, ent) => canDemote(id, ent);
 
-const R_BASE = 80;     // meters: promote below R, demote above R + R_HYST
 const R_HYST = 20;     // the band that keeps a walk along the edge quiet
-const DIAG_K = 4;      // big things stay: radius grows with bbox diagonal
 const DIAG_DEFAULT = 12; // assumed bbox diagonal (m) before the geom
                          // side-channel lands — err LARGE, so a big thing
                          // near the edge still loads at join (§16.2.C)
@@ -707,7 +706,7 @@ const resStats = { demotes: 0, promotes: 0, retiers: 0, retiersRefused: 0 };
 function residencyRadius(ent) {
   const s = ent?.lib ? libGeom.get(ent.lib)?.bbox?.size : null;
   const diag = s ? Math.hypot(s[0] ?? 0, s[1] ?? 0, s[2] ?? 0) : DIAG_DEFAULT;
-  return R_BASE + diag * DIAG_K;
+  return residencyRadiusFor(diag);
 }
 // distance is min(camera, avatar): in photo-mode flight the body may stand
 // on something the camera left behind — demoting its floor drops it through

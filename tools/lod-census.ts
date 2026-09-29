@@ -12,7 +12,7 @@ import { join, relative } from "node:path";
 import { optimizeGlbLod, optimizeGlbKtx2 } from "../server/optimize.ts";
 import { glbPerf } from "../server/glbperf.ts";
 import { findKtx2Encoder } from "../server/tools-stamp.ts";
-import { LOD_RECIPE, LOD_RATIO, LOD_ERROR } from "../server/store-variants.ts";
+import { LOD_RECIPE, LOD_RATIO } from "../server/store-variants.ts";
 
 const [lib, outDir = "."] = process.argv.slice(2);
 if (!lib) { console.error("usage: bun tools/lod-census.ts <libDir> [outDir]"); process.exit(2); }
@@ -25,10 +25,10 @@ const walk = (d: string): string[] => readdirSync(d).flatMap((n) => {
   return statSync(p).isDirectory() ? walk(p) : /\.glb$/i.test(n) && !/\.(ktx2|lod\.[^.]+)\.glb$/i.test(n) ? [p] : [];
 });
 const files = walk(lib).sort();
-type Row = { name: string; bytes: number; before: number; after: number; kind: string; verdict: string | null; permissive: boolean;
+type Row = { name: string; bytes: number; before: number; after: number; kind: string; verdict: string | null; permissive: boolean; texOnly: boolean;
   lodBytes: number | null; tris: number | null; lodTris: number | null; texMB: number | null; lodTexMB: number | null; ktx2TexMB: number | null; draws: number | null; ms: number };
 const rows: Row[] = [];
-console.log(`census: ${files.length} models under ${lib}, reducer ${LOD_RECIPE} (ratio ${LOD_RATIO}, error ${LOD_ERROR}), run at floor ${MIN}, encoder ${encoder ?? "none"}`);
+console.log(`census: ${files.length} models under ${lib}, reducer ${LOD_RECIPE} (ratio ${LOD_RATIO}), run at floor ${MIN}, encoder ${encoder ?? "none"}`);
 for (const f of files) {
   const bytes = new Uint8Array(readFileSync(f));
   const t0 = performance.now();
@@ -42,29 +42,29 @@ for (const f of files) {
   const row: Row = {
     name: relative(lib, f), bytes: bytes.length, before: r?.before ?? 0, after: r?.after ?? 0,
     kind: err ? "error" : r?.out ? "built" : (r?.kind ?? (r?.verdict === "__no_encoder__" ? "no-encoder" : "other")),
-    verdict: err ?? r?.verdict ?? null, permissive: !!r?.permissive, lodBytes: r?.out?.length ?? null,
+    verdict: err ?? r?.verdict ?? null, permissive: !!r?.permissive, texOnly: !!r?.texOnly, lodBytes: r?.out?.length ?? null,
     tris: po?.tris ?? null, lodTris: pl?.tris ?? null, texMB: po?.texMB ?? null, lodTexMB: pl?.texMB ?? null, ktx2TexMB, draws: po?.draws ?? null,
     ms: Math.round(performance.now() - t0),
   };
   rows.push(row);
-  console.log(`  ${row.kind.padEnd(12)} ${String(row.before).padStart(7)} → ${String(row.after).padStart(7)}${row.permissive ? " (permissive)" : ""}  ${row.name}`);
+  console.log(`  ${row.kind.padEnd(12)} ${String(row.before).padStart(7)} → ${String(row.after).padStart(7)}${row.permissive ? " (permissive)" : ""}${row.texOnly ? " (texture-only)" : ""}  ${row.name}`);
 }
 
 const sum = (xs: (number | null)[]) => xs.reduce<number>((a, x) => a + (x ?? 0), 0);
 const fmt = (n: number) => n.toLocaleString("en-US");
 const lines: string[] = [];
-lines.push(`# LOD floor census`, ``, `Library: ${files.length} models. Reducer: \`${LOD_RECIPE}\` minus its floor (ratio ${LOD_RATIO}, error ${LOD_ERROR}). ` +
+lines.push(`# LOD floor census`, ``, `Library: ${files.length} models. Reducer: \`${LOD_RECIPE}\` minus its floor (ratio ${LOD_RATIO}). ` +
   `Each model ran once at floor ${MIN}; a floor's census is the models whose original has at least that many vertices. ` +
   `Texture MB is glbperf's GPU-size estimate: raw images at full size, KTX2 at its compressed size. The KTX2 variant ` +
   `is what a viewer is served up close, so it is the fair baseline for what a LOD saves on textures. ` +
   `Animated, skinned and morph-target models are refused before counting (structural) at every floor and aren't in the rows.`, ``);
-lines.push(`| Floor | Enter | Built | (permissive) | Refused: light | ineffective | preservation | structural | gpu | size | other/error | Verts in → out | Tris in → out | Bytes in → out | Tex MB: raw / KTX2 variant → LOD |`);
-lines.push(`|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|`);
+lines.push(`| Floor | Enter | Built | (permissive) | (texture-only) | Refused: light | ineffective | preservation | structural | gpu | size | other/error | Verts in → out | Tris in → out | Bytes in → out | Tex MB: raw / KTX2 variant → LOD |`);
+lines.push(`|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|`);
 for (const F of FLOORS) {
   const enter = rows.filter((r) => r.kind !== "error" && r.before >= F);
   const built = enter.filter((r) => r.kind === "built");
   const k = (x: string) => enter.filter((r) => r.kind === x).length;
-  lines.push(`| ${fmt(F)} | ${enter.length} | ${built.length} | ${built.filter((r) => r.permissive).length} | ${k("light")} | ${k("ineffective")} | ${k("preservation")} | ${k("structural")} | ${k("gpu")} | ${k("size")} | ${enter.length - built.length - ["light", "ineffective", "preservation", "structural", "gpu", "size"].reduce((a, x) => a + k(x), 0)} | ` +
+  lines.push(`| ${fmt(F)} | ${enter.length} | ${built.length} | ${built.filter((r) => r.permissive).length} | ${built.filter((r) => r.texOnly).length} | ${k("light")} | ${k("ineffective")} | ${k("preservation")} | ${k("structural")} | ${k("gpu")} | ${k("size")} | ${enter.length - built.length - ["light", "ineffective", "preservation", "structural", "gpu", "size"].reduce((a, x) => a + k(x), 0)} | ` +
     `${fmt(sum(built.map((r) => r.before)))} → ${fmt(sum(built.map((r) => r.after)))} | ${fmt(sum(built.map((r) => r.tris)))} → ${fmt(sum(built.map((r) => r.lodTris)))} | ` +
     `${fmt(sum(built.map((r) => r.bytes)))} → ${fmt(sum(built.map((r) => r.lodBytes)))} | ${sum(built.map((r) => r.texMB)).toFixed(1)} / ${sum(built.map((r) => r.ktx2TexMB)).toFixed(1)} → ${sum(built.map((r) => r.lodTexMB)).toFixed(1)} |`);
 }
@@ -76,8 +76,8 @@ for (let i = 0; i + 1 < FLOORS.length; i++) {
     `(median original ${b.length ? fmt([...b].sort((x, y) => x.before - y.before)[b.length >> 1].before) : "-"}), at ${fmt(sum(b.map((r) => r.lodBytes)))} extra bytes of LOD files.`);
 }
 lines.push(``, `## Permissive-only, refused and errored models`, ``);
-for (const r of rows.filter((r) => r.permissive || (r.kind !== "built" && r.kind !== "light")))
-  lines.push(`- \`${r.name}\`: ${r.kind}${r.permissive ? " (permissive retry)" : ""}, ${fmt(r.before)} → ${fmt(r.after)} verts${r.verdict ? `: ${r.verdict.slice(0, 140)}` : ""}`);
+for (const r of rows.filter((r) => r.permissive || r.texOnly || (r.kind !== "built" && r.kind !== "light")))
+  lines.push(`- \`${r.name}\`: ${r.kind}${r.permissive ? " (permissive retry)" : ""}${r.texOnly ? " (texture-only)" : ""}, ${fmt(r.before)} → ${fmt(r.after)} verts${r.verdict ? `: ${r.verdict.slice(0, 140)}` : ""}`);
 mkdirSync(outDir, { recursive: true });
 writeFileSync(join(outDir, "census.json"), JSON.stringify({ recipe: LOD_RECIPE, floors: FLOORS, runAt: MIN, encoder, rows }, null, 1));
 writeFileSync(join(outDir, "census.md"), lines.join("\n") + "\n");

@@ -357,7 +357,10 @@ const RAW = `
   const page = await mkPage();
 
   // 1. A world whose last full boot never finished: lite, and SAYS why.
-  await page.goto(`${world.origin}/?world=alpha&name=trip&key=${world.key}&lite=0`, { waitUntil: 'domcontentloaded' });
+  // Plant the flag from a page that arms NOTHING (another world, lite). Planting it from a full boot of alpha itself
+  // (the old setup) is not a death: leaving that page fires pagehide, the clean-exit signal, which clears the flag
+  // it just planted. A real OOM kill runs no handler, and that's exactly the difference being tested.
+  await page.goto(`${world.origin}/?world=gamma&name=trip&key=${world.key}&lite=1`, { waitUntil: 'domcontentloaded' });
   await page.evaluate(() => localStorage.setItem('ew-boot-attempt:alpha', String(Date.now())));
   await page.goto(`${world.origin}/?world=alpha&name=trip&key=${world.key}`, { waitUntil: 'load' });
   const alpha = await page.evaluate(() => ({ lite: globalThis.__ewLite, why: globalThis.__ewLiteWhy }));
@@ -386,9 +389,8 @@ const RAW = `
   // whatever else is loading the server - which is precisely how the previous version of
   // this check passed on a 5s boot and failed on a 12s one, teaching us about the
   // harness instead of the code.
-  // ARRIVE first. The pagehide listener is registered by finishBoot, so leaving before
-  // the client ever got in is correctly no evidence of anything - which is what the first
-  // version of this check accidentally measured.
+  // ARRIVE first, so this check is about a SURVIVING boot. (Leaving mid-load is also a clean exit now: index.html
+  // listens for pagehide from the moment it arms; lite-choice-test covers that case.)
   const betaArrived = await page.waitForFunction(
     () => { const el = document.getElementById('splash'); return !el || el.classList.contains('gone'); },
     { timeout: 60000 },

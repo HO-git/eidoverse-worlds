@@ -38,6 +38,10 @@ try {
   const open0 = await rects();
   for (const id of ['world', 'settings', 'debug']) if (!open0[id]) await toggle(id);
   await settle();
+  // the capability card sits top-centre over everything until dismissed (capnotice.js), and a headless
+  // Chromium is exactly the reduced browser it appears for: the drag below landed on the card, not debug
+  for (const b of await pg.locator('.capnotice .cn-ok').all()) await b.click().catch(() => {});
+  await settle();
   // a deliberate placement: alt-drag debug by its body to a spot of its own
   let r = await rects();
   const [dx, dy] = r.debug.split(',').map(Number);

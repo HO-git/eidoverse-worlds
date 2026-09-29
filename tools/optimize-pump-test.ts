@@ -95,5 +95,17 @@ const sweep = (skip: boolean) => {
 const skipped = sweep(true), ran = sweep(false);
 ok(skipped.invoked.length === 0 && skipped.status.queued === 0, `SKIP_OPT_SWEEP=1: the child was never invoked (${skipped.invoked.length} receipts)`);
 ok(ran.invoked.some((d) => d.includes("planted.glb")), `SKIP_OPT_SWEEP unset: the planted GLB reached the child (${ran.invoked.length} receipts)`);
+// 8. the library sweep never queues a (source, mode) that is already waiting (Greptile #207): a second sweep, or a ↻
+//    rebuild pressed before the boot sweep, must not run the same encode twice. The costly case: a ↻ queues both passes
+//    FORCED (one starts, one waits), then the sweep adds the same passes unforced; the pump prefers unforced items, so the
+//    waiting pass ran unforced AND forced (a plain unforced duplicate is harmless: the pump skips a fresh dest).
+//    One planted library model: exactly one --ktx2 and one --lod invocation for it.
+{ const lib = join(root, "lib"), models = join(lib, "eidoverse", "assets", "models"); mkdirSync(models, { recursive: true });
+  writeFileSync(join(models, "dup.glb"), Buffer.alloc(500, 2));
+  const rf = join(receipts, "dup.txt"); writeFileSync(rf, "");
+  spawnSync(process.execPath, ["-e", 'const u = await import("./server/upload.ts"); u.rebuildAsset("eidoverse/assets/models/dup.glb"); u.sweepLibrary(); await u.optIdle();'],
+    { env: { ...process.env, SKIP_OPT_SWEEP: "0", OPT_RECEIPTS: rf, EIDOVERSE_DIR: lib }, cwd: import.meta.dir + "/..", encoding: "utf8" });
+  const got = readFileSync(rf, "utf8").split("\n").filter((d) => d.includes("dup.glb"));
+  ok(got.length === 2, `a ↻ then the boot sweep, one model: ${got.length} encode(s) for it (want 2: one --ktx2, one --lod) ${JSON.stringify(got)}`); }
 import("node:fs").then((fs) => fs.rmSync(root, { recursive: true, force: true }));
 console.log("optimize-pump: cases passed");

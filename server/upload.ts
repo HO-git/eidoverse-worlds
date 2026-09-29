@@ -371,6 +371,9 @@ export function sweepLibrary() {
       // identity, not mere existence: library files are mutable — an updated
       // model/body/texture rebuilds its variant next boot
       if (existsSync(dest) && freshOver(dest, p)) continue;
+      // already waiting (a ↻ pressed before this sweep, or an earlier sweep): a second copy would run the same encode
+      // again, unforced first then forced, since the pump prefers unforced items (Greptile #207)
+      if (optQueue.some((q) => q.src === p && q.mode === mode)) continue;
       items.push({ src: p, dest, mode });
     }
   };

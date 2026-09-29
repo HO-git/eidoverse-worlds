@@ -81,6 +81,11 @@ check(`…but nothing is reduced inside ${LOD_NEAR_MIN} m — on any dial, at an
   && chooseTier({ dist: LOD_NEAR_MIN * 0.99, radius: R, recipe: REC, pressure: 9, shed: true, scale: 0.01, current: "lod" }) === "full");
 check("…and a tiny placement past the floor's band IS reduced (the floor is a floor, not a wall)",
   chooseTier({ dist: LOD_NEAR_MIN / (1 - LOD_HYST) * 1.01, radius: R, recipe: REC, scale: 0.01 }) === "lod");
+check("…and it is STATEFUL: a 3× placement wearing lod upgrades at 3× the inner edge, a 0.5× one holds lod to half of it",
+  chooseTier({ dist: inner * 1.5, radius: R, recipe: REC, scale: 3, current: "lod" }) === "full"
+  && chooseTier({ dist: inner * 3.1, radius: R, recipe: REC, scale: 3, current: "lod" }) === "lod"
+  && chooseTier({ dist: inner * 0.6, radius: R, recipe: REC, scale: 0.5, current: "lod" }) === "lod"
+  && chooseTier({ dist: inner * 0.4, radius: R, recipe: REC, scale: 0.5, current: "lod" }) === "full");
 check("a scale arriving as a string is read as its number, as three.js's setScalar reads it (\"3\" tiers like 3)",
   chooseTier({ dist: edge * 2, radius: R, recipe: REC, scale: "3" as any }) === "full" && chooseTier({ dist: edge * 3.2, radius: R, recipe: REC, scale: "3" as any }) === "lod");
 check("a bad scale — missing, zero, negative, NaN, Infinity — is 1",

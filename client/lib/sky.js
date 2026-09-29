@@ -296,6 +296,9 @@ export async function setCloudQuality(level, { persist = true, capFlip = false }
     bus.emit('sky-held', { quality: level });
     return;
   }
+  // A new choice gets its own single retry of a failed bake. The allowance was per sky BUILD, and a switch among low,
+  // medium and high doesn't rebuild, so after one failure a later choice's failed bake never retried (sky-lifecycle-test).
+  bakeRetriedFor = null;
   // low, medium and high construct the SAME sky system (audit, 09-27): a switch among them swaps what's shown instead of
   // tearing down and re-linking identical giant programs (every rebuild re-linked them, and three's WebGL backend never
   // frees a GL program, so each one also leaked in the GPU process). The VR cap's entry/exit flip rides this too.

@@ -121,7 +121,7 @@ check("store object: variants rebuilt beside the original, .deferred cleared", !
   rebuildAsset(REL); await optIdle();
   const id0 = diskIdentity(src)!;
   let side: unknown = null; try { side = JSON.parse(readFileSync(sourceSidecar(pK), "utf8")); } catch { /* absent */ }
-  check("identity: a built variant records its source's identity (size + mtime) in its .srcid sidecar", JSON.stringify(side) === JSON.stringify(id0), [side, id0]);
+  check("identity: a built variant records its source's identity (size + mtime + sha256) in its .srcid sidecar", JSON.stringify(side) === JSON.stringify(id0), [side, id0]);
   const tok = readVerdict(readFileSync(`${pL}.failed`, "utf8")).source;
   check("identity: a verdict records it too (its record's `source`)", JSON.stringify(tok) === JSON.stringify(id0), [tok, id0]);
   // a stand-in optimizer printed only TEXT (no [verdict] line): the pump still writes a typed record, read by the
@@ -142,6 +142,16 @@ check("store object: variants rebuilt beside the original, .deferred cleared", !
   mkdirSync(join(opt, "eidoverse/assets/models"), { recursive: true });
   writeFileSync(join(opt, REL), "an optimized mirror copy"); { const f = new Date(Date.now() + 3_600_000); utimesSync(join(opt, REL), f, f); }
   check("which source: a newer OPT-mirror copy does not unseat a verdict about the LIBRARY file the sweep built from", (await lodAt()) === "refused=light", await lodAt());
+  // antra's collision (#207 review, 09-29): SAME size, the ORIGINAL mtime restored, different bytes. The stat pair
+  // matches exactly, so only the content digest can tell. Precondition checked, so a botched restore can't pass it.
+  writeFileSync(src, "prop V1 bytes"); utimesSync(src, id0.mtimeMs / 1000, id0.mtimeMs / 1000);
+  { const st = statSync(src);
+    check("collision setup: same size AND the recorded mtime restored exactly (the stat pair can't tell)",
+      st.size === id0.size && st.mtimeMs === id0.mtimeMs, [st.size, st.mtimeMs, id0.size, id0.mtimeMs]); }
+  check("identity: a same-size replacement with its mtime restored makes the verdict a question again (provisional)",
+    (await lodAt()) === "provisional", await lodAt());
+  check("…and the card says stale for both arms (content, not the stat pair, is the identity)",
+    card().lod.state === "stale" && card().ktx2.state === "stale", card());
   // the dangerous direction of "newer than": a DIFFERENT source that carries an OLDER mtime (cp -p, rsync -a, tar)
   writeFileSync(src, "prop v2 — re-exported, and longer"); { const o = new Date(id0.mtimeMs - 86_400_000); utimesSync(src, o, o); }
   check("identity: a source replaced by a file with an OLDER mtime makes the verdict a question again (provisional)",

@@ -39,6 +39,7 @@
 
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
+import { createHash } from "node:crypto";
 import { currentToolsDigest, toolVersions, toolsStamp } from "./tools-stamp.ts";
 
 /** The variant suffix. `<hash>.glb` + this = the KTX2 shadow's file name. */
@@ -178,18 +179,39 @@ export function lodVerdictFinal(content: string, recipe = LOD_RECIPE): boolean {
 // or restores an older mtime (cp -p, rsync -a, tar, a sync) kept a stale verdict standing forever, and a marker written
 // in the same mtime tick as its source read as not-fresh (the "current verdict stands" flake). The redo / Syncthing
 // rule — compare a recorded stat tuple for change — is cheap enough for every request (two stats, one tiny read).
-// Identity = size + mtimeMs (the float, exact through String/JSON): a content hash would be read per REQUEST at the
-// route, for multi-MB models; the inode would churn on every restore or volume move (a mass re-sweep) and is not stable
-// on every filesystem. seats.ts caches its sha256 on the same (size, mtime) pair.
+// Identity = size + mtimeMs + sha256 of the bytes. The stat pair alone is not identity: a same-size replacement whose
+// mtime is restored (utimes, cp -p, rsync -a — the very tools named above) matches it exactly while the bytes differ
+// (antra's review of #207, 09-29). The digest is not read per request: it is cached per path under a cheap invalidator
+// (size, mtimeMs, ino, ctimeMs). ctime cannot be set from userspace (utimes itself bumps it) and a rename-replace
+// changes the inode, so any change to the bytes re-hashes. The RECORD holds only (size, mtimeMs, sha), never the inode
+// or ctime, so a restore or a volume move re-hashes once and still matches (no mass re-sweep). A record written before
+// the digest (no sha) compares on the stat pair alone, the old contract; the next write records a digest.
 // A derived file with NO recorded identity (written before this rule) keeps the old rule — strictly newer than its
 // source — so this lands without re-sweeping anything; the next write records an identity. `source` null = a
 // content-addressed original (a store hash): the same bytes forever, so anything derived from it is fresh.
-export type SourceIdentity = { size: number; mtimeMs: number };
+export type SourceIdentity = { size: number; mtimeMs: number; sha?: string };
 export type StatFn = (p: string) => SourceIdentity | null;
-export const diskIdentity: StatFn = (p) => { try { const s = statSync(p); return { size: s.size, mtimeMs: s.mtimeMs }; } catch { return null; } };
+const digestCache = new Map<string, { key: string; sha: string }>();
+/** Bytes diskIdentity hashed since start (a harness checks a cache hit reads nothing). */
+export const identityIo = { bytes: 0 };
+export const diskIdentity: StatFn = (p) => {
+  try {
+    const s = statSync(p);
+    const key = `${s.size}:${s.mtimeMs}:${s.ino}:${s.ctimeMs}`;
+    let hit = digestCache.get(p);
+    if (hit?.key !== key) {
+      const bytes = readFileSync(p);
+      identityIo.bytes += bytes.length;
+      hit = { key, sha: createHash("sha256").update(bytes).digest("hex") };
+      digestCache.set(p, hit);
+    }
+    return { size: s.size, mtimeMs: s.mtimeMs, sha: hit.sha };
+  } catch { return null; }
+};
 /** Where a VARIANT's recorded source identity lives (a verdict marker carries its own, inline). */
 export const sourceSidecar = (variant: string) => `${variant}.srcid`;
-export const sameIdentity = (a: SourceIdentity | null, b: SourceIdentity | null) => !!a && !!b && a.size === b.size && a.mtimeMs === b.mtimeMs;
+export const sameIdentity = (a: SourceIdentity | null, b: SourceIdentity | null) => !!a && !!b && a.size === b.size && a.mtimeMs === b.mtimeMs
+  && (a.sha == null || b.sha == null || a.sha === b.sha);
 /** The marker's token for a source identity — its own line, so no reader of the verdict line ever sees it. */
 export const sourceToken = (id: SourceIdentity) => `source=${id.size}:${id.mtimeMs}`;
 export function parseSourceToken(content: string): SourceIdentity | null {
@@ -201,7 +223,7 @@ export function recordedSource(derived: string, read: (p: string) => string): So
   if (derived.endsWith(".failed")) return readVerdict(read(derived)).source;
   try {
     const j = JSON.parse(read(sourceSidecar(derived)) || "null");
-    return j && Number.isFinite(j.size) && Number.isFinite(j.mtimeMs) ? { size: j.size, mtimeMs: j.mtimeMs } : null;
+    return asId(j);
   } catch { return null; }
 }
 const readOrEmpty = (p: string) => { try { return readFileSync(p, "utf8"); } catch { return ""; } };
@@ -258,7 +280,10 @@ export const VERDICT_PREFIX = "[verdict] ";
 export function verdictLine(kind: VerdictKind, reason: string, recipe: string | null): string {
   return VERDICT_PREFIX + JSON.stringify({ kind, reason, recipe, toolsDigest: currentToolsDigest(), tools: toolVersions() });
 }
-const asId = (x: any): SourceIdentity | null => x && Number.isFinite(x.size) && Number.isFinite(x.mtimeMs) ? { size: x.size, mtimeMs: x.mtimeMs } : null;
+function asId(x: any): SourceIdentity | null {
+  if (!x || !Number.isFinite(x.size) || !Number.isFinite(x.mtimeMs)) return null;
+  return typeof x.sha === "string" && /^[0-9a-f]{64}$/.test(x.sha) ? { size: x.size, mtimeMs: x.mtimeMs, sha: x.sha } : { size: x.size, mtimeMs: x.mtimeMs };
+}
 function fromJson(j: any, exit: number | null = null): Verdict | null {
   if (!j || typeof j !== "object" || !VERDICT_KINDS.has(j.kind)) return null;
   return {

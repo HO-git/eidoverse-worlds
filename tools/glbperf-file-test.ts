@@ -2,7 +2,7 @@
 // reads; the catalog route runs on the sequencer thread), with the same numbers as glbPerf over the whole file:
 // a PNG behind 2 MB of vertex data; a JPEG whose SOF sits past the 64 KB head (the retry reads that one image); a
 // truncated file is unreadable (null), never a partial rank.
-import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const { glbPerf, glbPerfOfFile, glbPerfIo } = await import("../server/glbperf.ts");
@@ -73,4 +73,14 @@ for (const [name, img, mime, filler] of [["png", png, "image/png", 2_000_000], [
   check(`skins no mesh node uses cost nothing (got ${glbPerf(o2)?.bones})`, glbPerf(o2)?.bones === 0); }
 const whole = readFileSync(join(dir, "png.glb")); writeFileSync(join(dir, "cut.glb"), whole.subarray(0, whole.length - 100_000));
 check("a truncated file is unreadable (null), not a partial rank", glbPerfOfFile(join(dir, "cut.glb")) === null);
+// antra's collision (#207 review, 09-29): the rank cache was keyed on size + mtime. A same-size replacement with the
+// mtime restored kept the old file's rank. Here the PNG head goes 512×256 → 256×256: same length, different cost.
+{ const f = join(dir, "swap.glb"); writeFileSync(f, glb(png, "image/png", 1000));
+  const before = glbPerfOfFile(f), st0 = statSync(f);
+  const small = png.slice(); new DataView(small.buffer).setUint32(16, 256);
+  writeFileSync(f, glb(small, "image/png", 1000)); utimesSync(f, st0.mtimeMs / 1000, st0.mtimeMs / 1000);
+  const st1 = statSync(f), after = glbPerfOfFile(f), fresh = glbPerf(new Uint8Array(readFileSync(f)));
+  check("collision setup: same size and mtime after the replacement", st1.size === st0.size && st1.mtimeMs === st0.mtimeMs, [st0.size, st1.size, st0.mtimeMs, st1.mtimeMs]);
+  check("a same-size replacement with its mtime restored is re-ranked (not the cached rank of the old bytes)",
+    JSON.stringify(after) === JSON.stringify(fresh) && JSON.stringify(after) !== JSON.stringify(before), [before, after]); }
 console.log(`${fail ? "\x1b[31m" : "\x1b[32m"}${pass} passed, ${fail} failed\x1b[0m`); process.exit(fail ? 1 : 0);

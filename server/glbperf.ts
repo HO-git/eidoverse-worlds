@@ -138,7 +138,9 @@ const cache = new Map<string, { key: string; perf: GlbPerf | null }>();
 export function glbPerfOfFile(path: string): GlbPerf | null {
   try {
     const st = statSync(path);
-    const key = `${st.size}:${st.mtimeMs}`;
+    // ino + ctime too: size + mtime survive a same-size replacement with a restored mtime (see store-variants.ts
+    // diskIdentity); ctime can't be restored and a rename-replace changes the inode.
+    const key = `${st.size}:${st.mtimeMs}:${st.ino}:${st.ctimeMs}`;
     const hit = cache.get(path);
     if (hit?.key === key) return hit.perf;
     const perf = glbPerfByOffsets(path, st.size);

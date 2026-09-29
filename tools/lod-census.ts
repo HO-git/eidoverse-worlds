@@ -1,5 +1,6 @@
 // bun tools/lod-census.ts <libDir> [outDir] — what each candidate vertex FLOOR would do to a library, under this generation's
-// reducer (ratio, error, permissive retry, preservation and GPU gates, texel cap): #207 review, blocker 2.
+// reducer (its recipe: ratio, screen-space budget, texture-only share, texel cap; permissive retry; preservation and GPU
+// gates): #207 review, blocker 2.
 //
 // The floor only decides which objects ENTER reduction; an object's LOD is the same at any floor it passes. So each model
 // runs once, at the lowest floor asked for, and every floor's census is a filter on the original's vertex count.

@@ -36,7 +36,10 @@ try {
       const load = async (f) => (await makeLoader().loadAsync(`/__look/${encodeURIComponent(f)}`)).scene;
       const [a, b] = await Promise.all([load(orig), load(lod)]);
       const box = new THREE.Box3().setFromObject(a), c = box.getCenter(new THREE.Vector3()), sz = box.getSize(new THREE.Vector3());
-      const R = 80 + sz.length() * 4;
+      // the distances come from the client's own modules, never a copy (shared/lod-distance.js, lod_policy.js)
+      const { lodNearest, residencyRadiusFor } = await import('/shared/lod-distance.js');
+      const { PRESSURE_EDGE } = await import('./lib/lod_policy.js');
+      const R = residencyRadiusFor(sz.length()), near = lodNearest(sz.length());
       const W = 480;
       const sc = new THREE.Scene();
       sc.add(new THREE.HemisphereLight(0xffffff, 0x4a4a4a, 1.3));
@@ -54,7 +57,7 @@ try {
         return px;
       };
       const out = { R: +R.toFixed(1), diag: +sz.length().toFixed(2) };
-      for (const [label, d] of [['auto', 0.3375 * R], ['eco', 0.16875 * R]]) {
+      for (const [label, d] of [['auto', near], ['eco', near * PRESSURE_EDGE]]) {
         const pa = await shoot(a, d), pb = await shoot(b, d);
         let n = 0, sum = 0, bad = 0;
         const img = new ImageData(W * 3, W);

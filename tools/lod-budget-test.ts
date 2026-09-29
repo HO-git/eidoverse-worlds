@@ -7,7 +7,9 @@
 //   - the bounds gate: a silhouette moved by less than the budget passes (a 1 m prop: 2 cm gate, 4 cm budget); one
 //     moved by twice the budget is still refused;
 //   - a texture-only LOD: vertices stuck over 0.6×, but textures at ≤ LOD_TEX_ONLY of the full tier → served (needs the
-//     real KTX2 encoder; without one the check FAILS, never a silent pass).
+//     real KTX2 encoder; without one the check FAILS, never a silent pass), and the capped maps are IN the file;
+//   - the density rule: the least-dense area binds (area-weighted p10), never above the house cap; every instance and
+//     every axis of a node's scale counts.
 // Mutations witnessed red: texelsPerMetre → Infinity in lodTexelCaps (every cap back to the house cap); the node's
 // scale ignored in lodBudget (the world diagonal read from raw positions); the budget dropped from the bounds gate's
 // tolerance (the 2.5 cm push refused); the gate's box read from raw positions, node transforms ignored (the cm model refused); the texture-only branch
@@ -15,7 +17,9 @@
 import { Document } from "@gltf-transform/core";
 import { KHRTextureTransform, KHRMaterialsSpecular } from "@gltf-transform/extensions";
 import { NodeIO } from "@gltf-transform/core";
-import { lodBudget, lodTexelCaps, optimizeGlbLod, findKtx2Encoder } from "../server/optimize.ts";
+import { lodBudget, lodTexelCaps, optimizeGlbLod, findKtx2Encoder, meshWorldScale } from "../server/optimize.ts";
+import { parseGlb } from "../server/glbparse.ts";
+import { LOD_NEAR_MIN } from "../client/lib/lod_policy.js";
 import sharp from "sharp";
 import { lodNearest } from "../shared/lod-distance.js";
 import { LOD_PX, LOD_PPD, LOD_TEXELS_PER_PX, LOD_TEX_ONLY, KTX2_TEXEL_CAP } from "../server/store-variants.ts";
@@ -29,10 +33,10 @@ function pngHeader(w: number, h: number) {
   const dv = new DataView(b.buffer); dv.setUint32(16, w); dv.setUint32(20, h); return b;
 }
 /** A flat quad `side` metres square (drawn at node scale `scale`), UV 0..1 over a `tex`² base-colour map. */
-function quad(side: number, tex: number, { scale = 1, transform = false, specular = false } = {}) {
+function quad(side: number, tex: number, { scale = 1, transform = false, specular = false, vertical = false, png = null as Uint8Array | null } = {}) {
   const doc = new Document(); const buf = doc.createBuffer(); const s = side / scale;
-  const P = new Float32Array([0, 0, 0, s, 0, 0, s, 0, s, 0, 0, s]), T = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]);
-  const t = doc.createTexture("base").setImage(pngHeader(tex, tex)).setMimeType("image/png");
+  const P = new Float32Array(vertical ? [0, 0, 0, s, 0, 0, s, s, 0, 0, s, 0] : [0, 0, 0, s, 0, 0, s, 0, s, 0, 0, s]), T = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]);
+  const t = doc.createTexture("base").setImage(png ?? pngHeader(tex, tex)).setMimeType("image/png");
   const m = doc.createMaterial("m").setBaseColorTexture(t);
   if (transform) m.getBaseColorTextureInfo()!.setExtension("KHR_texture_transform", doc.createExtension(KHRTextureTransform).createTransform().setScale([4, 4]));
   let spec = null;
@@ -73,6 +77,50 @@ const pxPerMetre = (side: number) => (LOD_PPD * 180 / Math.PI) / lodNearest(Math
   const sp = quad(2, 1024, { specular: true }), caps = lodTexelCaps(sp.doc, lodBudget(sp.doc).texelsPerMetre);
   check("an extension texture (KHR_materials_specular) follows its material's measured cap", caps.get(sp.spec!) === caps.get(sp.t) && caps.get(sp.t) === want, [...caps.values()]);
 }
+// the percentile: ONE 1024² map over three regions of one mesh — A 5% of the area at 50 texels/m, B 40% at 200, C 55%
+// at 800. Shrinking the map scales them all alike, so the LEAST dense area binds: the area-weighted 10th percentile
+// lands in B (A is a sliver under 10%). min → 1024 (A), p10 → 256 (B), median and max → 64 (C), unweighted by count → A.
+{
+  const doc = new Document(); const buf = doc.createBuffer();
+  const t = doc.createTexture("atlas").setImage(pngHeader(1024, 1024)).setMimeType("image/png");
+  const m = doc.createMaterial("m").setBaseColorTexture(t);
+  const P: number[] = [], T: number[] = [], I: number[] = [];
+  let x = 0, u = 0;
+  for (const [area, dens] of [[0.05, 50], [0.40, 200], [0.55, 800]]) {
+    const side = Math.sqrt(area), us = dens * side / 1024, base = P.length / 3;
+    P.push(x, 0, 0, x + side, 0, 0, x + side, 0, side, x, 0, side); T.push(u, 0, u + us, 0, u + us, us, u, us);
+    I.push(base, base + 2, base + 1, base, base + 3, base + 2); x += side + 0.1; u += us + 0.01;
+  }
+  const prim = doc.createPrimitive().setMaterial(m)
+    .setAttribute("POSITION", doc.createAccessor().setType("VEC3").setArray(new Float32Array(P)).setBuffer(buf))
+    .setAttribute("TEXCOORD_0", doc.createAccessor().setType("VEC2").setArray(new Float32Array(T)).setBuffer(buf))
+    .setIndices(doc.createAccessor().setType("SCALAR").setArray(new Uint32Array(I)).setBuffer(buf));
+  doc.createScene().addChild(doc.createNode("r").setMesh(doc.createMesh("r").addPrimitive(prim)));
+  const tpm = 48;   // fixed, so the expected caps are exact: 1024·48/200 = 246 → 256; /50 → 1024; /800 → 64
+  const cap = lodTexelCaps(doc, tpm).get(t);
+  check("the LEAST-dense region binds (area-weighted p10): a 5%-area sliver doesn't pin the map, the 40% region sets it — 256, not 1024 (min) or 64 (median/max)", cap === 256, cap);
+}
+// the ceiling: a 2048² source on a 40 m wall resolves more than the house cap — it gets the house cap, never 2048
+{ const big = quad(40, 2048);   // 2048 texels over 40 m = 51/m; asking 1000/m would want all 2048 and more
+  check("a LOD texture never exceeds the house cap: a 2048² source that would need all of it gets 1024", lodTexelCaps(big.doc, 1000).get(big.t) === KTX2_TEXEL_CAP, lodTexelCaps(big.doc, 1000).get(big.t)); }
+// scale: the strictest instance wins, and every axis of a non-uniform scale counts
+{
+  const { doc } = quad(2, 1024), mesh = doc.getRoot().listMeshes()[0], node = doc.getRoot().listNodes()[0];
+  node.setScale([1, 1, 10]);
+  check("a non-uniform scale [1,1,10] budgets the mesh at its LARGEST axis (10)", Math.abs(meshWorldScale(mesh) - 10) < 1e-9, meshWorldScale(mesh));
+  node.setScale([1, 1, 1]);
+  doc.getRoot().listScenes()[0].addChild(doc.createNode("big").setScale([4, 4, 4]).setTranslation([10, 0, 0]).setMesh(mesh));
+  check("a mesh drawn at ×1 and ×4 is simplified for the ×4 instance (its error bound is errWorld / 4)", Math.abs(meshWorldScale(mesh) - 4) < 1e-9, meshWorldScale(mesh));
+  // texel density: the ×4 instance spreads the same texels over 16× the area, so IT binds — the caps must equal those
+  // of the ×4 instance drawn alone, not the ×1 instance measured first
+  const alone = quad(2, 1024, { scale: 1 }); alone.doc.getRoot().listNodes()[0].setScale([4, 4, 4]);
+  const tpm = 20;
+  check("texel density is measured over EVERY drawing instance (the ×4 one binds)",
+    lodTexelCaps(doc, tpm).get(doc.getRoot().listTextures()[0]) === lodTexelCaps(alone.doc, tpm).get(alone.t), [lodTexelCaps(doc, tpm).get(doc.getRoot().listTextures()[0]), lodTexelCaps(alone.doc, tpm).get(alone.t)]);
+}
+check("the budget's diagonal is the full 3D one (a vertical 2 m quad: 2√2, not 2)", Math.abs(lodBudget(quad(2, 1024, { vertical: true }).doc).diag - 2 * Math.SQRT2) < 1e-9);
+check("the near floor is 10 m, a contract: everything within reach is full detail with its collider", LOD_NEAR_MIN === 10, LOD_NEAR_MIN);
+
 // the bounds gate, through optimizeGlbLod's mutation seam: a 0.5 m sphere (budget ~3.9 cm; 2% of its extent is 1 cm)
 // reduces, then its outermost +x vertex is pushed further out by `push` metres
 async function sphereGlb(unit: number) {   // unit: positions authored at 1/unit metres, drawn under a 1/unit node
@@ -109,8 +157,8 @@ async function sphereGlb(unit: number) {   // unit: positions authored at 1/unit
   check("…as is its 8 cm refusal", !cmOut.out && cmOut.kind === "preservation", { kind: cmOut.kind });
 }
 // texture-only: a faceted jagged 6 m field (every vertex on a hard edge — its vertices can't come under 0.6×) with a
-// base-colour map. 1024² over 6 m is ~170 texels/m against the ~37 its LOD distance resolves → 256², 1/16 of the
-// memory: served for its textures. The same field at 64² has nothing to give (the floor): refused as ineffective.
+// base-colour map. 1024² over 6 m is ~170 texels/m flat — less on its steepest facets, which bind — against the ~37
+// its LOD distance resolves → 512², a quarter of the memory: served for its textures. The same field at 64² has nothing to give (the floor): refused as ineffective.
 {
   const enc = findKtx2Encoder();
   check("(setup) a KTX2 encoder on this host — the texture-only checks need the real encoder", !!enc, null);
@@ -145,8 +193,26 @@ async function sphereGlb(unit: number) {   // unit: positions authored at 1/unit
     const big = await optimizeGlbLod(await field(1024), enc);
     check("a 1024²-textured field whose vertices stay over 0.6× is served as a TEXTURE-ONLY LOD", !!big.out && big.texOnly === true && big.after > big.before * 0.6 && (big.texRatio ?? 1) <= LOD_TEX_ONLY,
       { kind: big.kind, verdict: big.verdict, before: big.before, after: big.after, texRatio: big.texRatio });
+    // the caps must reach the FILE, not only the returned ratio: the base-colour map inside the LOD is 256², read off
+    // the KTX2 header in the output GLB
+    const dims = (out: Uint8Array) => { const { json, bin } = parseGlb(out); return (json.images ?? []).map((im: any) => {
+      const bv = json.bufferViews[im.bufferView]; return new DataView(bin!.buffer, bin!.byteOffset + (bv.byteOffset ?? 0), bv.byteLength).getUint32(20, true); }); };
+    const fieldDoc = await new NodeIO().readBinary(await field(1024));
+    const want = lodTexelCaps(fieldDoc, lodBudget(fieldDoc).texelsPerMetre).get(fieldDoc.getRoot().listTextures()[0]);
+    check(`…and the LOD FILE carries the capped map (${want}², what the field's density needs), not the 1024² the full tier has`,
+      !!big.out && want! < 1024 && JSON.stringify(dims(big.out)) === JSON.stringify([want]), { file: big.out ? dims(big.out) : null, want });
+    check("…on the REGULAR pass's geometry, not the Permissive retry's seam-crossing collapses", big.permissive === false, big.permissive);
     const small = await optimizeGlbLod(await field(64), enc);
     check("…and the same field at 64², with nothing to give, is refused as ineffective", !small.out && small.kind === "ineffective", { kind: small.kind, texRatio: small.texRatio });
+    // under the vertex floor: nothing is simplified, but a heavy map still earns a texture-only LOD
+    const noise = async (n: number) => { let sd = 11; const rr = () => ((sd = (sd * 16807) % 2147483647) / 2147483647);
+      return new Uint8Array(await sharp(new Uint8Array(n * n * 3).map(() => Math.floor(rr() * 256)), { raw: { width: n, height: n, channels: 3 } }).png().toBuffer()); };
+    const lightTex = await optimizeGlbLod(await new NodeIO().writeBinary(quad(2, 1024, { png: await noise(1024) }).doc), enc);
+    check("a 4-vertex quad with a 1024² map — under the vertex floor — gets a TEXTURE-ONLY LOD, geometry untouched",
+      !!lightTex.out && lightTex.texOnly === true && lightTex.after === lightTex.before && JSON.stringify(dims(lightTex.out)) !== "[1024]",
+      { kind: lightTex.kind, verdict: lightTex.verdict, after: lightTex.after, before: lightTex.before, dims: lightTex.out ? dims(lightTex.out) : null });
+    const lightPlain = await optimizeGlbLod(await new NodeIO().writeBinary(quad(2, 64, { png: await noise(64) }).doc), enc);
+    check("…and the same quad with a 64² map is 'already light'", !lightPlain.out && lightPlain.kind === "light", { kind: lightPlain.kind, verdict: lightPlain.verdict });
   }
 }
 console.log(`${fail ? "\x1b[31m" : "\x1b[32m"}${pass} passed, ${fail} failed\x1b[0m`); process.exit(fail ? 1 : 0);

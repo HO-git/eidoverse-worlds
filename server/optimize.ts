@@ -457,7 +457,7 @@ function simplifyAttributes({ ratio, errWorld, permissive }: { ratio: number; er
 }
 
 /** The largest scale any node draws `mesh` at (max column length of its world matrix), or 0 when no node draws it. */
-function meshWorldScale(mesh: Mesh): number {
+export function meshWorldScale(mesh: Mesh): number {
   let s = 0;
   for (const n of mesh.listParents()) {
     const m = (n as any).getWorldMatrix?.() as number[] | undefined;
@@ -468,7 +468,8 @@ function meshWorldScale(mesh: Mesh): number {
 }
 
 /** A LOD's screen-space budget (store-variants.ts LOD_PX / LOD_TEXELS_PER_PX): the model's world diagonal gives the
- *  closest distance the client ever shows its LOD (shared/lod-distance.js — the client's own geometry), and a
+ *  closest distance the client's 'auto' dial shows its LOD (shared/lod-distance.js — the client's own geometry; eco
+ *  and device pressure halve it, and take 4 px / half a texel per pixel there), and a
  *  headset's pixel density turns pixels there into metres. */
 export function lodBudget(doc: Document) {
   const scene = doc.getRoot().getDefaultScene() ?? doc.getRoot().listScenes()[0];
@@ -479,11 +480,13 @@ export function lodBudget(doc: Document) {
   return { diag, nearest, errWorld: LOD_PX / pxPerMetre, texelsPerMetre: LOD_TEXELS_PER_PX * pxPerMetre };
 }
 
-/** TEXEL DENSITY: the longest side each texture needs to give `texelsPerMetre` where the model is most detailed.
- *  Per texture, over every triangle that samples it (world area from the drawing nodes, texel area from its UVs), the
- *  density sqrt(texels² / m²); the area-weighted 90th percentile is the density to keep — a label or a face gets more
- *  texels than a plank, and the cap follows the detailed part, not the average. Rounded UP to a power of two, never
- *  above the house cap, never below 64. A texture this cannot measure keeps the house cap: sampled from a
+/** TEXEL DENSITY: the longest side each texture needs so that every part of the model it covers still gets
+ *  `texelsPerMetre`. Per texture, over every triangle that samples it (world area from EVERY drawing node, texel area
+ *  from its UVs), the density sqrt(texels² / m²). Shrinking the map by k scales every density by k, so the part that
+ *  binds is the LEAST dense: keep the area-weighted 10th percentile at the target, and the densely mapped parts (a
+ *  label, a face) keep more than they need. Not the minimum: a sliver of stretched UVs would pin the whole map at full
+ *  size. (Gen 3's first cut kept the 90th percentile — backwards: up to 90% of the area fell under 1 texel/px.)
+ *  Rounded UP to a power of two, never above the house cap, never below 64. A texture this cannot measure keeps the house cap: sampled from a
  *  texCoord it cannot follow (KHR_texture_transform), or referenced by anything but a core material slot. */
 export function lodTexelCaps(doc: Document, texelsPerMetre: number): Map<Texture, number> {
   const slotsOf = (mt: any): [Texture | null, any][] => [
@@ -537,10 +540,10 @@ export function lodTexelCaps(doc: Document, texelsPerMetre: number): Map<Texture
     if (unmeasurable.has(tex) || !s.length) continue;
     s.sort((x, y) => x.d - y.d);
     const total = s.reduce((t, x) => t + x.a, 0);
-    let acc = 0, d90 = s[s.length - 1].d;
-    for (const x of s) { acc += x.a; if (acc >= 0.9 * total) { d90 = x.d; break; } }
+    let acc = 0, d10 = s[s.length - 1].d;
+    for (const x of s) { acc += x.a; if (acc >= 0.1 * total) { d10 = x.d; break; } }
     const [W, H] = tex.getSize()!;
-    const need = Math.max(W, H) * Math.min(1, texelsPerMetre / d90);
+    const need = Math.max(W, H) * Math.min(1, texelsPerMetre / d10);
     caps.set(tex, Math.min(KTX2_TEXEL_CAP, Math.max(64, 2 ** Math.ceil(Math.log2(need)))));
   }
   // an EXTENSION's texture (KHR_materials_specular, clearcoat, sheen …) sits on its material's UV layout: it takes the
@@ -618,45 +621,70 @@ export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, 
     }
     return { doc, preNodes, preMats, bounds, budget, before, after: totalVerts(doc) };
   };
-  let r = await reduce(false);
-  const before = r.before;
-  if (before < minVerts) return { out: null, verdict: `already light (${before} verts < ${minVerts})`, kind: "light", before, after: before, ...none };
-  let permissive = false;
-  if (r.after > before * 0.6) { r = await reduce(true); permissive = true; }
-  const { doc, preNodes, preMats } = r;
-  const [preMin, preMax] = r.bounds;
-  const after = r.after;
-  if (lodNodesSig(doc) !== preNodes) return { out: null, verdict: "preservation failed: node hierarchy/transforms changed", kind: "preservation", before, after, ...none };
-  if (lodMatsSig(doc) !== preMats) return { out: null, verdict: "preservation failed: material assignments changed", kind: "preservation", before, after, ...none };
-  const [postMin, postMax] = sceneBounds(doc);
-  for (let i = 0; i < 3; i++) {
-    // 2% of the extent (1 cm floor), or the screen-space budget if that is larger: a silhouette that moved by less than
-    // 2 px where the LOD is first seen moved by nothing a viewer can see (a 1 m prop: 2 cm gate, 4 cm budget). A LOD
-    // placement owns no collider (lod_policy.js), so the budget is the visible standard here too. Still refused: any
-    // silhouette that moved further — a thin spike collapsed into its base scores cheap in the quadric metric (its side
-    // planes pass near the base), and this is what catches it.
-    const tol = Math.max((preMax[i] - preMin[i]) * 0.02, 0.01, r.budget.errWorld);
-    if (Math.abs(postMin[i] - preMin[i]) > tol || Math.abs(postMax[i] - preMax[i]) > tol)
-      return { out: null, verdict: `preservation failed: bounds moved on axis ${i}`, kind: "preservation", before, after, ...none };
-  }
-  // the textures' share of the full tier: the ratio of texel areas, LOD caps against the house cap the KTX2 variant
+  // The preservation gates, one place: a candidate either passes all of them or names what it broke.
+  type Pass = Awaited<ReturnType<typeof reduce>>;
+  const broken = (c: Pass): string | null => {
+    if (lodNodesSig(c.doc) !== c.preNodes) return "preservation failed: node hierarchy/transforms changed";
+    if (lodMatsSig(c.doc) !== c.preMats) return "preservation failed: material assignments changed";
+    const [preMin, preMax] = c.bounds, [postMin, postMax] = sceneBounds(c.doc);
+    for (let i = 0; i < 3; i++) {
+      // 2% of the extent (1 cm floor), or the screen-space budget if that is larger: a silhouette that moved by less
+      // than 2 px where the LOD is first seen moved by nothing a viewer can see (a 1 m prop: 2 cm gate, 4 cm budget).
+      // A LOD placement owns no collider (lod_policy.js), so the budget is the visible standard here too. Still
+      // refused: any silhouette that moved further — a thin spike collapsed into its base scores cheap in the quadric
+      // metric (its side planes pass near the base), and this is what catches it.
+      const tol = Math.max((preMax[i] - preMin[i]) * 0.02, 0.01, c.budget.errWorld);
+      if (Math.abs(postMin[i] - preMin[i]) > tol || Math.abs(postMax[i] - preMax[i]) > tol) return `preservation failed: bounds moved on axis ${i}`;
+    }
+    return null;
+  };
+  // The textures' share of the full tier: the ratio of texel areas, LOD caps against the house cap the KTX2 variant
   // is encoded at (same encoder, same formats per slot — so the ratio of GPU memory). No textures → nothing to save.
-  const caps = lodTexelCaps(doc, r.budget.texelsPerMetre);
-  let fullArea = 0, lodArea = 0;
-  for (const tex of doc.getRoot().listTextures()) {
-    const size = tex.getSize() as [number, number] | null; if (!size || !tex.getImage()) continue;
-    const area = (s: [number, number] | null) => (s ?? size)[0] * (s ?? size)[1];
-    fullArea += area(capTexels(size)); lodArea += area(capTexels(size, caps.get(tex) ?? KTX2_TEXEL_CAP));
+  const texShare = (c: Pass) => {
+    const caps = lodTexelCaps(c.doc, c.budget.texelsPerMetre);
+    let fullArea = 0, lodArea = 0;
+    for (const tex of c.doc.getRoot().listTextures()) {
+      const size = tex.getSize() as [number, number] | null; if (!size || !tex.getImage()) continue;
+      const area = (sz: [number, number] | null) => (sz ?? size)[0] * (sz ?? size)[1];
+      fullArea += area(capTexels(size)); lodArea += area(capTexels(size, caps.get(tex) ?? KTX2_TEXEL_CAP));
+    }
+    return { caps, texRatio: fullArea > 0 ? lodArea / fullArea : 1 };
+  };
+  // Candidates, in order: a GEOMETRY LOD from the regular pass; else from the Permissive retry, if it passes every
+  // gate; else a TEXTURE-ONLY LOD (LOD_TEX_ONLY) on the REGULAR pass — the retry's seam-crossing collapses buy a
+  // texture-only LOD nothing, and a retry that broke a gate must not take down a LOD the regular pass would carry.
+  // Under the vertex floor nothing is simplified at all: only a texture-only LOD, on the untouched geometry.
+  const regular = await reduce(false);
+  const before = regular.before;
+  let r: Pass | null = null, permissive = false, texOnly = false, refused: string | null = null;
+  if (before >= minVerts && regular.after <= before * 0.6) {
+    refused = broken(regular); if (!refused) r = regular;
+  } else if (before >= minVerts) {
+    const retry = await reduce(true);
+    if (retry.after <= before * 0.6) { refused = broken(retry); if (!refused) { r = retry; permissive = true; } }
   }
-  const texRatio = fullArea > 0 ? lodArea / fullArea : 1;
-  const texOnly = after > before * 0.6;
-  if (texOnly && !(texRatio <= LOD_TEX_ONLY))
-    return { out: null, verdict: `reduction ineffective (${before} -> ${after} verts${permissive ? ", permissive too" : ""}; textures ${Math.round(texRatio * 100)}% of the full tier)`, kind: "ineffective", before, after, ...none };
+  let caps: Map<Texture, number>, texRatio: number;
+  if (r) ({ caps, texRatio } = texShare(r));
+  else {
+    const why = broken(regular);   // the regular pass is the texture-only candidate (untouched under the floor)
+    ({ caps, texRatio } = texShare(regular));
+    if (why || !(texRatio <= LOD_TEX_ONLY)) {
+      const tex = `textures ${Math.round(texRatio * 100)}% of the full tier`;
+      const none0 = { ...none, texRatio };
+      if (before < minVerts) return { out: null, verdict: `already light (${before} verts < ${minVerts}; ${tex})`, kind: "light", before, after: before, ...none0 };
+      if (refused) return { out: null, verdict: refused, kind: "preservation", before, after: regular.after, ...none0 };
+      if (why) return { out: null, verdict: why, kind: "preservation", before, after: regular.after, ...none0 };
+      return { out: null, verdict: `reduction ineffective (${before} -> ${regular.after} verts, permissive too; ${tex})`, kind: "ineffective", before, after: regular.after, ...none0 };
+    }
+    r = regular; texOnly = true;
+  }
+  const { doc } = r;
+  const after = r.after;
   // textures: the ktx2 arm's rules verbatim — all eligible convert or nothing ships
   let tally: Ktx2Tally = none;
   if (encoder) {
     // the mip levels this LOD can never sample stay home: each texture at the density its closest distance needs
-    tally = await ktx2CompressTextures(doc, encoder, caps);
+    tally = await ktx2CompressTextures(doc, encoder, caps);   // the LOD's density caps — the texture half of the LOD
     if (tally.eligible > 0 && tally.converted < tally.eligible) return { out: null, verdict: null, before, after, ...tally };
   } else if (doc.getRoot().listTextures().some((t) => t.getImage())) {
     return { out: null, verdict: "__no_encoder__", before, after, ...none };   // env, the CLI exit-3s

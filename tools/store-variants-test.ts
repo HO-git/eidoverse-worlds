@@ -167,12 +167,14 @@ console.log("\nthe store's KTX2 shadow (store-variants.ts, shared/ktx2.js):\n");
       bare.map((b) => b.split("\n").slice(-2).join(" ").trim().slice(0, 120)));
   }
   // the LOD recipe DERIVES from its parameters — a floor change is a generation change by construction
-  check("LOD_RECIPE derives from (gen, ratio, screen budget px/ppd/tpp, texture-only share, texel, floor)",
-    LOD_RECIPE === lodRecipeFor() && LOD_RECIPE === `lod${LOD_GEN}-r25-px2ppd25-tpp1-tx5-texel${KTX2_TEXEL_CAP}-min${LOD_MIN_VERTS}`, LOD_RECIPE);
+  check("LOD_RECIPE derives from (gen, ratio, screen budget px/ppd/tpp, texture-only share, the switch distance, texel, floor)",
+    LOD_RECIPE === lodRecipeFor() && LOD_RECIPE === `lod${LOD_GEN}-r25-px2ppd25-tpp1-tx5-d80k4f45h25-texel${KTX2_TEXEL_CAP}-min${LOD_MIN_VERTS}`, LOD_RECIPE);
   check("a lower floor is a NEW recipe — a new URL and a new filename, nothing pinned under the old",
     lodRecipeFor({ minVerts: LOD_MIN_VERTS / 2 }) !== LOD_RECIPE && lodVariantPath("store/x.glb", lodRecipeFor({ minVerts: LOD_MIN_VERTS / 2 })) !== lodVariantPath("store/x.glb"));
   check("…and so is a reducer generation bump, a ratio, a pixel budget, a pixel density, a texel density, a texel cap",
-    new Set([LOD_RECIPE, lodRecipeFor({ gen: LOD_GEN + 1 }), lodRecipeFor({ ratio: 0.5 }), lodRecipeFor({ px: 3 }), lodRecipeFor({ ppd: 20 }), lodRecipeFor({ tpp: 2 }), lodRecipeFor({ texOnly: 0.25 }), lodRecipeFor({ texel: 2048 })]).size === 8);
+    new Set([LOD_RECIPE, lodRecipeFor({ gen: LOD_GEN + 1 }), lodRecipeFor({ ratio: 0.5 }), lodRecipeFor({ px: 3 }), lodRecipeFor({ ppd: 20 }), lodRecipeFor({ tpp: 2 }), lodRecipeFor({ texOnly: 0.25 }), lodRecipeFor({ texel: 2048 }),
+      // the distance the budget is taken at: tuning the client's switch re-budgets every LOD, so it re-names them
+      lodRecipeFor({ rBase: 60 }), lodRecipeFor({ diagK: 3 }), lodRecipeFor({ fraction: 0.5 }), lodRecipeFor({ hyst: 0.2 })]).size === 12);
   check("the recipe is URL- and filename-safe, within the client's bound, and isLodVariant recognizes it",
     /^[a-z0-9.-]+$/.test(LOD_RECIPE) && LOD_RECIPE.length <= 64 && isLodVariant(lodVariantPath("store/x.glb")));
   check("the encoding is INJECTIVE at the reducer's precision: 1.5 px is not 15 px, 0.5 is not 0.05 (a rounded percent read them alike)",

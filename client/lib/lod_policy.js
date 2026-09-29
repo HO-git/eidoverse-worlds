@@ -7,7 +7,7 @@
 //                           browser like clouds⚙ and grass⚙; never a verb.
 //   the DISTANCE            how far the placement sits from the resident's
 //                           eye, against the entity's own residency radius
-//                           (R_BASE + bbox diagonal × k, models.js) — so a
+//                           (R_BASE + bbox diagonal × k, shared/lod-distance.js) — so a
 //                           cathedral goes reduced later than a mug.
 //   DEVICE PRESSURE         GPU memory against the proto budget (assets.js
 //                           gpuPressure) and the frame governor's shed — a
@@ -74,7 +74,10 @@ export function makeModelQuality(store) {
  *  SCALE: the server budgets each LOD (2 px of error, 1 texel per pixel) at the unscaled model's closest switch
  *  distance, and a placement at scale s is s× bigger on screen at every distance — so its edge moves by exactly s: a
  *  3× pallet goes reduced at 3× the distance (its error stays 2 px, not 6), a 0.1× server rack at a tenth (down to
- *  LOD_NEAR_MIN). A bad scale (missing, zero, negative, NaN) is 1. */
+ *  LOD_NEAR_MIN). A scaled-UP placement can therefore skip the reduced tier altogether: residency (models.js) is
+ *  unscaled, and a 3× pallet is demoted to its stand-in (~108 m) before its reduced edge (~150 m) — full detail until
+ *  then, a memory cost, never a quality one. The scale is read as a number ("3" is 3, as three.js's setScalar reads
+ *  it); anything that isn't a positive finite number is 1. */
 export function chooseTier({ dist, radius, quality = 'auto', recipe = null, pressure = 0, shed = false, current = null, scale = 1 }) {
   if (!recipe || quality === 'full') return 'full';
   // 'eco' is the pressured band, always: the edge halves. It does NOT reduce
@@ -82,7 +85,7 @@ export function chooseTier({ dist, radius, quality = 'auto', recipe = null, pres
   // at arm's length became slabs across the camera. Near stays full on every
   // dial; only 'full' ignores distance (in the other direction).
   const squeezed = quality === 'eco' || pressure >= PRESSURE_AT || shed;
-  const s = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  const n = Number(scale), s = Number.isFinite(n) && n > 0 ? n : 1;
   const edge = Math.max((radius > 0 ? radius : 80) * LOD_FRACTION * (squeezed ? PRESSURE_EDGE : 1) * s,
     LOD_NEAR_MIN / (1 - LOD_HYST));   // the UPGRADE edge, edge × (1 − H), never inside LOD_NEAR_MIN
   if (current === 'lod') return dist < edge * (1 - LOD_HYST) ? 'full' : 'lod';

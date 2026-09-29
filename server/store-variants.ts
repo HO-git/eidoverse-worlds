@@ -41,6 +41,7 @@ import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } fro
 import { join, basename } from "node:path";
 import { createHash } from "node:crypto";
 import { currentToolsDigest, toolVersions, toolsStamp } from "./tools-stamp.ts";
+import { R_BASE, DIAG_K, LOD_FRACTION, LOD_HYST } from "../shared/lod-distance.js";
 
 /** The variant suffix. `<hash>.glb` + this = the KTX2 shadow's file name. */
 export const KTX2_SUFFIX = ".ktx2.glb";
@@ -111,15 +112,17 @@ export const hasStamp = (content: string, recipe: string) => {
 export const LOD_GEN = 3;
 export const LOD_RATIO = 0.25;      // meshopt-simplify target ratio: the floor it may reach, not a quota
 // THE SCREEN-SPACE BUDGET (owner, 09-29: "as good a LOD recipe as possible … if we can mipmap them properly all the
-// better"). A LOD is built for the closest distance it can be seen from (shared/lod-distance.js lodNearest), at a
-// headset's pixel density:
+// better"). A LOD is built for the closest distance the 'auto' dial shows it (shared/lod-distance.js lodNearest), at
+// a headset's pixel density:
 //   geometry — simplification error ≤ LOD_PX screen pixels there, as an absolute world-space bound for the whole model
 //              (gen 2 used 1% of each PRIMITIVE's own extent: a bolt on a truck got 1% of the bolt);
-//   textures — ≤ LOD_TEXELS_PER_PX texels per screen pixel there, measured from the model's own UV texel density: the
-//              mip levels the LOD can never sample are dropped (gen 2 shipped the full model's 1024² chain).
-// Measured 09-29 (notes/eidoverse/reviews/lod-census-2026-09-29/look-px, look-gen3): 2 px kept every model's look and
-// 3 px tore the seams on the stacked pallets; 1 texel/px looked the same as 2 at the eco dial's half distance (a mug's
-// lettering, a door's grain) at a quarter of the memory — ten models, 51.7 MB served → 2.3 MB of LOD textures.
+//   textures — ≥ LOD_TEXELS_PER_PX texels per screen pixel there over the model's least densely mapped part, from its
+//              own UV texel density: the mip levels the LOD can never sample are dropped (gen 2 shipped the full
+//              model's 1024² chain).
+// The 'eco' dial and device pressure show the LOD at HALF that distance (lod_policy.js PRESSURE_EDGE): 4 px and half
+// a texel per pixel there — the trade those modes exist to make, accepted by eye. Measured 09-29 on look sheets
+// (attached to #207): 2 px kept every model's look, 3 px tore the seams on stacked pallets; 1 texel/px looked the
+// same as 2 even at the eco distance (a mug's lettering, a door's grain) at a quarter of the memory.
 export const LOD_PX = 2;
 export const LOD_PPD = 25;          // pixels per degree: a Quest 3's centre, stricter than a desktop 55° view
 export const LOD_TEXELS_PER_PX = 1;
@@ -142,7 +145,10 @@ export const LOD_MIN_VERTS = 1_000;
  *  the same string would have left every "already light" verdict standing
  *  and the sweep skipping exactly the models the change was for. */
 export function lodRecipeFor({ gen = LOD_GEN, ratio = LOD_RATIO, px = LOD_PX, ppd = LOD_PPD, tpp = LOD_TEXELS_PER_PX,
-  texOnly = LOD_TEX_ONLY, texel = KTX2_TEXEL_CAP, minVerts = LOD_MIN_VERTS } = {}): string {
+  texOnly = LOD_TEX_ONLY, texel = KTX2_TEXEL_CAP, minVerts = LOD_MIN_VERTS,
+  // the DISTANCE the budget is taken at (shared/lod-distance.js lodNearest) is a parameter too: the client's residency
+  // radius and switch fraction live in a shared module, and tuning them re-budgets every LOD — so it re-names them
+  rBase = R_BASE, diagK = DIAG_K, fraction = LOD_FRACTION, hyst = LOD_HYST } = {}): string {
   // the fraction's own decimal digits, every one of them — 0.25 → 25, 0.014 → 014: two settings the reducer tells
   // apart must never share a string (a rounded percent read 0.014 as 0.01, and the sweep would have skipped every
   // existing file under the unchanged address)
@@ -159,9 +165,10 @@ export function lodRecipeFor({ gen = LOD_GEN, ratio = LOD_RATIO, px = LOD_PX, pp
   };
   if (!Number.isInteger(texel) || !Number.isInteger(minVerts) || !Number.isInteger(gen) || !Number.isInteger(ppd) || !(ppd > 0))
     throw new Error("lod gen/ppd/texel/minVerts must be integers");
-  return `lod${gen}-r${frac(ratio, "ratio")}-px${dec(px, "px")}ppd${ppd}-tpp${dec(tpp, "tpp")}-tx${frac(texOnly, "texOnly")}-texel${texel}-min${minVerts}`;
+  return `lod${gen}-r${frac(ratio, "ratio")}-px${dec(px, "px")}ppd${ppd}-tpp${dec(tpp, "tpp")}-tx${frac(texOnly, "texOnly")}`
+    + `-d${dec(rBase, "rBase")}k${dec(diagK, "diagK")}f${frac(fraction, "fraction")}h${frac(hyst, "hyst")}-texel${texel}-min${minVerts}`;
 }
-export const LOD_RECIPE = lodRecipeFor();   // "lod3-r25-px2ppd25-tpp1-tx5-texel1024-min1000"
+export const LOD_RECIPE = lodRecipeFor();   // "lod3-r25-px2ppd25-tpp1-tx5-d80k4f45h25-texel1024-min1000"
 
 // ---- standing verdicts -------------------------------------------------------
 // A flagged fetch that falls through is provisional — the doctrine that keeps

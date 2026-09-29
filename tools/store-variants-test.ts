@@ -182,6 +182,9 @@ console.log("\nthe store's KTX2 shadow (store-variants.ts, shared/ktx2.js):\n");
     && lodRecipeFor({ tpp: 0.5 }).includes("-tpp0p5-") && lodRecipeFor({ ratio: 0.5 }) !== lodRecipeFor({ ratio: 0.05 }) && lodRecipeFor({ ratio: 0.5 }).includes("-r5-"), lodRecipeFor({ px: 1.5 }));
   check("a parameter the string cannot carry faithfully is refused, not mangled",
     [() => lodRecipeFor({ ratio: 1 }), () => lodRecipeFor({ px: 0 }), () => lodRecipeFor({ px: 1e-7 }), () => lodRecipeFor({ tpp: -1 }), () => lodRecipeFor({ ppd: 25.5 }), () => lodRecipeFor({ minVerts: 12000.5 })].every((f) => { try { f(); return false; } catch { return true; } }));
+  check("the legacy text grammar still reads gen 3's wording (a marker with no structured line: stand-in optimizers)",
+    lodVerdictKind("[optimize] lod: already light (500 verts < 1000; textures 80% of the full tier)") === "light"
+    && lodVerdictKind("[optimize] lod: reduction ineffective (9600 -> 6269 verts, permissive too; textures 100% of the full tier)") === "ineffective");
   check("LOD_GEN 3, floor 1,000: attribute-aware simplification and the screen-space budget changed what a gen-2 name built",
     LOD_GEN === 3 && LOD_MIN_VERTS === 1_000 && LOD_RECIPE.startsWith("lod3-") && LOD_RECIPE.endsWith("-min1000"), LOD_RECIPE);
 

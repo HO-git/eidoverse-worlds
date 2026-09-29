@@ -108,7 +108,9 @@ export const hasStamp = (content: string, recipe: string) => {
 // (optimize.ts reduce: one Permissive pass when UV seams lock the regular one), the GPU gate (a LOD is refused if its
 // textures cost MORE GPU memory than the original's — it replaced the byte gate), and the texel cap honoured on
 // ktx-create hosts (gen-1 LODs built there were 2048² under a texel1024 name). 3 = attribute-aware simplification
-// (normals/UVs/colour in the error metric) and the SCREEN-SPACE budget below, geometry and textures alike.
+// (normals/UVs/colour in the error metric) and the SCREEN-SPACE budget below, geometry and textures alike. Bump it too
+// when the texel-density MEASURE changes (optimize.ts lodTexelCaps: its percentile, its per-axis density, its caps):
+// a 'light' verdict now depends on it and is final, and nothing else in the URL would re-ask it.
 export const LOD_GEN = 3;
 export const LOD_RATIO = 0.25;      // meshopt-simplify target ratio: the floor it may reach, not a quota
 // THE SCREEN-SPACE BUDGET (owner, 09-29: "as good a LOD recipe as possible … if we can mipmap them properly all the
@@ -335,9 +337,10 @@ function structuredVerdict(content: string): Verdict | null {
 // ---- the legacy text grammar (markers written before the record; stand-in optimizers) — read HERE and nowhere else
 function textKind(content: string): VerdictKind {
   if (/\bunsupported: (skinned\/avatar asset|morph targets|animated object)/i.test(content)) return "structural";
-  if (/\balready light \(\d+ verts < \d+\)/i.test(content)) return "light";
+  if (/\balready light \(\d+ verts < \d+(; textures \d+% of the full tier)?\)/i.test(content)) return "light";
   // ", permissive too": the reducer tried the Permissive retry as well (optimize.ts reduce)
-  if (/\breduction ineffective \(\d+ -> \d+ verts(, permissive too)?\)/i.test(content)) return "ineffective";
+  // "; textures N% of the full tier": gen 3 names the texture share a texture-only LOD would have needed
+  if (/\breduction ineffective \(\d+ -> \d+ verts(, permissive too)?(; textures \d+% of the full tier)?\)/i.test(content)) return "ineffective";
   if (/\bpreservation failed:/i.test(content)) return "preservation";
   if (/\bnot lighter on the GPU \(textures /i.test(content)) return "gpu";
   if (/not smaller/i.test(content)) return "size";

@@ -100,6 +100,23 @@ const pxPerMetre = (side: number) => (LOD_PPD * 180 / Math.PI) / lodNearest(Math
   const cap = lodTexelCaps(doc, tpm).get(t);
   check("the LEAST-dense region binds (area-weighted p10): a 5%-area sliver doesn't pin the map, the 40% region sets it — 256, not 1024 (min) or 64 (median/max)", cap === 256, cap);
 }
+// ANISOTROPY: the least dense AXIS binds, not the geometric mean of the two
+function mapped(w: number, d: number, tw: number, th: number) {   // a w × d metre quad, UV 0..1 over a tw × th map
+  const doc = new Document(); const buf = doc.createBuffer();
+  const t = doc.createTexture("m").setImage(pngHeader(tw, th)).setMimeType("image/png");
+  const prim = doc.createPrimitive().setMaterial(doc.createMaterial("m").setBaseColorTexture(t))
+    .setAttribute("POSITION", doc.createAccessor().setType("VEC3").setArray(new Float32Array([0, 0, 0, w, 0, 0, w, 0, d, 0, 0, d])).setBuffer(buf))
+    .setAttribute("TEXCOORD_0", doc.createAccessor().setType("VEC2").setArray(new Float32Array([0, 0, 1, 0, 1, 1, 0, 1])).setBuffer(buf))
+    .setIndices(doc.createAccessor().setType("SCALAR").setArray(new Uint32Array([0, 2, 1, 0, 3, 2])).setBuffer(buf));
+  doc.createScene().addChild(doc.createNode("q").setMesh(doc.createMesh("q").addPrimitive(prim)));
+  return { doc, t };
+}
+{ const strip = mapped(10, 1, 1024, 1024);   // u: 102.4 texels/m, v: 1024 — the geometric mean (324) read it as 3× over
+  check("a stretched mapping binds on its stretched axis: a 10 m × 1 m strip at 100 texels/m keeps 1024 (u has 102/m), not 512",
+    lodTexelCaps(strip.doc, 100).get(strip.t) === 1024, lodTexelCaps(strip.doc, 100).get(strip.t));
+  const wide = mapped(1, 1, 2048, 512);      // u: 2048/m, v: 512/m → 2048 · 100 / 512 = 400 → 512
+  check("a non-square map binds on its sparser axis: 2048×512 on 1 m² at 100 texels/m → 512 (v has 512/m), not 256",
+    lodTexelCaps(wide.doc, 100).get(wide.t) === 512, lodTexelCaps(wide.doc, 100).get(wide.t)); }
 // the ceiling: a 2048² source on a 40 m wall resolves more than the house cap — it gets the house cap, never 2048
 { const big = quad(40, 2048);   // 2048 texels over 40 m = 51/m; asking 1000/m would want all 2048 and more
   check("a LOD texture never exceeds the house cap: a 2048² source that would need all of it gets 1024", lodTexelCaps(big.doc, 1000).get(big.t) === KTX2_TEXEL_CAP, lodTexelCaps(big.doc, 1000).get(big.t)); }
@@ -204,6 +221,12 @@ async function sphereGlb(unit: number) {   // unit: positions authored at 1/unit
     check("…on the REGULAR pass's geometry, not the Permissive retry's seam-crossing collapses", big.permissive === false, big.permissive);
     const small = await optimizeGlbLod(await field(64), enc);
     check("…and the same field at 64², with nothing to give, is refused as ineffective", !small.out && small.kind === "ineffective", { kind: small.kind, texRatio: small.texRatio });
+    // a simplify that breaks a gate must not cost the texture saving: the regular pass is forced to move the bounds
+    // (the mutation seam runs only when simplifying) — texture-only on the UNTOUCHED geometry
+    const pushed = await optimizeGlbLod(await field(1024), enc, (dd: Document) => {
+      const pos = dd.getRoot().listMeshes()[0].listPrimitives()[0].getAttribute("POSITION")!; const e = pos.getElement(0, [0, 0, 0]); e[1] += 2; pos.setElement(0, e); });
+    check("a regular pass that breaks a gate still leaves a TEXTURE-ONLY LOD on the untouched geometry",
+      !!pushed.out && pushed.texOnly === true && pushed.after === pushed.before, { kind: pushed.kind, verdict: pushed.verdict, after: pushed.after, before: pushed.before });
     // under the vertex floor: nothing is simplified, but a heavy map still earns a texture-only LOD
     const noise = async (n: number) => { let sd = 11; const rr = () => ((sd = (sd * 16807) % 2147483647) / 2147483647);
       return new Uint8Array(await sharp(new Uint8Array(n * n * 3).map(() => Math.floor(rr() * 256)), { raw: { width: n, height: n, channels: 3 } }).png().toBuffer()); };

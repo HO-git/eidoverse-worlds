@@ -481,8 +481,10 @@ export function lodBudget(doc: Document) {
 }
 
 /** TEXEL DENSITY: the longest side each texture needs so that every part of the model it covers still gets
- *  `texelsPerMetre`. Per texture, over every triangle that samples it (world area from EVERY drawing node, texel area
- *  from its UVs), the density sqrt(texels² / m²). Shrinking the map by k scales every density by k, so the part that
+ *  `texelsPerMetre`. Per texture, over every triangle that samples it (world area from EVERY drawing node, its UVs in
+ *  texels), the density along its LEAST dense axis (a stretched mapping binds on its stretched axis — the geometric
+ *  mean sqrt(texels²/m²) let a 10:1 strip come out at half the target). Shrinking the map by k scales every density
+ *  by k, so the part that
  *  binds is the LEAST dense: keep the area-weighted 10th percentile at the target, and the densely mapped parts (a
  *  label, a face) keep more than they need. Not the minimum: a sliver of stretched UVs would pin the whole map at full
  *  size. (Gen 3's first cut kept the 90th percentile — backwards: up to 90% of the area fell under 1 texel/px.)
@@ -517,19 +519,30 @@ export function lodTexelCaps(doc: Document, texelsPerMetre: number): Map<Texture
         const uvA = prim.getAttribute(`TEXCOORD_${info?.getTexCoord?.() ?? 0}`);
         const size = tex.getSize();
         if (!uvA || !size) { unmeasurable.add(tex); continue; }
-        const texels = size[0] * size[1];
+        const [TW, TH] = size;
         const out = samples.get(tex) ?? []; samples.set(tex, out);
         for (let i = 0; i + 2 < n; i += 3) {
           const a = idx ? idx.getScalar(i) : i, b = idx ? idx.getScalar(i + 1) : i + 1, c = idx ? idx.getScalar(i + 2) : i + 2;
           pos.getElement(a, P); pos.getElement(b, Q); pos.getElement(c, R);
           uvA.getElement(a, u); uvA.getElement(b, v); uvA.getElement(c, w);
-          const uvArea = Math.abs((v[0] - u[0]) * (w[1] - u[1]) - (w[0] - u[0]) * (v[1] - u[1])) / 2;
-          if (!(uvArea > 0)) continue;
+          // the triangle's edges in TEXELS (u × width, v × height: a 2048×512 map is not square)
+          const t1 = [(v[0] - u[0]) * TW, (v[1] - u[1]) * TH], t2 = [(w[0] - u[0]) * TW, (w[1] - u[1]) * TH];
+          if (!(Math.abs(t1[0] * t2[1] - t2[0] * t1[1]) > 0)) continue;
           const e1 = [Q[0] - P[0], Q[1] - P[1], Q[2] - P[2]], e2 = [R[0] - P[0], R[1] - P[1], R[2] - P[2]];
           for (const m of mats) {
             const f = xf(m, e1), g = xf(m, e2);
             const area = Math.hypot(f[1] * g[2] - f[2] * g[1], f[2] * g[0] - f[0] * g[2], f[0] * g[1] - f[1] * g[0]) / 2;
-            if (area > 0) out.push({ d: Math.sqrt((uvArea * texels) / area), a: area });
+            if (!(area > 0)) continue;
+            // ANISOTROPY: a stretched mapping (a pipe, a trim sheet) has two densities, and a uniform resize scales both —
+            // so the triangle's LEAST dense axis binds, as the least dense triangle binds across the map. That is the
+            // smaller singular value of the world → texel map J = T·P⁻¹ (P: the edges in the triangle's own 2D frame).
+            const L = Math.hypot(f[0], f[1], f[2]), x = [f[0] / L, f[1] / L, f[2] / L];
+            const gx = g[0] * x[0] + g[1] * x[1] + g[2] * x[2], gy = (2 * area) / L;   // g in the frame: (gx, gy)
+            // P = [[L, gx], [0, gy]] → P⁻¹ = [[1/L, −gx/(L·gy)], [0, 1/gy]]
+            const j00 = t1[0] / L, j10 = t1[1] / L, j01 = (t2[0] - j00 * gx) / gy, j11 = (t2[1] - j10 * gx) / gy;
+            const S = j00 * j00 + j01 * j01 + j10 * j10 + j11 * j11, D = j00 * j11 - j01 * j10;
+            const dMin = Math.sqrt(Math.max(0, (S - Math.sqrt(Math.max(0, S * S - 4 * D * D))) / 2));
+            if (dMin > 0) out.push({ d: dMin, a: area });
           }
         }
       }
@@ -598,7 +611,7 @@ export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, 
   // 96% → 25%, a yucca 83% → 25%, all 8 "ineffective" library/store models into 25–60%). Permissive can drag UVs a
   // little across a seam; a LOD is only seen at distance (lod_policy.js), and the owner approved it there ("fine with
   // permissive at a distance"). Every preservation assert below applies to both passes unchanged.
-  const reduce = async (permissive: boolean) => {
+  const reduce = async (permissive: boolean, simplify = true) => {
     const doc = await io.readBinary(bytes);
     // The node contract is captured BEFORE any destructive transform (re-review
     // of #156, blocker 1: a plain prune() deleted an empty named socket helper
@@ -615,7 +628,7 @@ export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, 
     const preMats = lodMatsSig(doc);
     const bounds = sceneBounds(doc);
     const budget = lodBudget(doc);
-    if (before >= minVerts) {
+    if (simplify && before >= minVerts) {
       await doc.transform(weld(), simplifyAttributes({ ratio: LOD_RATIO, errWorld: budget.errWorld, permissive }));
       mutate?.(doc);   // the mutation-control seam (tests only) — see the param doc
     }
@@ -652,8 +665,9 @@ export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, 
   };
   // Candidates, in order: a GEOMETRY LOD from the regular pass; else from the Permissive retry, if it passes every
   // gate; else a TEXTURE-ONLY LOD (LOD_TEX_ONLY) on the REGULAR pass — the retry's seam-crossing collapses buy a
-  // texture-only LOD nothing, and a retry that broke a gate must not take down a LOD the regular pass would carry.
-  // Under the vertex floor nothing is simplified at all: only a texture-only LOD, on the untouched geometry.
+  // texture-only LOD nothing, and a retry that broke a gate must not take down a LOD the regular pass would carry —
+  // or, if the regular pass broke a gate too, on the UNTOUCHED geometry: a simplify that dropped a finial must not
+  // cost a model the texture saving it qualifies for. Under the vertex floor nothing is simplified at all.
   const regular = await reduce(false);
   const before = regular.before;
   let r: Pass | null = null, permissive = false, texOnly = false, refused: string | null = null;
@@ -666,8 +680,10 @@ export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, 
   let caps: Map<Texture, number>, texRatio: number;
   if (r) ({ caps, texRatio } = texShare(r));
   else {
-    const why = broken(regular);   // the regular pass is the texture-only candidate (untouched under the floor)
-    ({ caps, texRatio } = texShare(regular));
+    // the texture-only candidate: the regular pass (already untouched under the floor), or untouched geometry
+    let base = regular, why = broken(regular);
+    if (why && before >= minVerts) { base = await reduce(false, false); why = broken(base); }
+    ({ caps, texRatio } = texShare(base));
     if (why || !(texRatio <= LOD_TEX_ONLY)) {
       const tex = `textures ${Math.round(texRatio * 100)}% of the full tier`;
       const none0 = { ...none, texRatio };
@@ -676,7 +692,7 @@ export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, 
       if (why) return { out: null, verdict: why, kind: "preservation", before, after: regular.after, ...none0 };
       return { out: null, verdict: `reduction ineffective (${before} -> ${regular.after} verts, permissive too; ${tex})`, kind: "ineffective", before, after: regular.after, ...none0 };
     }
-    r = regular; texOnly = true;
+    r = base; texOnly = true;
   }
   const { doc } = r;
   const after = r.after;

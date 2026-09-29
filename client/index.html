@@ -1615,10 +1615,19 @@ try { const o = JSON.parse(localStorage.getItem('ew-style-tokens') || '{}');
     // which fires when there is somewhere to stand and leaves the world's assets still
     // streaming. The phone that prompted all this survives the arrival on the commons
     // and dies during that tail, so a disarm at finishBoot would clear the flag moments
-    // before the very crash it exists to catch. A tab closed during a slow load trips it
-    // too — a false positive costing one lite session with a visible way out, which is
-    // the cheap direction to be wrong in when the alternative is a crash loop.
-    try { localStorage.setItem(tripKey(params), String(Date.now())); } catch { /* as above */ }
+    // before the very crash it exists to catch.
+    //
+    // PAGEHIDE listens from the moment the flag is written, not from arrival: closing or
+    // reloading a tab mid-load is a deliberate exit, and it used to trip the flag because
+    // nothing was listening yet (the owner, 09-28: "I closed Chrome in the middle of
+    // loading and it still dropped me down to the lite client"). An OOM kill or a hung
+    // renderer runs no handler, so those still count. A bfcache restore re-arms, unless
+    // boot.js has already disarmed for good.
+    const armKey = tripKey(params);
+    const arm = () => { try { localStorage.setItem(armKey, String(Date.now())); } catch { /* as above */ } };
+    arm();
+    addEventListener('pagehide', () => { try { localStorage.removeItem(armKey); } catch { /* as above */ } });
+    addEventListener('pageshow', (e) => { if (e.persisted && !globalThis.__ewTripDisarmed) arm(); });
 
     for (const href of [
       './node_modules/three/build/three.webgpu.js',

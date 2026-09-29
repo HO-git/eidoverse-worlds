@@ -236,15 +236,14 @@ function disarmTripwire() {
   // surviving in lite and walk back into the crash on the next visit.
   if (globalThis.__ewLite) return;
   const key = globalThis.__ewTripKey?.(new URLSearchParams(location.search)) ?? 'ew-boot-attempt';
-  let cleared = false;
-  const clear = () => {
-    if (cleared) return;
-    cleared = true;
-    removeEventListener('pagehide', clear);
+  // Signal 1 (pagehide) is index.html's, listening since the moment it armed the flag, so a
+  // tab closed MID-LOAD is a clean exit too. What's left here is the dwell. It removes the key
+  // unconditionally and marks the disarm final, because a bfcache restore re-arms (index.html)
+  // and a guard like "already cleared once" would then leave that re-armed flag set forever.
+  setTimeout(() => {
+    globalThis.__ewTripDisarmed = true;
     try { localStorage.removeItem(key); } catch { /* storage blocked; never armed either */ }
-  };
-  addEventListener('pagehide', clear);
-  setTimeout(clear, DWELL_MS);
+  }, DWELL_MS);
 }
 
 export const bootDone = () => done;

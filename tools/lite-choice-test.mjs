@@ -15,18 +15,22 @@ const m = html.match(/<script>\s*\n\s*\/\/ decideLite[\s\S]*?<\/script>/);
 if (!m) { console.log('FAIL  could not find the decideLite script in client/index.html'); process.exit(1); }
 const src = m[0].replace(/^<script>/, '').replace(/<\/script>$/, '');
 
+// storage and events are real enough to watch the tripwire's lifecycle, not just the decision
+const store = new Map(), listeners = {};
+const fire = (t, e = {}) => (listeners[t] ?? []).forEach((f) => f(e));
 const g = {
-  navigator: { deviceMemory: 8 },
+  navigator: { deviceMemory: 8, gpu: {} },   // a capable browser, so the page takes the full path and arms
   location: { search: '' },
-  localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+  localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) },
+  addEventListener: (t, f) => (listeners[t] ??= []).push(f),
   document: { documentElement: { classList: { toggle: () => {} } }, head: { appendChild: () => {} },
               createElement: () => ({}) },
   console: { log: () => {} },
   URLSearchParams,
 };
 g.globalThis = g;
-new Function('globalThis', 'navigator', 'location', 'localStorage', 'document', 'console', 'URLSearchParams', src)
-  .call(g, g, g.navigator, g.location, g.localStorage, g.document, g.console, URLSearchParams);
+new Function('globalThis', 'navigator', 'location', 'localStorage', 'document', 'console', 'URLSearchParams', 'addEventListener', src)
+  .call(g, g, g.navigator, g.location, g.localStorage, g.document, g.console, URLSearchParams, g.addEventListener);
 
 const decide = g.__ewDecideLite;
 if (typeof decide !== 'function') { console.log('FAIL  decideLite was not exposed'); process.exit(1); }
@@ -52,6 +56,20 @@ check('?lite=0 still overrides a died boot (the manual way back in)',
   d('lite=0', { lastBootDied: true }).lite === false);
 check('a died boot reaches iOS, where deviceMemory is absent',
   d('', { lastBootDied: true, deviceMemory: 0 }).lite === true);
+
+console.log('  -- the tripwire lifecycle (armed by the page itself) --');
+const K = 'ew-boot-attempt:default';
+check('a full boot arms the flag before any engine byte', store.has(K));
+fire('pagehide', { persisted: false });
+check('closing or reloading MID-LOAD is a clean exit: pagehide clears it', !store.has(K),
+  'nothing was listening until arrival (the owner closed Chrome mid-load and landed in lite)');
+fire('pageshow', { persisted: true });
+check('a bfcache restore mid-load re-arms it', store.has(K));
+fire('pagehide', { persisted: true }); g.__ewTripDisarmed = true;
+fire('pageshow', { persisted: true });
+check('once boot.js has disarmed for good, a restore does not re-arm', !store.has(K));
+store.set(K, '1'); g.__ewTripDisarmed = false;
+check('a crash runs no handler, so the flag survives to the next visit', store.has(K));
 
 console.log('  -- hardware --');
 check('no 3D API at all → lite', d('', { gpuApi: false }).lite === true && d('', { gpuApi: false }).why === 'no-gpu');

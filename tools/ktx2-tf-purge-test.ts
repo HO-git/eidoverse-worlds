@@ -24,4 +24,15 @@ check("a non-KTX2 buffer is neither", !convertedLinear(new Uint8Array(100)) && !
 check("an UNMARKED over-cap image in a GLB variant is purged for size", staleOversize("store/x.glb.ktx2.glb", [{ marked: false, bytes: big }]));
 check("…a MARKED over-cap image is not (today's encoder kept it; purging would loop)", !staleOversize("store/x.glb.ktx2.glb", [{ marked: true, bytes: big }]));
 check("…and an avatar variant never is (the VRM arm does not resize)", !staleOversize("a/b.vrm.ktx2.vrm", [{ marked: false, bytes: big }]));
+// --apply takes a purged variant's verdict markers with it, or the boot sweep (which honours a standing .failed) would
+// never rebuild it (Greptile #207); an unrelated variant's markers stay
+{ const { mkdtempSync, writeFileSync, existsSync } = await import("node:fs"); const { tmpdir } = await import("node:os");
+  const root = mkdtempSync(`${tmpdir()}/purge-`);
+  writeFileSync(`${root}/a.ktx2`, lin); writeFileSync(`${root}/a.ktx2.failed`, "kind=failure\n"); writeFileSync(`${root}/a.ktx2.deferred`, "budget");
+  writeFileSync(`${root}/b.ktx2`, srgb); writeFileSync(`${root}/b.ktx2.failed`, "kind=failure\n");
+  const r = Bun.spawnSync(["bun", new URL("./ktx2-tf-purge.ts", import.meta.url).pathname, root, "--apply"]);
+  const gone = (f: string) => !existsSync(`${root}/${f}`);
+  check("--apply removes a purged variant AND its .failed/.deferred (so the sweep rebuilds it)", gone("a.ktx2") && gone("a.ktx2.failed") && gone("a.ktx2.deferred"),
+    { out: new TextDecoder().decode(r.stdout).slice(-300), left: ["a.ktx2", "a.ktx2.failed", "a.ktx2.deferred"].filter((f) => !gone(f)) });
+  check("…and leaves a variant it didn't purge, and that variant's marker, alone", !gone("b.ktx2") && !gone("b.ktx2.failed")); }
 console.log(`${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

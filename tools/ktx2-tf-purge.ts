@@ -15,7 +15,7 @@
 import { parseGlb } from "../server/glbparse.ts";
 import { KTX2_TF_MARK } from "../server/optimize.ts";
 import { KTX2_TEXEL_CAP } from "../server/store-variants.ts";
-import { readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { Glob } from "bun";
 
 
@@ -65,6 +65,11 @@ for (const f of new Glob("**/*").scanSync({ cwd: root, onlyFiles: true })) {
 }
 for (const f of hits) console.log(`  ${apply ? "deleted" : "would delete"} ${f}  (converted data map)`);
 for (const f of big) console.log(`  ${apply ? "deleted" : "would delete"} ${f}  (textures over ${KTX2_TEXEL_CAP}² — built before the cap)`);
-if (apply) for (const f of [...hits, ...big]) rmSync(`${root}/${f}`);
+// a purged variant's verdict markers go with it: a variant can serve beside a .failed (a forced rebuild that failed
+// keeps the old one), and every verdict but a stale size/tools one STANDS for the sweep, which would then never rebuild
+// what this deleted (Greptile #207). The purge's promise is "the sweep rebuilds it": clear what would stop that.
+const markers = [...hits, ...big].flatMap((f) => [`${f}.failed`, `${f}.deferred`]).filter((m) => existsSync(`${root}/${m}`));
+for (const m of markers) console.log(`  ${apply ? "deleted" : "would delete"} ${m}  (its variant is purged: the sweep must be free to rebuild it)`);
+if (apply) for (const f of [...hits, ...big, ...markers]) rmSync(`${root}/${f}`);
 console.log(`${hits.length + big.length} variant(s): ${hits.length} with converted data maps, ${bigAll} over the ${KTX2_TEXEL_CAP}² texel cap (${big.length} of those for that alone)${apply ? " — deleted; restart and the boot sweep rebuilds them" : " (dry run; --apply deletes)"}`);
 }

@@ -85,22 +85,23 @@ check("store object: variants rebuilt beside the original, .deferred cleared", !
     && other?.queued.length === 2 && runs().length - b0 === 4, [first, again, other, runs().length - b0]);
   process.env.REBUILD_COOLDOWN_MS = "0";
 }
-// 2e. many models, one caller: at most REBUILD_WAIT_CAP (4) forced passes wait across ALL callers; past it an ask queues
-// nothing and says busy. And an upload arriving behind waiting rebuilds runs FIRST (the pump prefers unforced items).
+// 2e. many models, one caller: at most REBUILD_WAIT_CAP (4) forced passes wait across ALL callers, counting what the ask
+// itself adds; past it an ask queues nothing and says busy. And an upload arriving behind waiting rebuilds runs FIRST (the pump prefers unforced items).
 {
   await optIdle();
   for (const m of ["m1", "m2", "m3", "m4"]) writeFileSync(join(store, `${m}.glb`), "orig");
   const b0 = runs().length;
-  const asks = ["m1", "m2", "m3", "m4"].map((m) => rebuildAsset(`store/${m}.glb`));   // m1's KTX2 is taken at once; 1+2+2 wait
+  const asks = ["m1", "m2", "m3", "m4"].map((m) => rebuildAsset(`store/${m}.glb`));   // m1's KTX2 is taken at once; 1+2 wait
   writeFileSync(join(store, "up1.glb"), "orig");
   const { queueOptimize } = await import("../server/upload.ts");
   queueOptimize(join(store, "up1.glb"));
   await optIdle();
   const mine = runs().slice(b0);
-  check("cap: the 4th model's ask finds 5 forced passes waiting → queues nothing, says busy; the first three queue both",
-    asks.slice(0, 3).every((a) => a?.queued.length === 2) && asks[3]?.busy === true && asks[3]?.queued.length === 0
-    && !mine.some((l) => l.includes("m4.glb")), [asks, mine]);
-  const firstUp = mine.findIndex((l) => l.includes("up1.glb")), lastForced = mine.map((l) => /m[123]\.glb/.test(l)).lastIndexOf(true);
+  // m1's KTX2 is taken at once, so 1 + 2 = 3 wait; m3 would make 5 past a cap of 4 (the parent let it: Greptile #207)
+  check("cap: forced passes waiting never exceed REBUILD_WAIT_CAP: m1 and m2 queue both (3 wait); m3 and m4 would pass 4 → busy, nothing queued",
+    asks.slice(0, 2).every((a) => a?.queued.length === 2) && asks.slice(2).every((a) => a?.busy === true && a?.queued.length === 0)
+    && !mine.some((l) => /m[34]\.glb/.test(l)), [asks, mine]);
+  const firstUp = mine.findIndex((l) => l.includes("up1.glb")), lastForced = mine.map((l) => /m[12]\.glb/.test(l)).lastIndexOf(true);
   check("priority: the upload queued behind the rebuilds ran before the waiting forced passes (only the in-flight one ran first)",
     firstUp === 1 && lastForced > firstUp, mine);
 }

@@ -480,6 +480,24 @@ export function lodBudget(doc: Document) {
   return { diag, nearest, errWorld: LOD_PX / pxPerMetre, texelsPerMetre: LOD_TEXELS_PER_PX * pxPerMetre };
 }
 
+/** A triangle's texel density along its LEAST dense axis, in texels per metre: `f`, `g` its two world edges (3D, from
+ *  the same vertex), `t1`, `t2` the matching UV edges in TEXELS. ANISOTROPY: a stretched mapping (a pipe, a trim sheet)
+ *  has two densities and a uniform resize scales both, so the sparse axis binds — the smaller singular value of the
+ *  world → texel map J = T·P⁻¹, P the world edges in the triangle's own 2D frame. Computed as |det J| / σmax (no
+ *  cancellation). 0 for a degenerate triangle. */
+export function minTexelDensity(f: number[], g: number[], t1: number[], t2: number[]): number {
+  const L = Math.hypot(f[0], f[1], f[2]);
+  const c = [f[1] * g[2] - f[2] * g[1], f[2] * g[0] - f[0] * g[2], f[0] * g[1] - f[1] * g[0]], A2 = Math.hypot(c[0], c[1], c[2]);
+  if (!(L > 0) || !(A2 > 0)) return 0;
+  const gx = (g[0] * f[0] + g[1] * f[1] + g[2] * f[2]) / L, gy = A2 / L;   // g in the frame whose x axis is f: (gx, gy)
+  // P = [[L, gx], [0, gy]] → P⁻¹ = [[1/L, −gx/(L·gy)], [0, 1/gy]]
+  const j00 = t1[0] / L, j10 = t1[1] / L, j01 = (t2[0] - j00 * gx) / gy, j11 = (t2[1] - j10 * gx) / gy;
+  const S = j00 * j00 + j01 * j01 + j10 * j10 + j11 * j11, D = Math.abs(j00 * j11 - j01 * j10);
+  const sMax = Math.sqrt((S + Math.sqrt(Math.max(0, S * S - 4 * D * D))) / 2);
+  const d = sMax > 0 ? D / sMax : 0;
+  return Number.isFinite(d) ? d : 0;
+}
+
 /** TEXEL DENSITY: the longest side each texture needs so that every part of the model it covers still gets
  *  `texelsPerMetre`. Per texture, over every triangle that samples it (world area from EVERY drawing node, its UVs in
  *  texels), the density along its LEAST dense axis (a stretched mapping binds on its stretched axis — the geometric
@@ -533,15 +551,7 @@ export function lodTexelCaps(doc: Document, texelsPerMetre: number): Map<Texture
             const f = xf(m, e1), g = xf(m, e2);
             const area = Math.hypot(f[1] * g[2] - f[2] * g[1], f[2] * g[0] - f[0] * g[2], f[0] * g[1] - f[1] * g[0]) / 2;
             if (!(area > 0)) continue;
-            // ANISOTROPY: a stretched mapping (a pipe, a trim sheet) has two densities, and a uniform resize scales both —
-            // so the triangle's LEAST dense axis binds, as the least dense triangle binds across the map. That is the
-            // smaller singular value of the world → texel map J = T·P⁻¹ (P: the edges in the triangle's own 2D frame).
-            const L = Math.hypot(f[0], f[1], f[2]), x = [f[0] / L, f[1] / L, f[2] / L];
-            const gx = g[0] * x[0] + g[1] * x[1] + g[2] * x[2], gy = (2 * area) / L;   // g in the frame: (gx, gy)
-            // P = [[L, gx], [0, gy]] → P⁻¹ = [[1/L, −gx/(L·gy)], [0, 1/gy]]
-            const j00 = t1[0] / L, j10 = t1[1] / L, j01 = (t2[0] - j00 * gx) / gy, j11 = (t2[1] - j10 * gx) / gy;
-            const S = j00 * j00 + j01 * j01 + j10 * j10 + j11 * j11, D = j00 * j11 - j01 * j10;
-            const dMin = Math.sqrt(Math.max(0, (S - Math.sqrt(Math.max(0, S * S - 4 * D * D))) / 2));
+            const dMin = minTexelDensity(f, g, t1, t2);
             if (dMin > 0) out.push({ d: dMin, a: area });
           }
         }

@@ -17,7 +17,10 @@
 import { Document } from "@gltf-transform/core";
 import { KHRTextureTransform, KHRMaterialsSpecular } from "@gltf-transform/extensions";
 import { NodeIO } from "@gltf-transform/core";
-import { lodBudget, lodTexelCaps, optimizeGlbLod, findKtx2Encoder, meshWorldScale } from "../server/optimize.ts";
+import { lodBudget, lodTexelCaps, optimizeGlbLod, findKtx2Encoder, meshWorldScale, minTexelDensity } from "../server/optimize.ts";
+import { getBounds } from "@gltf-transform/core";
+import draco3d from "draco3dgltf";
+import { ALL_EXTENSIONS } from "@gltf-transform/extensions";
 import { parseGlb } from "../server/glbparse.ts";
 import { LOD_NEAR_MIN } from "../client/lib/lod_policy.js";
 import sharp from "sharp";
@@ -104,6 +107,31 @@ check("an extension texture (KHR_materials_specular) follows its material's meas
   const tpm = 48;   // fixed, so the expected caps are exact: 1024·48/200 = 246 → 256; /50 → 1024; /800 → 64
   const cap = lodTexelCaps(doc, tpm).get(t);
   check("the LEAST-dense region binds (area-weighted p10): a 5%-area sliver doesn't pin the map, the 40% region sets it — 256, not 1024 (min) or 64 (median/max)", cap === 256, cap);
+}
+// the per-triangle measure against an INDEPENDENT reference — √λmin of T·(EᵀE)⁻¹·Tᵀ (E the world edges as columns, T
+// the texel edges), a different route to the same singular value — exactly, not through a power-of-two cap that could
+// hide a swapped term (407 vs 512 both round to 512)
+{
+  const ref = (f: number[], g: number[], t1: number[], t2: number[]) => {
+    const a = f[0] * f[0] + f[1] * f[1] + f[2] * f[2], b = f[0] * g[0] + f[1] * g[1] + f[2] * g[2], c = g[0] * g[0] + g[1] * g[1] + g[2] * g[2];
+    const det = a * c - b * b, i00 = c / det, i01 = -b / det, i11 = a / det;   // (EᵀE)⁻¹
+    // M = T · Ginv · Tᵀ, T = [[t1x, t2x], [t1y, t2y]]
+    const T = [[t1[0], t2[0]], [t1[1], t2[1]]], G = [[i00, i01], [i01, i11]];
+    const TG = [[T[0][0] * G[0][0] + T[0][1] * G[1][0], T[0][0] * G[0][1] + T[0][1] * G[1][1]], [T[1][0] * G[0][0] + T[1][1] * G[1][0], T[1][0] * G[0][1] + T[1][1] * G[1][1]]];
+    const m00 = TG[0][0] * T[0][0] + TG[0][1] * T[0][1], m01 = TG[0][0] * T[1][0] + TG[0][1] * T[1][1], m11 = TG[1][0] * T[1][0] + TG[1][1] * T[1][1];
+    const tr = m00 + m11, dd = m00 * m11 - m01 * m01; return Math.sqrt((tr - Math.sqrt(Math.max(0, tr * tr - 4 * dd))) / 2);
+  };
+  const rot = (t: number[], a: number) => [t[0] * Math.cos(a) - t[1] * Math.sin(a), t[0] * Math.sin(a) + t[1] * Math.cos(a)];
+  const cases: [string, number[], number[], number[], number[]][] = [
+    ["sheared UVs", [1, 0, 0], [0.3, 0, 1], [300, 0], [250, 900]],
+    ["rotated UVs (37°)", [2, 0, 0], [0, 0, 1], rot([400, 0], 0.645), rot([0, 700], 0.645)],
+    ["mirrored UVs", [1, 0, 0], [0, 1, 0], [-512, 0], [0, 128]],
+    ["a tilted triangle, a short first edge", [0.01, 0.02, 0], [0.4, -0.1, 0.9], [3, 5], [120, 410]],
+    ["non-square map, anisotropic", [3, 0, 0], [0, 0, 0.5], [2048, 0], [0, 64]],
+  ];
+  const bad = cases.map(([n, f, g, t1, t2]) => [n, minTexelDensity(f, g, t1, t2), ref(f, g, t1, t2)] as const).filter(([, d, r]) => !(Math.abs(d - r) <= 1e-9 * r));
+  check("the per-axis density matches an independent reference exactly (sheared, rotated, mirrored, tilted, non-square)", bad.length === 0, bad);
+  check("…and a degenerate triangle is 0, never NaN", minTexelDensity([1, 0, 0], [2, 0, 0], [5, 0], [0, 5]) === 0 && minTexelDensity([0, 0, 0], [1, 0, 0], [5, 0], [0, 5]) === 0);
 }
 // ANISOTROPY: the least dense AXIS binds, not the geometric mean of the two
 function mapped(w: number, d: number, tw: number, th: number) {   // a w × d metre quad, UV 0..1 over a tw × th map
@@ -197,7 +225,7 @@ async function sphereGlb(unit: number, { seg = 48, ring = 32, png = null as Uint
 {
   const enc = findKtx2Encoder();
   check("(setup) a KTX2 encoder on this host — the texture-only checks need the real encoder", !!enc, null);
-  async function field(texSize: number, F = 6) {   // texSize 0: untextured
+  async function field(texSize: number, F = 6, withSphere = false) {   // texSize 0: untextured; withSphere: + a smooth, reducible sphere
     const n = 40; let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
     const grid: number[][] = [];
     for (let z = 0; z <= n; z++) for (let x = 0; x <= n; x++) grid.push([F * x / n, F * (rnd() - 0.5) * 1.6 / n, F * z / n]);
@@ -225,6 +253,18 @@ async function sphereGlb(unit: number, { seg = 48, ring = 32, png = null as Uint
       .setAttribute("TEXCOORD_0", doc.createAccessor().setType("VEC2").setArray(new Float32Array(T)).setBuffer(buf))
       .setIndices(doc.createAccessor().setType("SCALAR").setArray(new Uint32Array(P.length / 3).map((_, i) => i)).setBuffer(buf));
     doc.createScene().addChild(doc.createNode("f").setMesh(doc.createMesh("f").addPrimitive(prim)));
+    if (withSphere) {
+      // 221 vertices: few enough that the Permissive retry (the field alone reaches 0.65×) stays over the bar
+      const S: number[] = [], SI: number[] = [], seg = 16, ring = 12;
+      for (let r = 0; r <= ring; r++) for (let q = 0; q <= seg; q++) { const th = (r / ring) * Math.PI, ph = (q / seg) * Math.PI * 2;
+        // 10 cm, inside the field's own bounds: the budget (off the world diagonal) is the field's alone
+        S.push(F / 2 + 0.1 * Math.sin(th) * Math.cos(ph), 0.1 * Math.cos(th), F / 2 + 0.1 * Math.sin(th) * Math.sin(ph)); }
+      for (let r = 0; r < ring; r++) for (let q = 0; q < seg; q++) { const a = r * (seg + 1) + q, b = a + seg + 1; if (r > 0) SI.push(a, a + 1, b); if (r < ring - 1) SI.push(a + 1, b + 1, b); }
+      const sp = doc.createPrimitive().setMaterial(doc.createMaterial("s"))
+        .setAttribute("POSITION", doc.createAccessor().setType("VEC3").setArray(new Float32Array(S)).setBuffer(buf))
+        .setIndices(doc.createAccessor().setType("SCALAR").setArray(new Uint32Array(SI)).setBuffer(buf));
+      doc.getRoot().listScenes()[0].addChild(doc.createNode("s").setMesh(doc.createMesh("s").addPrimitive(sp)));
+    }
     return new NodeIO().writeBinary(doc);
   }
   if (enc) {
@@ -248,6 +288,20 @@ async function sphereGlb(unit: number, { seg = 48, ring = 32, png = null as Uint
       const pos = dd.getRoot().listMeshes()[0].listPrimitives()[0].getAttribute("POSITION")!; const e = pos.getElement(0, [0, 0, 0]); e[1] += 2; pos.setElement(0, e); });
     check("a regular pass that breaks a gate still leaves a TEXTURE-ONLY LOD on the untouched geometry",
       !!pushed.out && pushed.texOnly === true && pushed.after === pushed.before, { kind: pushed.kind, verdict: pushed.verdict, after: pushed.after, before: pushed.before });
+    // …and it IS the untouched geometry (the broken pass moved a vertex 2 m: the world bounds must be the source's), and
+    // its caps reach the file (keyed to the untouched doc's own textures, not the discarded pass's)
+    const reader = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({ "draco3d.decoder": await draco3d.createDecoderModule() });
+    const bb = async (bytes: Uint8Array) => getBounds((await reader.readBinary(bytes)).getRoot().listScenes()[0]);
+    const srcB = await bb(await field(1024)), outB = pushed.out ? await bb(pushed.out) : null;
+    check("…its geometry is the SOURCE's (world bounds unchanged), not the broken pass's",
+      !!outB && [0, 1, 2].every((i) => Math.abs(outB.min[i] - srcB.min[i]) < 1e-3 && Math.abs(outB.max[i] - srcB.max[i]) < 1e-3), { srcB, outB });
+    check("…and its maps are capped in the file", !!pushed.out && JSON.stringify(dims(pushed.out)) === JSON.stringify([want]), pushed.out ? dims(pushed.out) : null);
+    // a regular pass that reduces PARTLY (not to the bar) and breaks nothing: texture-only rides ITS geometry — the
+    // irreducible faceted field plus a smooth sphere that reduces, together over 0.6×
+    const mixed = await optimizeGlbLod(await field(1024, 6, true), enc);
+    check("a texture-only LOD on a regular pass that reduced part-way keeps that reduction (fewer vertices than the source)",
+      !!mixed.out && mixed.texOnly === true && mixed.permissive === false && mixed.after < mixed.before && mixed.after > 0.6 * mixed.before,
+      { kind: mixed.kind, verdict: mixed.verdict, before: mixed.before, after: mixed.after });
     // the texture-only LOD's stamp: its basis is the textures, and it is NOT labelled permissive (the card reads that)
     const extrasOf = (out: Uint8Array) => parseGlb(out).json?.asset?.extras ?? {};
     check("…stamped lodBasis 'textures', never 'permissive'", !!big.out && extrasOf(big.out).lodBasis === "textures" && extrasOf(big.out).simplify === undefined, big.out ? extrasOf(big.out) : null);

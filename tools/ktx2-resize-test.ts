@@ -6,6 +6,7 @@
 //   capped   — a 2048² base-colour PNG comes out of optimizeGlbKtx2 as a 1024² KTX2        [mutate: revert → 2048]
 //   aspect   — a 2048x1024 texture keeps its aspect (1024x512)
 //   small    — a 512² texture is untouched (512²)
+//   no sharp — on a ktx-create host without sharp, an over-cap texture is skipped, not shipped full-size    [mutate: revert → 2048]
 import { Document, NodeIO } from "@gltf-transform/core";
 import { optimizeGlbKtx2, findKtx2Encoder, getSharp } from "../server/optimize.ts";
 
@@ -16,6 +17,7 @@ const encoder = findKtx2Encoder();
 if (!encoder) { console.log("  SKIP: no KTX2 encoder on this host (toktx / ktx)"); process.exit(0); }
 console.log(`  encoder: ${encoder}`);
 const { sharp } = await getSharp();
+const NO_SHARP = process.env.KTX2_NO_SHARP === "1";   // the child run below: optimize.ts behaves as a host without sharp
 
 async function png(w: number, h: number): Promise<Uint8Array> {
   // a non-flat image so the encoder has real work (a gradient + stripes)
@@ -52,10 +54,19 @@ function ktx2Dims(glb: Uint8Array): [number, number][] {
   return out;
 }
 
+if (NO_SHARP) {   // child: only the over-cap case. It must not come out as a full-size KTX2 under the texel1024 recipe
+  const r = await optimizeGlbKtx2(await glbWith(2048, 2048), encoder);
+  const dims = r.out ? ktx2Dims(r.out) : [];
+  const ok = !dims.some(([w, h]) => w > 1024 || h > 1024);
+  console.log(`NO_SHARP ${ok ? "OK" : "OVERCAP"} ${JSON.stringify(dims)}`); process.exit(0);
+}
 for (const [w, h, want, name] of [[2048, 2048, [1024, 1024], "capped: 2048² → 1024²"], [2048, 1024, [1024, 512], "aspect: 2048x1024 → 1024x512"], [512, 512, [512, 512], "small: 512² untouched"]] as const) {
   const r = await optimizeGlbKtx2(await glbWith(w, h), encoder);
   const dims = r.out ? ktx2Dims(r.out) : [];
   check(name, dims.length === 1 && dims[0][0] === want[0] && dims[0][1] === want[1], `got ${JSON.stringify(dims)}${r.out ? "" : " (no output: " + JSON.stringify(r).slice(0, 160) + ")"}`);
 }
+{ const child = Bun.spawnSync(["bun", import.meta.path], { env: { ...process.env, KTX2_NO_SHARP: "1" } });
+  const line = new TextDecoder().decode(child.stdout).split("\n").find((l) => l.startsWith("NO_SHARP")) ?? "(no answer)";
+  check("no sharp on a ktx-create host: a 2048² texture is never shipped over the cap (Greptile #207)", /^NO_SHARP OK/.test(line), line); }
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

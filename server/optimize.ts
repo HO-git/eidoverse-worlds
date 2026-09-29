@@ -224,7 +224,8 @@ async function ktx2CompressTextures(doc: Document, encoder: string): Promise<Ktx
   // KHR_texture_basisu (and WebGPU BC upload) wants width/height % 4 == 0.
   // sharp is optional today: without it, only already-aligned PNGs encode.
   let sharp: any = null;
-  try { sharp = (await getSharp()).sharp; } catch { /* PNG-only pass below */ }
+  // KTX2_NO_SHARP=1 behaves as a host without sharp (tools/ktx2-resize-test.ts drives it)
+  try { sharp = process.env.KTX2_NO_SHARP === "1" ? null : (await getSharp()).sharp; } catch { /* PNG-only pass below */ }
   const tmp = mkdtempSync(join(tmpdir(), "ew-ktx2-"));
   let converted = 0, eligible = 0;
   const failed: string[] = [];
@@ -257,7 +258,12 @@ async function ktx2CompressTextures(doc: Document, encoder: string): Promise<Ktx
       // texel1024: every KTX2 built on a ktx-create host kept its full-size textures.
       const resize = capTexels(size as [number, number] | null);
       const sharpResize = !!resize && !isToktx && !!sharp;
-      if (resize && !isToktx && !sharp) console.error(`[optimize] ktx2: ${label} is ${size![0]}x${size![1]} — no sharp to resize it and ktx create has no --resize, encoding at source size`);
+      // no sharp on a `ktx create` host: this texture can't be brought under the cap, so it isn't encoded at all (kept
+      // as-is), rather than shipped at source size inside a variant whose recipe says texel1024 (Greptile #207)
+      if (resize && !isToktx && !sharp) {
+        console.error(`[optimize] ktx2: skip ${label} (${size![0]}x${size![1]}) — over the texel cap, and no sharp to resize it (ktx create has no --resize)`);
+        failed.push(label); continue;
+      }
       let inPath: string;
       if (!sharpResize && aligned && (mime === "image/png" || (mime === "image/jpeg" && isToktx))) {
         inPath = join(tmp, mime === "image/png" ? `${i}.png` : `${i}.jpg`);

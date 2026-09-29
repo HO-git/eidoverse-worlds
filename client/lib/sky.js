@@ -762,7 +762,7 @@ export async function prebuildBakeProgram(cloudPasses, opts = {}, stillWanted = 
       // holds the lock. (It used to step the wrapper aside by swapping sys.bakeEnv for the raw bake for the whole await,
       // so any bake called meanwhile ran unlocked, straight into this temporary target.)
       await api.bakeEnv({ width: 64, height: 32, cloudPasses, ...opts, [BAKE_HELD]: true });
-    } catch (e) { report('sky prebuild', e); }
+    } catch (e) { ran = false; report('sky prebuild', e); }   // a failed prebuild isn't a prebuilt program
     finally {
       // put the real target and reflection fallback back NOW, not after the link wait below: for the minutes a cold
       // link takes, reflections would otherwise sample the undrawn 64x32 (review 7, L1). The graph keeps the program.
@@ -1115,7 +1115,7 @@ async function ensureSkyBake() {
         // a costly sky beats no clouds for the whole session (review 09-27, P4). The headset hold stands down for this
         // sky build from here on (review 10b M1: the 1 Hz render re-held them, no dome and no gradient).
         attachFailedFor = api;
-        releaseLiveDomes();
+        if (!interimFor) releaseLiveDomes();   // while the sky is arriving, finishSky releases them once COMPILED
         console.warn('[sky] baked dome could not attach — staying on the live cloud march');
         tee('[sky] baked dome could not attach — the live cloud march stays (in a headset too)');
       } else {

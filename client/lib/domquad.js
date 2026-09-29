@@ -202,7 +202,7 @@ export function domQuadsPress(handRay) {
   const data = { x: hit.uv.x, y: 1 - hit.uv.y };
   const el = hit.object.material.map.elementAt?.(data.x, data.y);
   if (!el || el.closest?.(NEEDS_PRESS)) { domQuadsPick(handRay, true); return { dist: hit.distance, press: null }; }
-  return { dist: hit.distance, press: { mesh: hit.object, data, lastY: data.y, travel: 0, dragging: false } };
+  return { dist: hit.distance, press: { mesh: hit.object, el, data, lastY: data.y, travel: 0, dragging: false } };
 }
 
 /** Trigger held after a press: the panel follows the laser once it has moved DRAG_PX. */
@@ -222,6 +222,10 @@ export function domQuadsDrag(handRay, press) {
 /** Trigger up: a press that never dragged is a click where it began. `cancel` (a grab took over) drops it. */
 export function domQuadsRelease(press, cancel = false) {
   if (!press || cancel || press.dragging || !press.mesh.parent) return;
+  // the click goes to what was PRESSED: if the content moved under the point meanwhile (a chat line arrived), the
+  // element there now is something else, and a release over it is no click (as a mouse up off its button isn't)
+  const now = press.mesh.material.map?.elementAt?.(press.data.x, press.data.y);
+  if (press.el && now !== press.el && !press.el.contains?.(now)) return;
   fire(press.mesh, press.data);
 }
 

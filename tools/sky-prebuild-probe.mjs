@@ -36,6 +36,13 @@ try {
   check('the prebuilt graph is kept (its program stays cached)', r.kept.includes('64x32|p8|c0') || r.cur === '64x32|p8|c0', JSON.stringify(r));
   check('a bake started during the prebuild waits for it: nothing it drew is thrown away', r.tempWidths.every((w) => w === 64), JSON.stringify(r));
   check('the temporary target is freed', r.disposedTemp === 1, JSON.stringify(r));
+  // a prebuild whose bake throws is NOT a prebuilt program (Greptile #206): it must say so, so the cap isn't marked ready
+  const failed = await pg.evaluate(async () => {
+    const s = await import('./lib/sky.js'); const { api } = s.skyForProbe();
+    const orig = api.bakeEnv; api.bakeEnv = async () => { throw new Error('probe: forced bake failure'); };
+    try { return await s.prebuildBakeProgram(8, { includeClouds: false }); } finally { api.bakeEnv = orig; }
+  });
+  check('a prebuild whose bake throws reports false (not prebuilt)', failed === false, `returned ${failed}`);
   check('no page errors', errs.length === 0, errs.slice(0, 3).join(' | '));
 } catch (e) { check('probe ran', false, e.message); }
 finally { try { await browser.close(); } catch {} try { await world.close(); } catch {} }

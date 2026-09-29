@@ -23,9 +23,9 @@
 // constructs a Document, swaps image bytes only, and byte-preserves
 // everything else (no draco, no prune, no resample on bodies, ever).
 
-import { NodeIO, type Document } from "@gltf-transform/core";
+import { NodeIO, Primitive, type Document } from "@gltf-transform/core";
 import { ALL_EXTENSIONS, KHRTextureBasisu } from "@gltf-transform/extensions";
-import { dedup, prune, resample, textureCompress, draco, listTextureSlots, weld, simplify } from "@gltf-transform/functions";
+import { dedup, prune, resample, textureCompress, draco, listTextureSlots, weld, compactPrimitive, convertPrimitiveToTriangles, getPrimitiveVertexCount } from "@gltf-transform/functions";
 import { MeshoptSimplifier } from "meshoptimizer";
 import draco3d from "draco3dgltf";
 import { capTexels, recipeStamp, verdictLine, LOD_RECIPE, KTX2_RECIPE, LOD_MIN_VERTS, LOD_RATIO, LOD_ERROR, type LodVerdictKind, type VerdictKind } from "./store-variants.ts";
@@ -392,12 +392,61 @@ export const lodGpuRefusal = (origTexMB: number, lodTexMB: number, ms: number): 
 // records it, and no reader has to re-derive it from the text
 export type LodResult = { out: Uint8Array | null; verdict: string | null; kind?: LodVerdictKind; before: number; after: number; permissive?: boolean };
 
-/** MeshoptSimplifier with 'Permissive' added to every simplify() call — gltf-transform's simplify() only ever passes
- *  LockBorder, and wrapping the simplifier keeps its weld/dequantize/compaction handling intact. */
-const PERMISSIVE_SIMPLIFIER = Object.assign(Object.create(MeshoptSimplifier), {
-  simplify: (i: Uint32Array, p: Float32Array, stride: number, target: number, err: number, flags: string[] = []) =>
-    MeshoptSimplifier.simplify(i, p, stride, target, err, [...flags, "Permissive"] as any),
-});
+// ATTRIBUTE-AWARE SIMPLIFICATION. gltf-transform's simplify() hands meshoptimizer POSITIONS ONLY (4.4.2 and 4.5.1), so
+// every collapse was judged on shape alone: across hard-edge normals (a hovercar's wheel arches smeared dark, its rear
+// wheel gone) and across UV seams (a pallet's white blotches, a Joshua tree's foliage gone dull). meshoptimizer's README:
+// use Permissive only with attribute-aware simplification; we used it without. So each primitive is simplified here
+// with simplifyWithAttributes, normals, COLOR_0 and TEXCOORD_0 in the error metric. Weights were chosen by measurement
+// (09-29, six library models rendered at the client's LOD switch distances, notes: lod-look-2026-09-29): normals 0.25,
+// UVs 1, colour 1. Normals at 1.0 (meshoptimizer's demo, Godot) or 0.5 (gltfpack) left the desk and streetlight
+// 'ineffective'. Protecting UV-seam and crease vertices (meshopt_SimplifyVertex_Protect) instead froze the seamed models
+// and changed nothing on the rest, so nothing is locked: weighted UVs let the simplifier trade instead of refuse, and
+// a model that can't reach the bar without tearing its UVs is refused as 'ineffective' (a pallet) rather than served
+// torn. Against the served KTX2 at the switch distance: the hovercar 25% → 4% of pixels visibly different, its rear
+// wheel and arches kept; the Joshua tree 49% → 29%, its foliage colour kept.
+// Weld, strip/fan conversion and compaction are gltf-transform's own exported helpers, as its simplify() uses them.
+// ErrorClamped (meshoptimizer 1.3): attribute error clamped to the position-error scale — without it the normal error
+// used up the error budget and every pass stopped early (all six test models went 'ineffective'); the README recommends
+// it for any attribute-aware use.
+const LOD_NORMAL_WEIGHT = 0.25, LOD_UV_WEIGHT = 1, LOD_COLOR_WEIGHT = 1;
+function readFloats(a: NonNullable<ReturnType<Primitive["getAttribute"]>>, width: number, out: Float32Array, stride: number, at: number) {
+  const el = new Array(a.getElementSize()).fill(0);
+  for (let i = 0, n = a.getCount(); i < n; i++) { a.getElement(i, el); for (let k = 0; k < width; k++) out[i * stride + at + k] = el[k] ?? 0; }
+}
+function simplifyAttributes({ ratio, error, permissive }: { ratio: number; error: number; permissive: boolean }) {
+  return async (doc: Document) => {
+    await MeshoptSimplifier.ready;
+    await doc.transform(weld());
+    for (const mesh of doc.getRoot().listMeshes()) {
+      for (const prim of mesh.listPrimitives()) {
+        const mode = prim.getMode();
+        if (mode === Primitive.Mode.TRIANGLE_STRIP || mode === Primitive.Mode.TRIANGLE_FAN) convertPrimitiveToTriangles(prim);
+        else if (mode !== Primitive.Mode.TRIANGLES) continue;
+        const pos = prim.getAttribute("POSITION"), ind = prim.getIndices();
+        if (!pos || !ind) continue;
+        const n = pos.getCount();
+        const P = new Float32Array(n * 3); readFloats(pos, 3, P, 3, 0);
+        const nor = prim.getAttribute("NORMAL"), col = prim.getAttribute("COLOR_0"), uv = prim.getAttribute("TEXCOORD_0");
+        const S = 8;   // [nx ny nz r g b u v]
+        const A = new Float32Array(n * S);
+        if (nor) readFloats(nor, 3, A, S, 0);
+        if (col) readFloats(col, 3, A, S, 3);
+        if (uv) readFloats(uv, 2, A, S, 6);
+        const wn = nor ? LOD_NORMAL_WEIGHT : 0, wc = col ? LOD_COLOR_WEIGHT : 0, wu = uv ? LOD_UV_WEIGHT : 0;
+        const weights = [wn, wn, wn, wc, wc, wc, wu, wu];
+        const src = ind.getArray()!;
+        const idx = src instanceof Uint32Array ? src : new Uint32Array(src);
+        const target = Math.floor((ratio * idx.length) / 3) * 3;
+        const [dst] = MeshoptSimplifier.simplifyWithAttributes(idx, P, 3, A, S, weights, null, target, error, ["ErrorClamped", ...(permissive ? ["Permissive" as const] : [])]);
+        prim.setIndices(ind.clone().setArray(dst));
+        if (ind.listParents().length === 1) ind.dispose();
+        compactPrimitive(prim);
+        if (getPrimitiveVertexCount(prim, "render") === 0) prim.dispose();
+      }
+      if (mesh.listPrimitives().length === 0) mesh.dispose();
+    }
+  };
+}
 
 /** The node contract, as a signature: names, transforms, mesh-bearing, and
  *  hierarchy (child order), per scene. Exported so its DETECTION power is a
@@ -420,7 +469,8 @@ export const lodMatsSig = (d: Document): string => JSON.stringify(d.getRoot().li
  *  swapped material assignment) and asserts the guard REFUSES it — so
  *  deleting either guard turns a named test red instead of leaving the
  *  suite green. Production callers (the CLI) never pass it. */
-export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, mutate?: (doc: Document) => void): Promise<LodResult & Ktx2Tally> {
+export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, mutate?: (doc: Document) => void,
+  { minVerts = LOD_MIN_VERTS }: { minVerts?: number } = {}): Promise<LodResult & Ktx2Tally> {   // minVerts: tools/lod-census.ts only; the recipe names the real floor
   const none = { eligible: 0, converted: 0, failed: [] as string[] };
   const rawJson = parseGlb(bytes).json;
   const excluded = lodExclusion(rawJson);
@@ -451,15 +501,15 @@ export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, 
     // what may not change from HERE on is which material each primitive wears
     const preMats = lodMatsSig(doc);
     const bounds = sceneBounds(doc);
-    if (before >= LOD_MIN_VERTS) {
-      await doc.transform(weld(), simplify({ simplifier: permissive ? PERMISSIVE_SIMPLIFIER : MeshoptSimplifier, ratio: LOD_RATIO, error: LOD_ERROR }));
+    if (before >= minVerts) {
+      await doc.transform(weld(), simplifyAttributes({ ratio: LOD_RATIO, error: LOD_ERROR, permissive }));
       mutate?.(doc);   // the mutation-control seam (tests only) — see the param doc
     }
     return { doc, preNodes, preMats, bounds, before, after: totalVerts(doc) };
   };
   let r = await reduce(false);
   const before = r.before;
-  if (before < LOD_MIN_VERTS) return { out: null, verdict: `already light (${before} verts < ${LOD_MIN_VERTS})`, kind: "light", before, after: before, ...none };
+  if (before < minVerts) return { out: null, verdict: `already light (${before} verts < ${minVerts})`, kind: "light", before, after: before, ...none };
   let permissive = false;
   if (r.after > before * 0.6) { r = await reduce(true); permissive = true; }
   const { doc, preNodes, preMats } = r;

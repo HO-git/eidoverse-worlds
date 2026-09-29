@@ -11,11 +11,11 @@ const LIB = process.env.LIB;   // the library ORIGINALS live in the asset checko
 if (!LIB) { console.log('  ✗ set LIB=<directory of library .glb originals> (e.g. <assets checkout>/eidoverse/assets/models)'); process.exit(1); }
 const all = readdirSync(LIB).filter((f) => f.endsWith('.glb')).sort((a, b) => statSync(`${LIB}/${a}`).size - statSync(`${LIB}/${b}`).size);
 const pick = new Set([
-  ...all.filter((f) => /palm_date|bagger_288|crate_large_blue/.test(f)),
+  ...all.filter((f) => /palm_date|bagger_288|crate_large_blue|crow_bird|tiger_shark/.test(f)),   // + two skinned: bones parity
   ...[0, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9].map((q) => all[Math.floor(q * (all.length - 1))]),
 ]);
 const OPTM = process.env.OPTM || `${process.env.OPT_DIR || 'assets/opt'}/eidoverse/assets/models`;   // the server's OPT_DIR default (server/config.ts)
-const models = [...pick].slice(0, 10).flatMap((m) => [{ dir: LIB, name: m }, ...(process.env.KTX2 !== '0' ? [{ dir: OPTM, name: `${m}.ktx2.glb` }] : [])])
+const models = [...pick].slice(0, 12).flatMap((m) => [{ dir: LIB, name: m }, ...(process.env.KTX2 !== '0' ? [{ dir: OPTM, name: `${m}.ktx2.glb` }] : [])])
   .filter(({ dir, name }) => { try { statSync(`${dir}/${name}`); return true; } catch { return false; } });
 
 const world = await ownedWorld({});

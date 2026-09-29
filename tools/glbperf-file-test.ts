@@ -54,6 +54,23 @@ for (const [name, img, mime, filler] of [["png", png, "image/png", 2_000_000], [
 { const f = join(dir, "avif.glb"); writeFileSync(f, glb(new Uint8Array(900_000).fill(7), "image/avif", 1000));
   const p = glbPerfOfFile(f);
   check(`an unsizeable 900 KB AVIF is billed unsized from its head (read ${glbPerfIo.bytes} bytes)`, p?.unsizedImages === 1 && glbPerfIo.bytes < 70_000, [p?.unsizedImages, glbPerfIo.bytes]); }
+// bones = the largest skin a SkinnedMesh actually uses (the loupe's rule), not the largest skin in the file: a 16-joint
+// skin on the mesh plus an unused 100-joint skin ranks 16 (Greptile #207)
+{ const g = glb(png, "image/png", 64); const dv = new DataView(g.buffer); const jl = dv.getUint32(12, true);
+  const json = JSON.parse(new TextDecoder().decode(g.subarray(20, 20 + jl)));
+  const joint = (i: number) => ({ name: `j${i}` });
+  json.nodes = [{ mesh: 0, skin: 0 }, ...Array.from({ length: 100 }, (_, i) => joint(i))];
+  json.skins = [{ joints: Array.from({ length: 16 }, (_, i) => i + 1) }, { joints: Array.from({ length: 100 }, (_, i) => i + 1) }];
+  const js = pad4(new TextEncoder().encode(JSON.stringify(json)), 0x20), bin = g.subarray(20 + jl);
+  const out = new Uint8Array(20 + js.length + bin.length); const ov = new DataView(out.buffer);
+  out.set(g.subarray(0, 12)); ov.setUint32(8, out.length, true); ov.setUint32(12, js.length, true); ov.setUint32(16, 0x4e4f534a, true);
+  out.set(js, 20); out.set(bin, 20 + js.length);
+  const p = glbPerf(out);
+  check(`an unused 100-joint skin doesn't count: bones = the used skin's 16 (got ${p?.bones})`, p?.bones === 16, p);
+  json.nodes[0] = { mesh: 0 };   // no node uses any skin: nothing is skinned
+  const js2 = pad4(new TextEncoder().encode(JSON.stringify(json)), 0x20), o2 = new Uint8Array(20 + js2.length + bin.length); const v2 = new DataView(o2.buffer);
+  o2.set(g.subarray(0, 12)); v2.setUint32(8, o2.length, true); v2.setUint32(12, js2.length, true); v2.setUint32(16, 0x4e4f534a, true); o2.set(js2, 20); o2.set(bin, 20 + js2.length);
+  check(`skins no mesh node uses cost nothing (got ${glbPerf(o2)?.bones})`, glbPerf(o2)?.bones === 0); }
 const whole = readFileSync(join(dir, "png.glb")); writeFileSync(join(dir, "cut.glb"), whole.subarray(0, whole.length - 100_000));
 check("a truncated file is unreadable (null), not a partial rank", glbPerfOfFile(join(dir, "cut.glb")) === null);
 console.log(`${fail ? "\x1b[31m" : "\x1b[32m"}${pass} passed, ${fail} failed\x1b[0m`); process.exit(fail ? 1 : 0);

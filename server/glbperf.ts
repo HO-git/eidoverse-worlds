@@ -4,7 +4,7 @@
 // default scene into ONE Mesh (EXT_mesh_gpu_instancing → an InstancedMesh of `count`), and perfscope's accumulate()
 // bills per Mesh: tris = index (or position) count / 3 × instances, one draw, its material into a unique set, one
 // alpha tick per BLEND material occurrence; textures once per unique texture, w×h×4 bytes (×4/3 with mips); bones =
-// the largest skin. The rule and thresholds are shared/perfrank.js — the loupe's own. tools/glbperf-parity-probe
+// the largest skin a skinned mesh in the ranked scene uses. The rule and thresholds are shared/perfrank.js — the loupe's own. tools/glbperf-parity-probe
 // loads real library models through the client's loader and checks these numbers against perfscope.statsOf().
 //
 // Known approximations, disclosed on the card: KTX2/basis images are billed at 1 byte/texel — the desktop worst case
@@ -66,7 +66,7 @@ export function glbPerf(bytes: Uint8Array, opts: { bptc?: boolean } = {}): GlbPe
 function perfOf(json: any, view: ViewReader, { bptc = true }: { bptc?: boolean } = {}): GlbPerf {
   const nodes: any[] = json.nodes ?? [], meshes: any[] = json.meshes ?? [], accessors: any[] = json.accessors ?? [];
   const scene = (json.scenes ?? [])[json.scene ?? 0];
-  let tris = 0, draws = 0, alpha = 0;
+  let tris = 0, draws = 0, alpha = 0, bones = 0;
   const mats = new Set<number>();
   const visit = (ni: number, seen: Set<number>) => {
     if (seen.has(ni)) return; seen.add(ni);
@@ -77,6 +77,9 @@ function perfOf(json: any, view: ViewReader, { bptc = true }: { bptc?: boolean }
       for (const p of meshes[n.mesh]?.primitives ?? []) {
         const mode = p.mode ?? MODE_TRIANGLES;
         if (mode !== MODE_TRIANGLES && mode !== MODE_STRIP && mode !== MODE_FAN) continue;   // lines/points: not a Mesh
+        // a skin counts only where GLTFLoader builds a SkinnedMesh from it: a triangle primitive on a node of the ranked
+        // scene that references the skin (the loupe's max over loaded skinned meshes). Unused skins cost nothing (Greptile #207).
+        if (n.skin != null) bones = Math.max(bones, json.skins?.[n.skin]?.joints?.length ?? 0);
         const n0 = p.indices != null ? accessors[p.indices]?.count ?? 0 : accessors[p.attributes?.POSITION]?.count ?? 0;
         const idx = mode === MODE_TRIANGLES ? n0 : Math.max(0, n0 - 2) * 3;   // GLTFLoader re-indexes strips/fans
         tris += Math.round(idx / 3) * count;
@@ -124,8 +127,6 @@ function perfOf(json: any, view: ViewReader, { bptc = true }: { bptc?: boolean }
     // a KTX2 image carries its own mip chain (the loader never generates one); raster images get GPU mips
     texBytes += Math.round(dims[0] * dims[1] * (k2 ? k2.bpp : 4) * (k2 || mips ? 4 / 3 : 1));
   }
-  let bones = 0;
-  for (const s of json.skins ?? []) bones = Math.max(bones, s.joints?.length ?? 0);
   const texMB = texBytes / 1e6;
   const r = rankOf({ tris, draws, texMB, bones, mats: mats.size, alpha });
   return { tris, draws, mats: mats.size, alpha, bones, texMB: +texMB.toFixed(2), unsizedImages,

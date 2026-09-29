@@ -20,12 +20,24 @@ ok('…and the measurement answers (cancelled), never hangs', r !== 'pending' &&
 ok('a new measurement can start after', G.gpuTimerState().measuring === false);
 // a measurement's 500 ms settle must not clobber a newer one started inside it (review 5)
 { const q = G.measureShadowPass(1);
-  G.gpuBegin(); G.gpuEnd(); G.gpuBegin(); G.gpuEnd();     // steps done → closing, settle timer armed
+  G.gpuBegin(); G.gpuEnd(); G.gpuBegin(); G.gpuEnd();     // 'drawn', 'held'
+  G.gpuBegin(); G.gpuEnd();                                // the next frame finishes: closing, settle timer armed
   G.setGpuTimer(false);                                    // off during the settle
   const q2 = G.measureShadowPass(2);                       // a new A/B inside the window
   await new Promise((r) => setTimeout(r, 650));
   ok('a new A/B started during an old one\'s settle survives it', G.gpuTimerState().measuring === true);
   void q; void q2; }
+// the LAST tagged frame is 'held': it must render with the map held, i.e. the restore waits for the frame after it
+// (Greptile #206: the restore ran inside that frame's own step, so its shadow maps were drawn and the sample was wrong)
+{ G.setGpuTimer(false); await new Promise((r) => setTimeout(r, 650));
+  sun.shadow.autoUpdate = true; pref.on = true;
+  const q = G.measureShadowPass(1);
+  G.gpuBegin(); G.gpuEnd();                                // 'drawn'
+  G.gpuBegin();                                            // 'held' — the frame renders now
+  ok('the final "held" frame renders with its shadow map held', sun.shadow.autoUpdate === false, String(sun.shadow.autoUpdate));
+  G.gpuEnd(); G.gpuBegin(); G.gpuEnd();                    // the next frame ends the A/B
+  ok('…and the frame after it gets the map back', sun.shadow.autoUpdate === true, String(sun.shadow.autoUpdate));
+  G.setGpuTimer(false); void q; }
 // shadows switched OFF during an A/B: the A/B's restore must not resurrect the value it saved at its start (review 7, L5)
 { G.setGpuTimer(false); await new Promise((r) => setTimeout(r, 650));
   sun.shadow.autoUpdate = true; pref.on = true;

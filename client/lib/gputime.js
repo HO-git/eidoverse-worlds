@@ -80,9 +80,11 @@ const casters = () => { const out = []; scene.traverse((o) => { if (o.isLight &&
 
 function abStep() {
   const ab = S.ab;
+  // finish BEFORE tagging: restoring autoUpdate in the same step as the last tag let that 'held' frame draw its shadow
+  // maps (Greptile #206), so the final sample measured the wrong thing. The frame that finishes is simply untagged.
+  if (ab.i >= ab.frames * 2) { finishAB(); return null; }
   const tag = ab.i++ % 2 ? 'held' : 'drawn';
   for (const [l] of ab.saved) l.shadow.autoUpdate = tag === 'drawn';
-  if (ab.i >= ab.frames * 2) finishAB();
   return tag;
 }
 function finishAB() {

@@ -70,7 +70,15 @@ function heatURL(counts, w, h) {
 
 /** One overdraw capture of the live view. Returns totals, a histogram, per-category fragment shares and (heat) a
  *  PNG data URL: black 0 · blue 1 · green 2 · yellow 3-4 · orange 5-8 · red 9-16 · white 17+. */
-export async function overdrawCapture({ mode = 'actual', w = 480, perTag = true, heat = false, camera: srcCam = camera, debugCounts = false } = {}) {
+// ONE capture at a time: two overlapping captures swap each other's temporary counting materials in and out and either
+// can lift the world hold while the other still draws (Greptile #206). A second call answers busy instead.
+let capturing = false;
+export async function overdrawCapture(opts) {
+  if (capturing) return { error: 'busy: an overdraw capture is already running' };
+  capturing = true;
+  try { return await captureOnce(opts); } finally { capturing = false; }
+}
+async function captureOnce({ mode = 'actual', w = 480, perTag = true, heat = false, camera: srcCam = camera, debugCounts = false } = {}) {
   // ONE frozen viewpoint for compile and every pass: the world keeps ticking while the clones compile (the visitor
   // walks, tiles re-budget) — a live camera read per pass measured each category from a different place
   srcCam.updateMatrixWorld(true);

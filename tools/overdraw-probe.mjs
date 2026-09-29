@@ -47,7 +47,9 @@ try {
     for (const hk of field.autoHooks) { const i = autos.indexOf(hk); if (i >= 0) autos.splice(i, 1); }
     for (const f of field._strokes) { f.setPushers?.([]); f._applyTiles?.(); }
     const grR = await EW.overdraw({ mode: 'raw', w: W, camera: pc });
-    const live = await EW.overdraw({ mode: 'actual', w: 480, heat: true, camera: pc });
+    const livePending = EW.overdraw({ mode: 'actual', w: 480, heat: true, camera: pc });
+    const second = await EW.overdraw({ mode: 'raw', w: 64, camera: pc });   // started while the first still runs
+    const live = await livePending;
     const liveRaw = await EW.overdraw({ mode: 'raw', w: 480, camera: pc });
     // normal-render coverage of the same grass: the group alone, alpha > 0
     const g = field.mesh, parent = g.parent, solo = new THREE.Scene();
@@ -60,7 +62,7 @@ try {
     const px = await renderer.readRenderTargetPixelsAsync(rt, 0, 0, W, h);
     renderer.setClearColor(cc, ca); parent.add(g);
     let normalCovered = 0; for (let i = 3; i < px.length; i += 4) if (px[i] > 0) normalCovered++;
-    return { calA, calR, grR: { byTag: grR.byTag }, normalCovered, live, liveRaw: { total: liveRaw.total, byTag: liveRaw.byTag } };
+    return { calA, calR, grR: { byTag: grR.byTag }, normalCovered, second: { error: second?.error ?? null }, live, liveRaw: { total: liveRaw.total, byTag: liveRaw.byTag } };
   }), new Promise((_, rej) => setTimeout(() => rej(new Error('page pinned 150 s')), 150000))]);
   const px = r.calA.pixels;
   console.log(`  calib actual: ${JSON.stringify(r.calA.byTag?.calib)} | raw: ${JSON.stringify(r.calR.byTag?.calib)} | pixels ${px}`);
@@ -79,6 +81,7 @@ try {
   check('live raw: per-category fragments sum to the total within 0.5%', Math.abs(partsRaw - r.liveRaw.total) <= r.liveRaw.total * 0.005, `${partsRaw} vs ${r.liveRaw.total} (${(100 * (partsRaw - r.liveRaw.total) / r.liveRaw.total).toFixed(3)}%)`);
   check('stable: the first and last total passes agree (nothing moved mid-capture)', rest.stable === true, `drift ${rest.drift ?? 0}`);
   check('live capture has a heat map and categories', !!heat && Object.keys(rest.byTag || {}).length >= 2, Object.keys(rest.byTag || {}).join(','));
+  check('a capture started while another runs answers busy (never overlaps it)', /busy/.test(r.second?.error ?? ''), JSON.stringify(r.second));
   check('no page errors', errs.length === 0, errs.slice(0, 2).join(' | ') || 'none');
 } catch (e) { check('probe ran to completion', false, String(e).slice(0, 300)); }
 finally { await browser.close(); await world.close(); }

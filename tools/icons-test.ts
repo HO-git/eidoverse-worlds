@@ -13,7 +13,8 @@
 // downstream playwright rig, where it reports distinct per-icon pixel counts.
 // This repo's suite stays browser-free, so the registry contract lives here.)
 
-import { has, svg } from "../client/lib/icons.js";
+import * as I from "../client/lib/icons.js";
+const { has, svg } = I as any;
 
 let pass = 0, fail = 0;
 const check = (name: string, ok: boolean, detail = "") => {
@@ -48,6 +49,17 @@ const avatarSrc = await Bun.file(new URL("../client/lib/avatar.js", import.meta.
 const iconFor = avatarSrc.match(/ICON_FOR = \{([^}]*)\}/)?.[1] ?? "";
 for (const m of iconFor.matchAll(/:\s*'(\w+)'/g))
   check(`ICON_FOR '${m[1]}' resolves in the registry`, has(m[1]));
+
+// the BOLD small-size mark (nameplate): heavier than the outline, solid cups, a knocked-out slash, and the same
+// slash as the outline glyph so the two are one picture at two weights
+const B = (I as any).boldData?.("headphonesOff");
+check("headphonesOff has a bold form", !!B && (I as any).hasBold?.("headphonesOff"));
+if (B) {
+  check("…its band is heavier than the outline's 2", B.w >= 3, `${B.w}`);
+  check("…solid cups, two of them, closed paths", Array.isArray(B.cups) && B.cups.length === 2 && B.cups.every((c: string) => /Z$/i.test(c.trim())));
+  check("…its slash runs the outline glyph's way (top-left → bottom-right)", (() => { const n = B.slash.match(/-?\d*\.?\d+/g).map(Number); return n[0] < n[2] && n[1] < n[3]; })());
+  check("…and is knocked out of what it crosses", B.knock > 0 && B.sw >= 2.4);
+}
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

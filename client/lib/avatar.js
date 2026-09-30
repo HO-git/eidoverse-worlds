@@ -29,8 +29,11 @@ import { warm, P_GATE } from './warmqueue.js';
 import { heightAt } from './terrain.js';
 import { surfaceUnder } from './colliders.js';
 import { DRIVEN_BONES } from './ragdoll.js';
-import { stroke as strokeIcon } from './icons.js';
-import { plateSize } from './platesize.js';
+import { stroke as strokeIcon, strokeBold } from './icons.js';
+import { plateSize, plateClear, ownClearance, reachAbove, markBake, CLEAR_MIN } from './platesize.js';
+import { revealLevel } from './namereveal.js';
+import { Fn, userData, positionView, cameraNear, cameraFar, min, viewZToPerspectiveDepth, viewZToReversedPerspectiveDepth,
+  viewZToOrthographicDepth } from 'three/tsl';
 import { SEAT_CLIP_FILE } from './seatcore.js';
 import { planReaches } from '../../shared/reachorder.js';
 import { poseChannels } from '../../shared/humanoid.js';
@@ -267,19 +270,47 @@ export const SEAT_CLIPS = { ground: 'sitting_on_ground', chair: SEAT_CLIP_FILE }
 
 // ---------------------------------------------------------------- sprites
 
-function textSprite(draw, w, h, scaleW) {
+// THE OWN-BODY CLEARANCE (owner, 09-30: labels hidden by scenery and by OTHER avatars — never by their owner's own
+// body). depthTest:false used to be the cure for a head or a crown of hair eating its own plate, and it also drew
+// every plate through every wall. Now the body-attached sprites (plate, deaf mark, typing pill) ARE depth-tested, but
+// write their depth as if they stood `userData.plateClear` metres nearer the eye (platesize.js plateClear: the body's
+// measured reach from the plate's anchor, grown past the eye while names are held). Why this and not the others:
+//   · a per-avatar "everything but me" depth pass is a scene render per body;
+//   · stencil needs every scene material to cooperate, in two backends and in XR;
+//   · MOVING the sprite toward the eye (and shrinking it to match) keeps the flat picture but puts it at the wrong
+//     stereo depth in a headset — the plate would float half a metre in front of the head.
+// A fragment-depth override keeps the sprite exactly where it is (on screen and in stereo) and moves only the test.
+// ONE node graph for every such sprite, reading the per-object value (TSL userData), so they share one pipeline.
+// It costs early-z on sprites, which are a handful of quads. Viewing-camera kinds: perspective (both depth
+// conventions), orthographic as a fallback.
+const PLATE_DEPTH = Fn((builder) => {
+  const z = min(positionView.z.add(userData('plateClear', 'float')), cameraNear.negate().mul(1.0001));   // never past the near plane
+  if (!builder.camera?.isPerspectiveCamera) return viewZToOrthographicDepth(z, cameraNear, cameraFar);
+  return builder.renderer?.reversedDepthBuffer ? viewZToReversedPerspectiveDepth(z, cameraNear, cameraFar)
+    : viewZToPerspectiveDepth(z, cameraNear, cameraFar);
+})();
+/** A body-attached sprite material: depth-tested against the world, cleared of its own body (see above). */
+function clearedSpriteMaterial(map) {
+  const mat = new THREE.SpriteNodeMaterial({ map, transparent: true, depthTest: true, depthWrite: false });
+  mat.depthNode = PLATE_DEPTH;
+  return mat;
+}
+
+// clear: true = a body-attached sprite (depth-tested, own body cleared); false = drawn over everything (speech bubbles)
+function textSprite(draw, w, h, scaleW, clear = false) {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   draw(c.getContext('2d'));
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+  const mat = clear ? clearedSpriteMaterial(tex) : new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
   const s = new THREE.Sprite(mat);
+  if (clear) s.userData.plateClear = CLEAR_MIN;
   s.scale.set(scaleW, scaleW * h / w, 1);
   s.renderOrder = 99;
   return s;
 }
-const disposeSprite = (s) => { s.material.map?.dispose(); s.material.dispose(); };
+const disposeSprite = (s) => { s.material.map?.dispose(); for (const t of Object.values(s.userData.maps ?? {})) t.dispose(); s.material.dispose(); };
 // a token read at paint time — canvas sprites cannot use var(); a 'style' event repaints them
 const tokv = (n, fb) => (getComputedStyle(document.documentElement).getPropertyValue(n) || fb).trim();
 // every live Avatar, so a Style change can repaint the sprites it baked from
@@ -302,7 +333,7 @@ const makeLabel = (name) => {
   ctx.beginPath(); ctx.roundRect((512 - w) / 2, 6, w, 52, 26); ctx.fill();   // pill (R, 15:12)
   ctx.fillStyle = tokv('--pill-name', '#8fe8c8');
   ctx.fillText(name.slice(0, 24), 256, 46);
-  }, 512, 64, 0.9);
+  }, 512, 64, 0.9, true);
   s.userData.pill = pill / 512;   // the pill's share of the sprite's width: the ear and the hover card sit beside IT
   return s;
 };
@@ -313,14 +344,37 @@ const makeLabel = (name) => {
 // bare grey stroke vanishes against a bright sky), a little taller than the pill so the glyph reads. Placed each frame
 // at the plate's anchor plus the camera's RIGHT (in the body's frame) — beside the plate from every view and in VR.
 // Not Sprite.center: the WebGPU sprite material drew it on the plate's middle (seen in the render, 09-30).
-const makeEar = () => textSprite((ctx) => {
-  ctx.fillStyle = tokv('--pill-bg', 'rgba(8,20,28,0.86)');
-  ctx.beginPath(); ctx.arc(32, 32, 26, 0, Math.PI * 2); ctx.fill();
-  // stroke() draws 2 canvas px at any size, a hair at 15 px on screen: draw it on a doubled grid so the line holds
-  ctx.translate(32, 32); ctx.scale(2, 2);
+// THE BOLD FORM (owner, 09-30: at ~10 px the outline glyph blurred into an "A/R"): the sprite is ~20 px on screen from
+// 5 m out (platesize holds the plate at 0.6°, the mark rides it), so it is baked in icons.js's bold weight — heavy
+// band, solid cups, the slash cut out of them — at every distance; up close it still reads as the HUD's picture.
+// The slash's margin is CUT and the disc painted underneath afterwards, so the gap is the disc itself, not a second dark.
+// TWO BAKES of that one form: at 5–15 m the mark is ~20 px on a 720p screen, and a 64 px canvas sampled down 3× sits
+// between mip levels — the render smears it (seen, 09-30). So a small bake at about the size it is drawn (EAR_SMALL_PX,
+// sampled near 1:1) and the 64 px one for close up; platesize.js markBake picks, with hysteresis so it can't flicker.
+const EAR_SMALL_PX = 24;
+const drawEar = (n) => (ctx) => {
+  const k = n / 64;
+  ctx.save();   // the glyph first, on bare canvas; then the disc goes in UNDER it (one coat, so its alpha is the token's)
+  ctx.translate(n / 2, n / 2);
   ctx.strokeStyle = tokv('--dim', '#97979b');
-  strokeIcon(ctx, 'headphonesOff', 17);
-}, 64, 64, 0.9 * 64 / 512);
+  strokeBold(ctx, 'headphonesOff', 44 * k, null);
+  ctx.restore();
+  ctx.globalCompositeOperation = 'destination-over';
+  ctx.fillStyle = tokv('--pill-bg', 'rgba(8,20,28,0.86)');
+  ctx.beginPath(); ctx.arc(n / 2, n / 2, 26 * k, 0, Math.PI * 2); ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+};
+const makeEar = () => {
+  const s = textSprite(drawEar(64), 64, 64, 0.9 * 64 / 512, true);
+  const c = document.createElement('canvas');
+  c.width = c.height = EAR_SMALL_PX;
+  drawEar(EAR_SMALL_PX)(c.getContext('2d'));
+  const small = new THREE.CanvasTexture(c);
+  small.colorSpace = THREE.SRGBColorSpace;
+  s.userData.maps = { large: s.material.map, small };
+  s.userData.bake = 'large';
+  return s;
+};
 const EAR_GAP = 0.03;    // metres between pill and ear, at the plate's base size
 const EAR_K = 1.3;       // the ear's side, in plate heights
 const _earDir = new THREE.Vector3(), _earQ = new THREE.Quaternion(), _earQ2 = new THREE.Quaternion();
@@ -372,7 +426,8 @@ function makeTypingSprite() {
   c.width = 128; c.height = 56;
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  const s = new THREE.Sprite(clearedSpriteMaterial(tex));   // body-attached: hidden by walls, never by its own head
+  s.userData.plateClear = CLEAR_MIN;
   s.scale.set(0.5, 0.5 * 56 / 128, 1);
   s.renderOrder = 99;
   s.userData.ctx = c.getContext('2d');
@@ -1846,6 +1901,31 @@ export class Avatar {
     this._labelName = name;
     this.repaintLabel();
   }
+  /** How far this body reaches from its plate's anchor, as the clearance its body-attached sprites write
+   *  (platesize.js ownClearance/reachAbove). Measured once, on the body as it stands (skinned positions, sampled to
+   *  ≤4000 vertices a mesh). A body with nothing measurable clears a head (CLEAR_MIN). */
+  _measureOwnClear() {
+    try {
+      const sceneRoot = this.vrm?.scene;
+      if (!sceneRoot) return ownClearance(0);
+      this.root.updateMatrixWorld(true);
+      const inv = new THREE.Matrix4().copy(this.root.matrixWorld).invert(), m = new THREE.Matrix4(), v = new THREE.Vector3();
+      const pts = [];
+      sceneRoot.traverse((o) => {
+        const pos = o.isMesh && o.visible !== false ? o.geometry?.attributes?.position : null;
+        if (!pos) return;
+        m.multiplyMatrices(inv, o.matrixWorld);
+        const step = Math.max(1, Math.floor(pos.count / 4000));
+        for (let i = 0; i < pos.count; i += step) {
+          o.getVertexPosition(i, v);   // skinned + morphed, in the mesh's own space
+          v.applyMatrix4(m);
+          pts.push(v.x, v.y, v.z);
+        }
+      });
+      return ownClearance(reachAbove(pts, this.label.position.y));
+    } catch { return ownClearance(0); }
+  }
+
   /** The nameplate ear: `on` = this person cannot hear you (hearing off, and near enough that it matters). The
    *  caller decides; the plate only fades the mark in or out beside itself. */
   setDeafMark(on) { this._earWant = on ? 1 : 0; }
@@ -2238,10 +2318,13 @@ export class Avatar {
     BC('av:plates');
 
     // ---- nameplate: world-sized up close, held at a readable angle at range, faded out past 20–30 m (platesize.js
-    // says why). depthTest is off (labels must not be eaten by your own shoulder), so distance is what keeps 24 of
-    // them from becoming a wall of text.
+    // says why). Depth-tested — walls and other bodies hide it — but cleared of its OWN body (textSprite says how);
+    // while names are held (namereveal.js) it comes through everything, bigger and farther.
     const d = this.root.position.distanceTo(camera.getWorldPosition(_plateEye));   // WORLD: in XR camera.position is rig-local (review 10a M4)
-    const { lw, vis } = plateSize(d);
+    const rk = revealLevel();
+    const { lw, vis } = plateSize(d, rk);
+    if (this._ownClear == null) this._ownClear = this._measureOwnClear();
+    this.label.userData.plateClear = plateClear(this._ownClear, d, rk);
     this.label.material.opacity = vis;
     this.label.visible = vis > 0.02 && !this.hideLabel;   // hideLabel: your own name is for OTHER eyes (set while presenting, xr.js selfFirstPerson)
     this.label.scale.set(lw, lw * 64 / 512, 1);   // scale carries the aspect
@@ -2257,8 +2340,13 @@ export class Avatar {
       this.ear.position.copy(this.label.position)
         .addScaledVector(_earDir, lw * (this.label.userData.pill ?? 0.5) / 2 + EAR_GAP * lw / 0.9 + ew / 2);
       this.ear.scale.set(ew, ew, 1);
+      // which bake: the mark's size on screen, in drawing-buffer pixels (projection's y focal length × half the height)
+      const px = ew * camera.projectionMatrix.elements[5] * (renderer.domElement.height || 720) / 2 / Math.max(0.1, d);
+      const bake = markBake(px, this.ear.userData.bake);
+      if (bake !== this.ear.userData.bake) { this.ear.userData.bake = bake; this.ear.material.map = this.ear.userData.maps[bake]; }
       this.ear.material.opacity = this._earA * vis;
       this.ear.visible = this._earA > 0.01;
+      this.ear.userData.plateClear = this.label.userData.plateClear;   // the mark hides and reveals with its plate
     }
 
     if (this.bubble) {
@@ -2277,6 +2365,8 @@ export class Avatar {
     const typingNow = now < this._typingUntil && (micLive || !this.bubble);
     if (typingNow && !this.typing) { this.typing = makeTypingSprite(); this.root.add(this.typing); }
     if (this.typing) this.typing.position.y = (micLive && this.bubble) ? 2.72 : 2.12;
+    // the pill sits above the plate's anchor: its own reach is the plate's plus the lift (triangle inequality); not revealed
+    if (this.typing) this.typing.userData.plateClear = this._ownClear + Math.abs(this.typing.position.y - this.label.position.y);
     if (this.typing) {
       this.typing.visible = typingNow;
       if (typingNow) {

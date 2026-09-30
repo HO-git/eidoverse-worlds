@@ -4,10 +4,13 @@
 //   bun tools/platesize-test.ts
 //
 // What must hold (owner-approved recipe, 09-30): world-sized up close; the name's capitals held at 0.6° once they'd
-// fall under it; growth capped at 3×; full opacity to 20 m, gone by 30 m. The angle is measured from the MEASURED
+// fall under it; growth capped at 3×; full opacity to 20 m, gone by 30 m. HELD (the reveal, k = 1): 0.6° at any range
+// (no cap), full to 50 m, gone by 60; the ease between is monotone and hits its ends in REVEAL_EASE_MS. The own-body
+// clearance: what counts, the clamp, and that a held plate's depth pull passes the eye. The angle is measured from the MEASURED
 // cap height (PLATE_CAP_H) at the size the function returns — the check fails if either drifts from the other.
 
-import { plateSize, PLATE_CAP_H, PLATE_W, TEXT_DEG, MAX_GROW } from "../client/lib/platesize.js";
+import * as PS from "../client/lib/platesize.js";
+const { plateSize, PLATE_CAP_H, PLATE_W, TEXT_DEG, MAX_GROW } = PS as any;
 
 let pass = 0, fail = 0;
 const check = (name: string, ok: boolean, detail = "") => {
@@ -32,6 +35,59 @@ check("vis = 1 at 20 m (full to 20)", plateSize(20).vis === 1, JSON.stringify(pl
 check("vis between 0 and 1 at 25 m (fading)", plateSize(25).vis > 0.3 && plateSize(25).vis < 0.7, JSON.stringify(plateSize(25)));
 check("vis = 0 at 30 m", plateSize(30).vis === 0, JSON.stringify(plateSize(30)));
 check("vis = 0 at 60 m (stays gone)", plateSize(60).vis === 0, JSON.stringify(plateSize(60)));
+
+// ---- HOLD-TO-REVEAL -------------------------------------------------------------------------------------------
+const has = (n: string) => typeof (PS as any)[n] === "function" || typeof (PS as any)[n] === "number";
+check("reveal API exists (plateClear, ownClearance, reachAbove, revealRamp, revealEase, REVEAL_EASE_MS)",
+  ["plateClear", "ownClearance", "reachAbove", "revealRamp", "revealEase", "REVEAL_EASE_MS"].every(has));
+const P = PS as any;
+const capDegK = (d: number, k: number) => 2 * Math.atan((PLATE_CAP_H * plateSize(d, k).lw / PLATE_W) / 2 / d) * 180 / Math.PI;
+check("k = 0 is exactly the normal plate (2, 12, 25 m)", [2, 12, 25].every((d) => JSON.stringify(plateSize(d, 0)) === JSON.stringify(plateSize(d))));
+for (const d of [20, 40, 55])
+  check(`held: caps hold ${TEXT_DEG}° (±5%) at ${d} m — no MAX_GROW shrink`, near(capDegK(d, 1), TEXT_DEG, 0.05), `${capDegK(d, 1).toFixed(3)}°`);
+check("held: never under world size up close (s = 1 at 2 m)", plateSize(2, 1).s === 1, JSON.stringify(plateSize(2, 1)));
+check("held: vis = 1 at 40 m and at 50 m (normal is gone by 30)", plateSize(40, 1).vis === 1 && plateSize(50, 1).vis === 1 && plateSize(40, 0).vis === 0);
+check("held: fading at 55 m, gone at 60 m", plateSize(55, 1).vis > 0.3 && plateSize(55, 1).vis < 0.7 && plateSize(60, 1).vis === 0,
+  JSON.stringify([plateSize(55, 1), plateSize(60, 1)]));
+check("half-held sits between (size and fade at 40 m)", plateSize(40, 0.5).s > plateSize(40, 0).s && plateSize(40, 0.5).s < plateSize(40, 1).s
+  && plateSize(40, 0.5).vis > 0 && plateSize(40, 0.5).vis < 1);
+// the ramp and the ease
+if (has("revealRamp")) {
+  const E = P.REVEAL_EASE_MS;
+  check("REVEAL_EASE_MS ≈ 120 ms", E >= 80 && E <= 200, `${E}`);
+  check("ramp: press from 0 → 0.5 at half the ease, 1 at the end, clamped after", P.revealRamp(true, 0, 0, E / 2) === 0.5
+    && P.revealRamp(true, 0, 0, E) === 1 && P.revealRamp(true, 0, 0, E * 5) === 1);
+  check("ramp: release from 1 → 0 at the end", P.revealRamp(false, 0, 1, E) === 0 && P.revealRamp(false, 0, 1, E / 4) === 0.75);
+  check("ramp: a reversal continues from where it was (0.4 → back down)", Math.abs(P.revealRamp(false, 10, 0.4, 10 + E * 0.1) - 0.3) < 1e-9);
+  check("ease: 0→0, ½→½, 1→1, monotone", P.revealEase(0) === 0 && P.revealEase(1) === 1 && Math.abs(P.revealEase(0.5) - 0.5) < 1e-9
+    && [0, 0.1, 0.3, 0.6, 0.9, 1].every((r, i, a) => i === 0 || P.revealEase(r) >= P.revealEase(a[i - 1])));
+}
+// the own-body clearance
+if (has("ownClearance")) {
+  check("clearance: an unmeasured body still clears a head (≥ 0.3 m)", P.ownClearance(0) >= 0.3 && P.ownClearance(NaN) >= 0.3);
+  check("clearance: reach + margin in the middle", P.ownClearance(0.5) > 0.5 && P.ownClearance(0.5) < 0.75, `${P.ownClearance(0.5)}`);
+  check("clearance: capped (a 5 m reach does not see through walls)", P.ownClearance(5) <= 1.25, `${P.ownClearance(5)}`);
+  // the 'claude'-shaped head: joint 1.37, a crown of tentacles to 2.21 and 0.45 m out; T-pose hands at 1.35, feet at 0
+  const pts = [0, 2.21, 0,  0.45, 2.0, 0.1,  -0.3, 1.8, -0.35,  0.8, 1.35, 0,  -0.8, 1.35, 0,  0.1, 0, 0.1];
+  const r = P.reachAbove(pts, 1.95);
+  const tent = Math.hypot(0.45, 0.05, 0.1), hind = Math.hypot(0.3, 0.15, 0.35);
+  check("reachAbove: counts the crown around the plate (the farthest tentacle)", Math.abs(r - Math.max(tent, hind)) < 1e-9, `${r}`);
+  check("reachAbove: skips hands and feet well under the plate", r < 0.8, `${r}`);
+  check("reachAbove: empty → 0", P.reachAbove([], 1.95) === 0);
+}
+if (has("plateClear")) {
+  check("plateClear: not held = the body's own clearance", P.plateClear(0.6, 10, 0) === 0.6);
+  check("plateClear: held pulls past the eye (≥ d) from halfway on", P.plateClear(0.6, 10, 1) >= 10 && P.plateClear(0.6, 10, 0.5) >= 10
+    && P.plateClear(0.6, 40, 0.5) >= 40);
+  check("plateClear: monotone in k", [0, 0.2, 0.4, 0.6, 1].every((k, i, a) => i === 0 || P.plateClear(0.5, 8, k) >= P.plateClear(0.5, 8, a[i - 1])));
+}
+
+// the mark's two bakes: small where it is small, large up close, and no flicker at the boundary
+if (typeof P.markBake === "function") {
+  check("mark bake: small at 20 px (5–15 m on 720p), large at 90 px (1 m)", P.markBake(20, "large") === "small" && P.markBake(90, "small") === "large");
+  check("mark bake: hysteresis — at 40 px it keeps whichever it was", P.markBake(40, "small") === "small" && P.markBake(40, "large") === "large");
+  check("mark bake: a first frame in the band starts large", P.markBake(40, undefined) === "large");
+} else check("markBake exists", false);
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

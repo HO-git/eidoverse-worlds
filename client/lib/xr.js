@@ -36,6 +36,7 @@ import { flashHint, toast } from './ui.js';
 import { makePointerLine } from './pointer.js';
 import { markXrAbsent, registerXrGlyph, micGlyph, earGlyph, xrGlyph, micLive, earOn, flipEar } from './mictoggle.js';
 import { markActive } from './presence.js';
+import { setReveal } from './namereveal.js';
 import { dockPins } from './ui.js';
 import { perf } from './perf.js';
 import { renderCensusTake, renderCensusTick, renderCensusPeek, setXRCurtain, drawStats } from './render.js';
@@ -1012,7 +1013,7 @@ let consoleTapped = false, shaderTees = 0;
 let turnMag = 0;                    // |stick-X| while smooth-turning — the vignette reads it
 export const turnMagnitude = () => turnMag;
 export function updateXR(dtSec = 1 / 72) {
-  if (!presenting) { turnMag = 0; return; }
+  if (!presenting) { turnMag = 0; setReveal('xr', false); return; }
   renderCensusTick();
   // EYE WATCH (owner, 09-06 12:22: 'spontaneously each eye becomes extremely fish-eyed; right eye visible in the
   // left'): per frame, not per 5 s — the first sample is the baseline; any eye whose vertical fov moves
@@ -1100,6 +1101,10 @@ export function updateXR(dtSec = 1 / 72) {
     // 'we shouldn't mess with the default VR affordances') — panels live on the ring.
     xrIntent.jump = !!L.buttons[4]?.pressed || !!R?.buttons[4]?.pressed;
   } else { xrIntent.fwd = 0; xrIntent.strafe = 0; xrIntent.jump = !!R?.buttons[4]?.pressed; }
+  // HOLD B or Y = every name in range, through walls (namereveal.js; the desktop's N). xr-standard button 5 is the one
+  // face button nothing here reads: 0 trigger (point/select/ring), 1 grip (grab/cancel), 3 right-stick click (ring),
+  // 4 A/X (jump). Either hand; a hold, so a brush never latches anything.
+  setReveal('xr', buttonsTrusted() && (!!L?.buttons[5]?.pressed || !!R?.buttons[5]?.pressed));
   if (R) {
     const rx = dead(pickAxis(R.axes[2], R.axes[0]));
     const ry = dead(pickAxis(R.axes[3], R.axes[1]));

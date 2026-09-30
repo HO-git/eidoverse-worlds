@@ -104,6 +104,47 @@ export function stroke(ctx, name, size = 26) {
   return true;
 }
 
+// ---- BOLD: the small-size forms (owner, 09-30: at ~10 px the crossed headphones blurred into an "A/R") ---------
+// A 2-unit stroke on 24 is a hairline once a sprite shrinks to 20 px on screen, and the slash crossing thin cups and
+// a thin band leaves no shape to read. So: fewer, heavier parts — a 3.2-unit band, SOLID cups (the cups are what
+// says "headphones"), and a 2.8-unit slash cut OUT of what it crosses (drawn first in the backing colour, wider) so
+// it stays a separate line instead of welding the band and a cup into a letter. Same 24 grid and the same slash
+// direction as the outline glyph, so the two are one picture at two weights. Tuned by rasterizing at 14/20/26 px:
+// full-length slash with a thin knockout kept both cups; steeper or shorter slashes read as "A".
+const BOLD = {
+  headphonesOff: {
+    band: 'M4.5 14v-1a7.5 7.5 0 0 1 15 0v1', w: 3.2,
+    cups: ['M4 12.5h1.6a2.2 2.2 0 0 1 2.2 2.2v4.6a2.2 2.2 0 0 1-2.2 2.2H4a2.2 2.2 0 0 1-2.2-2.2v-4.6A2.2 2.2 0 0 1 4 12.5Z',
+           'M18.4 12.5H20a2.2 2.2 0 0 1 2.2 2.2v4.6a2.2 2.2 0 0 1-2.2 2.2h-1.6a2.2 2.2 0 0 1-2.2-2.2v-4.6a2.2 2.2 0 0 1 2.2-2.2Z'],
+    slash: 'M4 3 20 21', sw: 2.8, knock: 1.0,
+  },
+};
+export const hasBold = (name) => !!BOLD[name];
+/** The bold form's raw data (tests; a surface that draws its own svg). */
+export const boldData = (name) => BOLD[name] ?? null;
+/** Draw the BOLD form centred on the origin at `size` px, in ctx.strokeStyle. `knock`: the colour the slash's margin
+ *  is painted in (the backing it sits on), or null to CUT the margin to transparent — for a translucent backing,
+ *  which the caller then repaints underneath (destination-over), so the gap is exactly the backing. */
+export function strokeBold(ctx, name, size, knock) {
+  const b = BOLD[name];
+  if (!b) return false;
+  const k = size / 24;
+  ctx.save();
+  ctx.scale(k, k);
+  ctx.translate(-12, -12);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.lineWidth = b.w; ctx.stroke(new Path2D(b.band));
+  for (const c of b.cups) ctx.fill(new Path2D(c));
+  const ink = ctx.strokeStyle, slash = new Path2D(b.slash);
+  ctx.lineWidth = b.sw + 2 * b.knock;
+  if (knock == null) { ctx.globalCompositeOperation = 'destination-out'; ctx.stroke(slash); ctx.globalCompositeOperation = 'source-over'; }
+  else { ctx.strokeStyle = knock; ctx.stroke(slash); }
+  ctx.strokeStyle = ink; ctx.lineWidth = b.sw; ctx.stroke(slash);
+  ctx.restore();
+  return true;
+}
+
 /** Inline SVG markup for DOM chrome — same registry, different surface. */
 export function svg(name, size = 18) {
   const d = P[name];

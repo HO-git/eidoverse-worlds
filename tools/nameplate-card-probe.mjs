@@ -12,6 +12,12 @@
 //     for a far one (past the voice range) with hearing off; a live flip of `hear` brings it in and fades it out;
 //   the plate's size — its width and fade are platesize.js's answer for the world distance (tools/platesize-test.ts
 //     holds the curve itself);
+//   occlusion (MEASURED IN THE RENDER) — plate, mark and typing pill are depth-tested sprites cleared of their own body:
+//     a wall between eye and plate hides the name; a box riding ANOTHER avatar hides it; a box riding the plate's OWN
+//     body (standing through it, as claude.vrm's crown of tentacles does) does NOT — unless the clearance is zeroed,
+//     the naive depth test, which cuts it; speech bubbles stay on top;
+//   hold-to-reveal — holding N brings a walled-off plate through, at plateSize(d, 1); release hides it again; N typed
+//     into the chat line reveals nothing;
 //   the card — resting on a plate opens it only after the delay; it names the person and says mic off / can't hear
 //     you; it follows the plate while the pointer rests on it; leaving plate and card closes it; Esc closes it and
 //     leaves the panels alone; "message" opens their DM tab;
@@ -142,23 +148,41 @@ try {
   check('ear: a NEAR peer with hearing off wears it', earOn(a), JSON.stringify(a));
   check('…beside the plate, not on it: right of the pill, level with it', a?.ear && a.ear.l >= a.r && a.ear.l - a.r < 20
     && Math.abs((a.ear.t + a.ear.b) / 2 - a.y) < 3 && a.ear.b - a.ear.t <= (a.b - a.t) * 1.8, JSON.stringify(a));
-  // THE GLYPH: the sprite's own canvas is the HUD's crossed-out headphones (icons.js 'headphonesOff'), not the old
-  // lucide ear — drawn with the registry glyph on the same disc, and it must differ from the unslashed phones
+  // THE GLYPH: the sprite's own canvas is the HUD's crossed-out headphones in their BOLD small-size form (icons.js
+  // strokeBold 'headphonesOff': heavy band, solid cups, knocked-out slash), not the outline glyph that blurred at 10 px
   const glyph = await pg.evaluate(async () => {
-    const { stroke } = await import('/lib/icons.js');
-    const src = EW.remotes.get('nearmute')?.avatar?.ear?.material?.map?.image;
+    const { stroke, strokeBold } = await import('/lib/icons.js');
+    if (typeof strokeBold !== 'function') return { err: 'no strokeBold in icons.js' };
+    const src = EW.remotes.get('nearmute')?.avatar?.ear?.userData?.maps?.large?.image;   // the close-up (64 px) bake
     if (!src?.getContext) return { err: 'no ear canvas' };
     const got = src.getContext('2d').getImageData(0, 0, 64, 64).data;
     const disc = getComputedStyle(document.documentElement);
-    const draw = (name) => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d');
-      x.fillStyle = (disc.getPropertyValue('--pill-bg') || 'rgba(8,20,28,0.86)').trim(); x.beginPath(); x.arc(32, 32, 26, 0, Math.PI * 2); x.fill();
-      x.translate(32, 32); x.scale(2, 2); x.strokeStyle = (disc.getPropertyValue('--dim') || '#97979b').trim(); stroke(x, name, 17);
+    const bg = (disc.getPropertyValue('--pill-bg') || 'rgba(8,20,28,0.86)').trim(), ink = (disc.getPropertyValue('--dim') || '#97979b').trim();
+    const outline = (name) => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d');
+      x.fillStyle = bg; x.beginPath(); x.arc(32, 32, 26, 0, Math.PI * 2); x.fill();
+      x.translate(32, 32); x.scale(2, 2); x.strokeStyle = ink; stroke(x, name, 17);
+      return x.getImageData(0, 0, 64, 64).data; };
+    const bold = () => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d');
+      x.save(); x.translate(32, 32); x.strokeStyle = ink; strokeBold(x, 'headphonesOff', 44, null); x.restore();
+      x.globalCompositeOperation = 'destination-over'; x.fillStyle = bg; x.beginPath(); x.arc(32, 32, 26, 0, Math.PI * 2); x.fill();
       return x.getImageData(0, 0, 64, 64).data; };
     const diff = (a) => { let n = 0; for (let i = 3; i < a.length; i += 4) if (Math.abs(a[i] - got[i]) > 40 || Math.abs(a[i - 3] - got[i - 3]) > 40) n++; return n; };
-    return { vsOff: diff(draw('headphonesOff')), vsOn: diff(draw('headphones')) };
+    return { vsBold: diff(bold()), vsOutline: diff(outline('headphonesOff')), vsOn: diff(outline('headphones')) };
   }).catch((e) => ({ err: String(e).slice(0, 160) }));
-  check('ear glyph: the sprite IS crossed-out headphones (pixel-equal to icons.js headphonesOff; ≠ unslashed)',
-    glyph.vsOff === 0 && glyph.vsOn > 20, JSON.stringify(glyph));
+  check('ear glyph: the sprite IS the bold crossed-out headphones (pixel-equal to icons.js strokeBold; ≠ the outline form)',
+    glyph.vsBold === 0 && glyph.vsOutline > 20 && glyph.vsOn > 20, JSON.stringify(glyph));
+  // THE BAKE: the mark shows its small (near-1:1) bake when it is small on screen, per platesize.js markBake
+  const bake = await pg.evaluate(async () => {
+    const { markBake } = await import('/lib/platesize.js');
+    const av = EW.remotes.get('nearmute')?.avatar, ear = av?.ear;
+    if (!ear?.userData?.maps) return { err: 'no bakes' };
+    const e = new EW.THREE.Vector3(); EW.camera.getWorldPosition(e); const d = av.root.position.distanceTo(e);
+    const px = ear.scale.x * EW.camera.projectionMatrix.elements[5] * EW.renderer.domElement.height / 2 / d;
+    return { px, bake: ear.userData.bake, want: markBake(px, ear.userData.bake), shown: ear.material.map === ear.userData.maps[ear.userData.bake],
+      small: ear.userData.maps.small.image.width };
+  }).catch((e) => ({ err: String(e).slice(0, 160) }));
+  check('ear bake: the one on screen is markBake(its on-screen size); the small bake is a ~1:1 canvas',
+    !bake.err && bake.bake === bake.want && bake.shown && bake.small <= 32, JSON.stringify(bake));
   // THE SIZE: the plate's width is platesize.js's answer for the world distance this frame (the wiring, not the math)
   const size = await pg.evaluate(async () => {
     const { plateSize } = await import('/lib/platesize.js');
@@ -209,6 +233,119 @@ try {
   B.pose = { ...B.pose, hear: true };
   fl = await until(async () => { const pl = await plate(pg, 'nearhear'); return { ok: earOff(pl), pl }; });
   check('…and back on fades it out', fl.ok, JSON.stringify(fl.pl?.ear));
+
+  // ---- OCCLUSION + HOLD-TO-REVEAL, measured in the render ---------------------------------------------------------
+  // the materials: body-attached sprites are depth-tested node sprites with the own-body depth pull; bubbles stay on top
+  const mats = await pg.evaluate(() => {
+    const av = EW.remotes.get('nearmute').avatar;
+    av.say?.('hello there');
+    const m = (s) => s && { node: !!s.material.isSpriteNodeMaterial, dt: s.material.depthTest, dw: s.material.depthWrite, dn: !!s.material.depthNode, clear: s.userData.plateClear };
+    av._typingUntil = performance.now() + 60000; av._typingState = 'mic';   // a live mic stacks ABOVE a bubble (a composing pill would give way to it)
+    return { label: m(av.label), ear: m(av.ear), bubble: av.bubble ? { dt: av.bubble.material.depthTest } : null };
+  });
+  await sleep(600);
+  const typ = await pg.evaluate(() => { const t = EW.remotes.get('nearmute').avatar.typing; return t && { node: !!t.material.isSpriteNodeMaterial, dt: t.material.depthTest, dn: !!t.material.depthNode, clear: t.userData.plateClear }; });
+  check('occlusion: plate and mark are depth-tested node sprites carrying the own-body depth pull (no depth writes)',
+    mats.label?.node && mats.label.dt === true && mats.label.dw === false && mats.label.dn && mats.label.clear >= 0.3
+    && mats.ear?.node && mats.ear.dt === true && mats.ear.dn, JSON.stringify(mats));
+  check('…the typing pill too (clearance ≥ the plate’s: it sits above it)', typ?.node && typ.dt === true && typ.dn && typ.clear >= mats.label.clear, JSON.stringify(typ));
+  check('…speech bubbles stay on top (depthTest off)', mats.bubble?.dt === false, JSON.stringify(mats.bubble));
+  await pg.evaluate(() => { const av = EW.remotes.get('nearmute').avatar; av._typingUntil = 0; });
+
+  // name-hued pixels inside a plate's box: THE measurement (#8fe8c8 on the dark pill; the walls here are neutral grey)
+  const namePx = async (id) => {
+    const p = await plate(pg, id);
+    if (!p) return { n: -1 };
+    const clip = { x: Math.max(0, Math.floor(p.l)), y: Math.max(0, Math.floor(p.t)), width: Math.ceil(p.r - p.l), height: Math.ceil(p.b - p.t) };
+    const b64 = (await pg.screenshot({ clip })).toString('base64');
+    const n = await pg.evaluate(async (b64) => {
+      const bm = await createImageBitmap(await (await fetch(`data:image/png;base64,${b64}`)).blob());
+      const c = new OffscreenCanvas(bm.width, bm.height), x = c.getContext('2d'); x.drawImage(bm, 0, 0);
+      const d = x.getImageData(0, 0, bm.width, bm.height).data; let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i + 1] > 150 && d[i + 1] - (d[i] + d[i + 2]) / 2 > 35) n++;
+      return n;
+    }, b64);
+    return { n, clip };
+  };
+  const reveal = () => pg.evaluate(async () => (await import('/lib/namereveal.js')).revealLevel()).catch((e) => `err: ${String(e).slice(0, 80)}`);
+  await pg.evaluate(() => { for (const id of ['nearhear', 'nearmute']) EW.remotes.get(id).avatar.mixer.timeScale = 0; });
+  await sleep(1200);
+  const open0 = await namePx('nearhear');
+  check('occlusion: the plate in the open shows its name (baseline)', open0.n >= 30, JSON.stringify(open0));
+  // a WALL: an opaque box halfway between the eye and the plate, sized to cover it
+  const place = (host, name, t, size) => pg.evaluate(([host, name, t, size]) => {
+    const T = EW.THREE, av = EW.remotes.get('nearhear').avatar, e = new T.Vector3(), l = new T.Vector3();
+    EW.camera.getWorldPosition(e); av.label.getWorldPosition(l);
+    const box = new T.Mesh(new T.BoxGeometry(size, size, size), new T.MeshBasicNodeMaterial({ color: 0x3a3a3a }));
+    box.name = name;
+    const at = e.clone().lerp(l, t);
+    const parent = host === 'scene' ? EW.scene : EW.remotes.get(host).avatar.vrm.scene;
+    parent.add(box); parent.updateMatrixWorld(true);
+    box.position.copy(parent.worldToLocal(at));
+    return at.toArray();
+  }, [host, name, t, size]);
+  const unplace = (host, name) => pg.evaluate(([host, name]) => {
+    const parent = host === 'scene' ? EW.scene : EW.remotes.get(host).avatar.vrm.scene;
+    const b = parent.getObjectByName(name); b?.removeFromParent(); b?.geometry.dispose();
+  }, [host, name]);
+  const pxUntil = async (id, want, ms = 5000) => { const t0 = Date.now(); let v; while (Date.now() - t0 < ms) { v = await namePx(id); if (want(v.n)) return v; await sleep(200); } return v; };
+  await place('scene', 'probe-wall', 0.5, 1.2);
+  const walled = await pxUntil('nearhear', (n) => n < 3);
+  check('occlusion: a wall between eye and plate hides it', walled.n < 3, JSON.stringify(walled));
+  await shot(pg, 'occl-a-walled.png');
+  // HOLD N: through the wall, at the held size
+  await pg.mouse.move(640, 690);
+  await pg.keyboard.down('KeyN');
+  const held = await pxUntil('nearhear', (n) => n >= 30);
+  const heldSz = await pg.evaluate(async () => {
+    const { plateSize } = await import('/lib/platesize.js'); const { revealLevel } = await import('/lib/namereveal.js');
+    const av = EW.remotes.get('nearhear').avatar, e = new EW.THREE.Vector3(); EW.camera.getWorldPosition(e);
+    const d = av.root.position.distanceTo(e);
+    return { k: revealLevel(), lw: av.label.scale.x, want: plateSize(d, 1).lw, clear: av.label.userData.plateClear, d };
+  }).catch((e) => ({ err: String(e).slice(0, 120) }));
+  check('reveal: holding N brings the walled plate through', held.n >= 30, JSON.stringify(held));
+  check('…at level 1, the held size (plateSize(d, 1)), depth pulled past the eye', heldSz.k === 1 && Math.abs(heldSz.lw - heldSz.want) < 0.01 && heldSz.clear >= heldSz.d,
+    JSON.stringify(heldSz));
+  await shot(pg, 'occl-b-walled-held.png');
+  await pg.keyboard.up('KeyN');
+  const relN = await pxUntil('nearhear', (n) => n < 3);
+  check('reveal: releasing N hides it again (level back to 0)', relN.n < 3 && (await reveal()) === 0, JSON.stringify(relN));
+  // N typed into the chat line reveals nothing
+  await pg.keyboard.press('Enter'); await sleep(300);
+  const focused = await pg.evaluate(() => document.activeElement?.id);
+  await pg.keyboard.down('KeyN'); await sleep(400);
+  const typedK = await reveal();
+  await pg.keyboard.up('KeyN');
+  const typedTxt = await pg.evaluate(() => document.getElementById('chatline')?.value ?? null);
+  check('reveal: N typed in the chat line reveals nothing (and types an n)', focused === 'chatline' && typedK === 0 && /n$/.test(typedTxt ?? ''),
+    JSON.stringify({ focused, typedK, typedTxt }));
+  await pg.evaluate(() => { const i = document.getElementById('chatline'); if (i) i.value = ''; });
+  await pg.keyboard.press('Escape'); await sleep(200);
+  await pg.evaluate(() => document.activeElement?.blur?.());
+  await unplace('scene', 'probe-wall');
+  // ANOTHER avatar's body in the way: the same box, but riding nearmute's body — it hides nearhear's plate
+  await place('nearmute', 'probe-other', 0.5, 1.2);
+  const other = await pxUntil('nearhear', (n) => n < 3);
+  check('occlusion: another avatar’s body in front hides the plate', other.n < 3, JSON.stringify(other));
+  await unplace('nearmute', 'probe-other');
+  // ITS OWN body through the plate: a 0.5 m box riding nearhear's own body, centred on the plate — re-measured
+  await pg.evaluate(() => {
+    const T = EW.THREE, av = EW.remotes.get('nearhear').avatar, l = new T.Vector3(); av.label.getWorldPosition(l);
+    const box = new T.Mesh(new T.BoxGeometry(0.5, 0.5, 0.5), new T.MeshBasicNodeMaterial({ color: 0x909090 }));
+    box.name = 'probe-own'; av.vrm.scene.add(box); av.vrm.scene.updateMatrixWorld(true);
+    box.position.copy(av.vrm.scene.worldToLocal(l)); av._ownClear = null;   // re-measure with the box as part of the body
+  });
+  const own = await pxUntil('nearhear', (n) => n >= 30);
+  const ownClear = await pg.evaluate(() => EW.remotes.get('nearhear').avatar._ownClear);
+  check('occlusion: its OWN body standing through the plate does not cut it (clearance re-measured past the box)',
+    own.n >= 30 && ownClear >= 0.43, JSON.stringify({ own, ownClear }));
+  await shot(pg, 'occl-c-own-body.png');
+  await pg.evaluate(() => { EW.remotes.get('nearhear').avatar._ownClear = 0; });   // the NAIVE depth test
+  const naive = await pxUntil('nearhear', (n) => n < 3);
+  check('…while the naive depth test (clearance 0) does cut it — the case the clearance exists for', naive.n < 3, JSON.stringify(naive));
+  await pg.evaluate(() => { const av = EW.remotes.get('nearhear').avatar; const b = av.vrm.scene.getObjectByName('probe-own'); b?.removeFromParent(); av._ownClear = null;
+    for (const id of ['nearhear', 'nearmute']) EW.remotes.get(id).avatar.mixer.timeScale = 1; });
+  await sleep(600);
 
   // ---- the hover card
   a = await plate(pg, 'nearmute');

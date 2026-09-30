@@ -356,7 +356,7 @@ a:hover { color: var(--fg); text-decoration-color: var(--brand); }
   border-radius: 0; color: var(--dim); font-size: 12px;
 }
 .chat-side-tog:hover { color: var(--fg); background: rgb(255 255 255 / .05); }
-.chat-cols.side-closed .chat-side-tog { border-left-color: transparent; border-right-color: transparent; }   /* no pane, no grab edge, no line — on EITHER side (live 09-07: left leaked a line) */
+.chat-cols.side-closed .chat-side-tog { display: none; }   /* collapsed: no strip at all, so the chat sits centred; the tab row's presence chip opens it (R, 09-29) */   /* no pane, no grab edge, no line — on EITHER side (live 09-07: left leaked a line) */
 .chat-side { flex: none; display: flex; flex-direction: column; position: relative; min-height: 0; }
 .chat-side.closed { display: none; }
 /* the grip straddles the LINE you can see (the toggler's border, between the log
@@ -396,6 +396,16 @@ a:hover { color: var(--fg); text-decoration-color: var(--brand); }
   background: none; border: none; color: var(--dim); border-radius: 5px;
   display: grid; place-items: center;
 }
+.chat-tabs .chat-who { flex: none; min-width: 0; align-self: center; display: inline-flex; align-items: center; gap: 6px;
+  margin-left: 4px; padding: 2px 8px; background: none; border: 1px solid transparent; border-radius: 999px;
+  color: var(--dim); font-size: var(--fs-xs); white-space: nowrap; cursor: pointer; }
+.chat-tabs .chat-who:hover { color: var(--fg); background: var(--hov); }
+.chat-tabs .chat-who.on { color: var(--fg); border-color: color-mix(in srgb, var(--brand) 35%, transparent); background: rgb(0 0 0 / .3); }
+.chat-who .who-dots { display: inline-flex; }
+.chat-who .who-dot { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 0 1.5px rgb(var(--panel-rgb)), 0 0 0 2.5px var(--ok); }
+.chat-who .who-dot + .who-dot { margin-left: -3px; }
+.chat-who .who-dot[data-presence="away"] { box-shadow: 0 0 0 1.5px rgb(var(--panel-rgb)), 0 0 0 2.5px var(--attn); opacity: .7; }
+.chat-who .who-dot[data-presence="busy"] { box-shadow: 0 0 0 1.5px rgb(var(--panel-rgb)), 0 0 0 2.5px var(--err); }
 .chat-gear { opacity: .4; }   /* quieter than the tabs — it's furniture, not content */
 .chat-gear:hover { opacity: 1; color: var(--fg); background: var(--hov); }
 .chat-gearpop { position: absolute; z-index: 8; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; font-size: var(--fs-sm);

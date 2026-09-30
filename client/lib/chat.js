@@ -732,7 +732,7 @@ function initSidePane() {
   // chat init mid-boot. Unreachable today; inconsistent with the file's own
   // thesis, which is the point. (agent review round 3)
   const tog = sideEl('tog');
-  if (tog) tog.onclick = () => { sideSt.open = !sideSt.open; applySide(); saveSide(); };
+  if (tog) tog.onclick = toggleSide;
 
     // DOUBLE-CLICK A NAME -> ITS DM TAB. R, 2026-09-11: "can you double-click on
     // a name in the People Here pane and have a DM tab show up correctly".
@@ -759,12 +759,28 @@ function initSidePane() {
     const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); saveSide(); };
     addEventListener('pointermove', move); addEventListener('pointerup', up);
   });
-  bus.on('roster', paintSide);
-  bus.on('presence:me', paintSide);                                   // my own mark flips at once
+  bus.on('roster', () => { paintSide(); paintWho(); });
+  bus.on('presence:me', () => { paintSide(); paintWho(); });                                   // my own mark flips at once
   setInterval(() => { if (frame?.visible && sideSt.open) paintSide(); }, 2000);   // remote presence rides pose packets; a 2 s repaint is plenty. (`side` was out of scope here — the first tick threw and the interval died: marks froze on their first value)
   applySide();
 }
 const saveSide = () => { try { localStorage.setItem(SIDE_LS, JSON.stringify(sideSt)) } catch {} };
+function toggleSide() { sideSt.open = !sideSt.open; applySide(); saveSide(); }
+// THE PRESENCE CHIP in the tab row: who's here at a glance (a dot per person in their name colour, ringed by
+// presence) and the pane's toggle. Collapsed, the pane leaves NO strip in the chat body, so tabs, log and compose sit
+// centred in the panel (R, 09-29: "the Chat and typing surface being off-center in its own panel ... when it's
+// collapsed"). Painted in place on roster/presence; paintTabs rebuilds the row and calls this for its new chip.
+function paintWho() {
+  const chip = frame?.body?.querySelector(':scope > .chat-cols > .chat-main > .chat-tabs > .chat-who');
+  if (!chip) return;
+  const people = getPeople(), others = people.filter((p) => !p.me).length;
+  const dots = [...people.filter((p) => !p.me), ...people.filter((p) => p.me)].slice(0, 3).map((p) =>
+    `<span class="who-dot" data-presence="${esc(p.presence ?? 'present')}" style="background:${colorFor(p.id)}"></span>`).join('');
+  chip.innerHTML = `<span class="who-dots">${dots}</span><span class="who-n">${others === 0 ? 'just you' : `${people.length} here`}</span>`;
+  chip.classList.toggle('on', !!sideSt.open);
+  chip.setAttribute('aria-pressed', String(!!sideSt.open));
+  chip.title = sideSt.open ? 'hide people here' : 'people here';
+}
 function applySide() {
   const side = sideEl('side');
   if (!side) return;
@@ -772,6 +788,7 @@ function applySide() {
   // the line between log and pane is the pane's grab edge; closed, there is
   // nothing to grab, so the line goes too (live, 09-05: a confusing affordance)
   sideEl('cols')?.classList.toggle('side-closed', !sideSt.open);
+  paintWho();
   side.style.width = sideSt.open ? `${sideSt.w}px` : '';
   // the chevron points the way the pane will move: on the right › closes / ‹ opens; mirrored on the left
   const left = sideSt.pos === 'left';
@@ -1201,6 +1218,10 @@ function paintTabs() {
   mk('mentions', 'mentions');
   mk('system', 'system');
   for (const [name, c] of convos) mk(`w:${name}`, `@${name}`, c.unread, true);
+  const who = document.createElement('button');
+  who.type = 'button'; who.className = 'chat-who';
+  who.onclick = (e) => { e.stopPropagation(); toggleSide(); };
+  bar.appendChild(who);
   const gear = document.createElement('button');
   gear.className = 'chat-gear';
   gear.title = 'chat options';
@@ -1211,6 +1232,7 @@ function paintTabs() {
   if (open) gearAnchor = gear;
   gear.onclick = (e) => { e.stopPropagation(); gearToggle?.(gear); };
   bar.appendChild(gear);                     // the gear stays OUTSIDE the scroller — always reachable
+  paintWho();
   paintArrows();
   // KEEP THE ACTIVE TAB IN VIEW. Overflow was sacrificing the tab you are
   // actually reading: R's screenshot shows `system| @H` — the open whisper

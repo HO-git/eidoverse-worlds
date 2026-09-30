@@ -90,6 +90,23 @@ try {
   check('Enter still focuses the chat line (the prompt is additive)', await pg.evaluate(() => document.activeElement?.id === 'chatline'));
   await pg.keyboard.press('Escape'); await sleep(200);
 
+  // PEOPLE HERE, collapsed: no strip in the chat body, so tabs/log/compose sit centred; the tab row's presence chip
+  // is the toggle (R, 09-29: off-centre "when it's collapsed")
+  { const cols = await rect(pg, '.chat-frame .chat-cols'), main = await rect(pg, '.chat-frame .chat-main');
+    const strip = await rect(pg, '.chat-frame .chat-side-tog'), chip = await rect(pg, '.chat-frame .chat-who');
+    const chipText = await pg.evaluate(() => document.querySelector('.chat-frame .chat-who')?.textContent?.trim());
+    check('people collapsed: no side strip, the chat body spans the whole panel (centred)',
+      !strip?.shown && cols && main && Math.abs(main.l - cols.l) < 1 && Math.abs(main.r - cols.r) < 1, JSON.stringify({ cols, main, strip }));
+    check('…and the presence chip sits in the tab row, reading "just you"', chip?.shown && chipText === 'just you', JSON.stringify({ chip, chipText }));
+    await pg.click('.chat-frame .chat-who'); await sleep(250);
+    const side = await rect(pg, '.chat-frame .chat-side');
+    const on = await pg.evaluate(() => document.querySelector('.chat-frame .chat-who')?.classList.contains('on'));
+    check('clicking the chip opens today\'s people column, the chip marked active', side?.shown && on, JSON.stringify({ side, on }));
+    await shot(pg, '08-people-open-1280x720.png');
+    await pg.click('.chat-frame .chat-who'); await sleep(250);
+    check('…and clicking it again collapses the column', !(await rect(pg, '.chat-frame .chat-side'))?.shown);
+  }
+
   // Ctrl+K opens
   await pg.keyboard.press('Control+k'); await sleep(250);
   let L = await lantern(pg);

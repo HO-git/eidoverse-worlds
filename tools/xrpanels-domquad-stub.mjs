@@ -10,5 +10,6 @@ export const domQuadsPick = () => null;
 export const domQuadsSetShown = rec('domQuadsSetShown');
 export const domQuadsShown = () => false;
 export const domQuadShow = rec('domQuadShow');
+export const domQuadOpen = () => false;
 export const domQuadsGrab = rec('domQuadsGrab');
 export const domQuadRelease = rec('domQuadRelease');

@@ -352,15 +352,18 @@ export function paintPresence(state) {
   b.title = `profile · ${state}`;
 }
 
+// one resolver for the rail AND the VR ring: the ring read only entry.icon, so frames whose glyph comes from the
+// id/emoji fallbacks (debug, world, chat) drew blank discs in VR (the owner's headset pass, 09-27)
+const iconOf = (e) => e.icon ?? ID_ICON[e.id] ?? EMOJI_ICON[(e.label ?? '').replace(/\uFE0F/g, '')];
 export function dockPins() {
   return dockEntries
     .filter((e) => !e.action && (pins.has(e.id) || !!getFrame(e.id)?.visible))
-    .map((e) => ({ id: e.id, icon: e.icon, open: !!getFrame(e.id)?.visible }));
+    .map((e) => ({ id: e.id, icon: iconOf(e), open: !!getFrame(e.id)?.visible }));
 }
 
 function addDockButton(entry) {
   const { id, label, action } = entry;
-  const icon = entry.icon ?? ID_ICON[id] ?? EMOJI_ICON[(label ?? '').replace(/\uFE0F/g, '')];   // upstream main.js still labels the rail with emoji; chrome never rides emoji
+  const icon = iconOf(entry);   // upstream main.js still labels the rail with emoji; chrome never rides emoji
   const b = document.createElement('button');
   // both weights ride the button; CSS shows the LINE glyph at rest and the
   // FILL glyph while the window is open (the .on class) — a glyph swap, not

@@ -401,6 +401,7 @@ function drawTypingDots(sprite, t, state) {
 // ---------------------------------------------------------------- Avatar
 
 const _v = new THREE.Vector3();
+const _plateEye = new THREE.Vector3();   // nameplate fade: the camera's world position
 const _pq = new THREE.Quaternion();
 const _rq = new THREE.Quaternion();
 const _rq2 = new THREE.Quaternion();
@@ -2210,7 +2211,7 @@ export class Avatar {
     // ---- nameplate: fade with distance and stop screaming across the stage.
     // depthTest is off (labels must not be eaten by your own shoulder), so
     // distance is what keeps 24 of them from becoming a wall of text.
-    const d = this.root.position.distanceTo(camera.position);
+    const d = this.root.position.distanceTo(camera.getWorldPosition(_plateEye));   // WORLD: in XR camera.position is rig-local (review 10a M4)
     const vis = THREE.MathUtils.clamp(1 - (d - 18) / 14, 0, 1);
     this.label.material.opacity = vis;
     this.label.visible = vis > 0.02 && !this.hideLabel;   // hideLabel: your own name is for OTHER eyes (set while presenting, xr.js selfFirstPerson)

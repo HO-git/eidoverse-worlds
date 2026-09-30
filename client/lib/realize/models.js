@@ -218,7 +218,7 @@ function scheduleLoad(id, ent, gen, tier = null) {
     key: `entity:${id}`, owner: `entity:${id}`, lane: 'net',
     // live distance from the camera to the entity's CURRENT folded position —
     // re-read at dequeue, so walking toward a thing promotes its load
-    priority: () => bandForDistance(camera.position.distanceTo(
+    priority: () => bandForDistance(camWorld().distanceTo(
       _v.set(...(state.st.entities[id]?.pos ?? [0, 0, 0])))),
     run: async (signal) => {
       // a first load chooses its tier at DEQUEUE, once /version has answered
@@ -715,9 +715,17 @@ function residencyRadius(ent) {
 let residencyFocus = null;
 export function setResidencyFocus(fn) { residencyFocus = fn; }
 const _f = new THREE.Vector3();
+// WORLD position: in XR the camera is a child of the rig (xr.js rig.add(camera)), so camera.position is the head's
+// offset INSIDE the rig — near the origin wherever you stand. With the min() below, everything near spawn read as
+// "close" in VR: loaded at full detail, never demoted, never on its LOD (found in a
+// headset test, 09-24). Desktop: no parent, the same number.
+const _cw = new THREE.Vector3();
+const camWorld = () => camera.getWorldPosition(_cw);
+/** Test seam (tools/camera-world-probe): the residency/LOD distance for a folded entity. */
+export const residencyDistance = (ent) => entDist(ent);
 function entDist(ent) {
   _v.set(...(ent?.pos ?? [0, 0, 0]));
-  let d = camera.position.distanceTo(_v);
+  let d = camWorld().distanceTo(_v);
   const p = residencyFocus?.();
   if (p) d = Math.min(d, _f.set(p.x, p.y, p.z).distanceTo(_v));
   return d;

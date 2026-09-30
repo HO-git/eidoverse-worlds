@@ -72,7 +72,7 @@ try {
       phase: sp?.querySelector('.sp-phase')?.textContent ?? null, raysHandle: !!globalThis.__raysWorker, raysStarted: globalThis.__raysStarted === true,
       raysAck: globalThis.__raysAck === true, raysNoGl: globalThis.__raysNoGl === true,
       backend: globalThis._r?.backend ? (globalThis._r.backend.isWebGLBackend ? 'webgl' : 'webgpu') : null, xrEnabled: !!globalThis._r?.xr?.enabled,
-      tolerance: !!globalThis.__renderListTolerance, xrShadow: globalThis.__xrShadowPatched === true, raysCanvas: !!document.querySelector('#splash .sp-rays'),
+      tolerance: !!globalThis.__renderListTolerance, xrShadow: globalThis.__xrShadowPatched === true, xrPixelRatio: globalThis.__xrPixelRatioGuarded === true, xrPass: globalThis.__xrPassSplit === true, raysCanvas: !!document.querySelector('#splash .sp-rays'),
       hasBody: !!globalThis.EW?.me?.(),
       capsule: !!globalThis.EW?.me?.()?.isCapsule,   // the body of last resort (capsulebody.js) — an avatar error BEFORE it is the expected story
       // REACHABILITY, not scrollWidth: html,body use overflow:hidden, so a frame
@@ -143,6 +143,8 @@ try {
   if (s.xrEnabled !== wantXR) { fail(`xr.enabled=${s.xrEnabled} but query "${QUERY}" ${wantXR ? 'is' : 'is not'} an XR boot`); }
   if (s.tolerance !== wantXR) { fail(`tolerant render list ${s.tolerance ? 'installed' : 'not installed'} at boot; it must install only for an XR boot (query "${QUERY}")`); }
   if (!s.xrShadow) { fail('the ShadowNode XR-off patch was not applied at boot (core.js → xrshadow.js)'); }
+  if (!s.xrPass) { fail('stereo renders were not split into their own pass at boot (core.js → xrpass.js): every VR switch rebuilds'); }
+  if (!s.xrPixelRatio) { fail('the XR pixel-ratio guard (#32 split vision) was not applied at boot (core.js → xrpixelratio.js)'); }
   // REACHABILITY (#185 review). Every visible frame must lie inside the viewport.
   // Not scrollWidth: html,body use overflow:hidden, so a frame past the edge is
   // simply unreachable and the document reports no overflow at all. Run this at a

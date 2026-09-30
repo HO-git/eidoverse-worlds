@@ -30,6 +30,7 @@ import { heightAt } from './terrain.js';
 import { surfaceUnder } from './colliders.js';
 import { DRIVEN_BONES } from './ragdoll.js';
 import { stroke as strokeIcon } from './icons.js';
+import { plateSize } from './platesize.js';
 import { SEAT_CLIP_FILE } from './seatcore.js';
 import { planReaches } from '../../shared/reachorder.js';
 import { poseChannels } from '../../shared/humanoid.js';
@@ -2235,17 +2236,15 @@ export class Avatar {
 
     BC('av:plates');
 
-    // ---- nameplate: fade with distance and stop screaming across the stage.
-    // depthTest is off (labels must not be eaten by your own shoulder), so
-    // distance is what keeps 24 of them from becoming a wall of text.
+    // ---- nameplate: world-sized up close, held at a readable angle at range, faded out past 20–30 m (platesize.js
+    // says why). depthTest is off (labels must not be eaten by your own shoulder), so distance is what keeps 24 of
+    // them from becoming a wall of text.
     const d = this.root.position.distanceTo(camera.getWorldPosition(_plateEye));   // WORLD: in XR camera.position is rig-local (review 10a M4)
-    const vis = THREE.MathUtils.clamp(1 - (d - 18) / 14, 0, 1);
+    const { lw, vis } = plateSize(d);
     this.label.material.opacity = vis;
     this.label.visible = vis > 0.02 && !this.hideLabel;   // hideLabel: your own name is for OTHER eyes (set while presenting, xr.js selfFirstPerson)
-    this.label.scale.setScalar(0); // reset then set (scale carries aspect)
-    const lw = 0.9 * (1 + Math.max(0, d - 8) * 0.012); // gentle size hold at range
-    this.label.scale.set(lw, lw * 64 / 512, 1);
-    // the ear beside it: fades toward setDeafMark's wish (the only motion it has), always at the plate's own fade
+    this.label.scale.set(lw, lw * 64 / 512, 1);   // scale carries the aspect
+    // the headphones beside it: fades toward setDeafMark's wish (the only motion it has), always at the plate's own fade
     const earWant = (this._earWant ?? 0) * (this.label.visible ? 1 : 0);
     this._earA = (this._earA ?? 0) + (earWant - (this._earA ?? 0)) * (1 - Math.exp(-dt / 0.12));
     if (this._earA > 0.01 && !this.ear) { this.ear = makeEar(); this.root.add(this.ear); }

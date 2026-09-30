@@ -218,9 +218,9 @@ export const micLive = () => { try { return micIsOn(); } catch { return false; }
 export const earOn = () => { try { return receivingVoice() && !isHushed(); } catch { return false; } };
 export { flipMic, flipEar };
 // the glyphs' two acts, findable by name (the key is V's voice-activation meaning; in PTT mode V holds to talk)
-registerAction({ id: 'voice:mic', title: 'microphone on / off', group: 'voice', key: 'V',
+registerAction({ id: 'voice:mic', title: 'microphone on / off', group: 'voice', key: 'V', icon: 'mic',
   keywords: ['mic', 'mute', 'unmute', 'talk', 'speak', 'voice'], run: () => flipMic() });
-registerAction({ id: 'voice:ear', title: 'hear voices on / off', group: 'voice',
+registerAction({ id: 'voice:ear', title: 'hear voices on / off', group: 'voice', icon: 'ear',
   keywords: ['ear', 'hush', 'deafen', 'headphones', 'listen', 'voice'], run: () => flipEar() });
 /** the menu wears the SAME glyphs as the floating pair */
 export const xrGlyph = (size = 16) => XR_SVG(xrLive()).replace('width="26" height="26"', `width="${size}" height="${size}"`);

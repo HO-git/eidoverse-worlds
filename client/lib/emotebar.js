@@ -245,10 +245,10 @@ export function initEmoteBar() {
       tiles.set(name, b);
       // the tile's own act, findable by name; number keys 1–9 follow EMOTE_ORDER (main.js)
       registerAction({ id: `emote:${name}`, title: name, group: 'emotes', keywords: ['emote', 'gesture'],
-        key: i < 9 ? String(i + 1) : undefined, run: b.onclick });
+        icon: emojiRenders(em) ? em : undefined, key: i < 9 ? String(i + 1) : undefined, run: b.onclick });
     });
     // sit and lie are keys (X, Z — controller.js registers those); standing up has no key, only this tile
-    registerAction({ id: 'posture:stand', title: 'stand up', group: 'body', keywords: ['posture', 'get up'],
+    registerAction({ id: 'posture:stand', title: 'stand up', group: 'body', keywords: ['posture', 'get up'], icon: 'personStanding',
       run: () => { posture('stand'); paint(); } });
     if (f._state) snapTo(f._state.w);
   };

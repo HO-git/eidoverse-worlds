@@ -1011,8 +1011,10 @@ export function initChat({ send, whisper, typing, people }) {
     if (row.listed === false) continue;
     const needsArg = new RegExp(`^/${row.name} <`).test(row.help);
     registerAction({
-      id: `cmd:${row.name}`, title: `/${row.name}`, group: 'commands',
-      keywords: [row.name, ...(row.aliases ?? []), row.help.replace(/^\/\S+\s*/, '').replace(/[<>[\]—|"]/g, ' ')],
+      id: `cmd:${row.name}`, title: `/${row.name}`, group: 'commands', detail: row.help,
+      // the name is already a word of the title ('/sit'), so it is not ALSO an exact keyword: an exact keyword
+      // outranked the thing itself ('sit' led with /sit, not the body's own sit / stand)
+      keywords: [...(row.aliases ?? []), row.help.replace(/^\/\S+\s*/, '').replace(/[<>[\]—|"]/g, ' ')],
       ...(needsArg ? { fill: `/${row.name} ` } : { run: () => submitLine(`/${row.name}`) }),
     });
   }

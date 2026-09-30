@@ -21,6 +21,10 @@
 //     when     () => bool — hidden while false (a builder-only wrench)
 //     fill     text a prompt should put in its line instead of running (a command
 //              that needs an argument: '/w ')
+//     icon     optional: an icons.js glyph name, or an emoji literal (an emote
+//              tile's own face) — how a row looks, never how it matches
+//     detail   optional: a dim second phrase ("open the sky section"; a command's
+//              help line) — display only, never matched
 //   list(query, { limit }) → [{ action, score }] best first; '' lists everything
 //   score(query, action)   → number, 0 = no match. Exported for the tests.
 
@@ -54,8 +58,9 @@ const visible = (a) => { try { return a.when ? !!a.when() : true; } catch { retu
 // so "mute" finds the mic through its keyword but a title that says "mute" wins,
 // and a keyword merely STARTING with what you typed ("hi" → "hide") is never STRONG.
 //
-// STRONG (>= 850) is the line a prompt uses to decide whether plain text is a
-// command or speech: a title exact/prefix, an exact keyword, or the key itself.
+// STRONG (>= 850): a title exact/prefix, an exact keyword, or the key itself — a
+// confident match. (The lantern once used it to guess command-or-speech; it no
+// longer guesses: Enter says, Tab does. Kept for surfaces that want confidence.)
 const WORD_SPLIT = /[\s\-_/·:▸.,()'"]+/;
 
 function tier(q, text) {

@@ -300,6 +300,7 @@ export function makeSection(title, onOpen, { id = '', host: hostName = 'world' }
   const label = /^[\p{L}\p{N}]/u.test(title) ? title : title.replace(/^\S+\s+/, '');   // "☀ sky" → "sky"
   registerAction({
     id: `section:${hostName}:${label}`, title: label, group: hostName, keywords: [hostName],
+    icon: glyph ?? undefined, detail: `open the ${label} section`,
     run: () => api.toggle(true).then(() => box.scrollIntoView({ block: 'nearest' })).catch((e) => report(title, e)),
   });
   return api;
@@ -400,7 +401,7 @@ function addDockButton(entry) {
   b.dataset.toggles = id;   // NOT data-frame — that belongs to the window itself
   // the same act, findable by name in the lantern; a key table may merge its key in (main.js)
   registerAction({
-    id: `panel:${id}`, title: PANEL_TITLE[id] ?? id, group: 'panels',
+    id: `panel:${id}`, title: PANEL_TITLE[id] ?? id, group: 'panels', icon, detail: 'open / close the panel',
     keywords: [id, 'panel', ...(PANEL_WORDS[id] ?? [])],
     when: action && entry.gate ? entry.gate : undefined,
     run: () => b.onclick(),

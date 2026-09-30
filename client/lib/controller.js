@@ -312,9 +312,9 @@ bus.on('key', (e) => {
 // The body's keys, as data: the handler above dispatches from this table and the
 // lantern lists it (actions.js), so a key and its row cannot drift apart.
 const BODY_KEYS = [
-  { code: 'KeyX', key: 'X', id: 'sit', title: 'sit / stand', keywords: ['seat', 'chair', 'posture'], run: () => toggleSit() },
+  { code: 'KeyX', key: 'X', id: 'sit', title: 'sit / stand', icon: 'armchair', keywords: ['seat', 'chair', 'posture'], run: () => toggleSit() },
   { code: 'KeyF', key: 'F', id: 'fly', title: 'fly', keywords: ['flight', 'wings', 'land'], run: () => { const m = toggleFlight(); if (m) flashHint?.(m); } },
-  { code: 'KeyZ', key: 'Z', id: 'lie', title: 'lie down', keywords: ['posture', 'rest', 'sleep'], run: () => { posture = posture === 'lie' ? null : 'lie'; myState.seat = null; } },
+  { code: 'KeyZ', key: 'Z', id: 'lie', title: 'lie down', icon: 'bed', keywords: ['posture', 'rest', 'sleep'], run: () => { posture = posture === 'lie' ? null : 'lie'; myState.seat = null; } },
   { code: 'KeyG', key: 'G', id: 'fold', title: 'fold wings', keywords: ['wings', 'unfold'], run: () => { const m = toggleFold(meRef()); if (m) flashHint?.(m); } },
 ];
 for (const { code, ...a } of BODY_KEYS) registerAction({ ...a, id: `body:${a.id}`, group: 'body' });

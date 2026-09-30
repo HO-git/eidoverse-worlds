@@ -4,7 +4,8 @@
 // frame loop reads them without a round trip. Visible whether or not a
 // headset is sensed — the first row says which, so the rest make sense.
 import { makeSection, flashHint } from './ui.js';
-import { checkRow, selectRow, btn } from './rows.js';
+import { checkRow, selectRow, btn, sliderTable } from './rows.js';
+import { currentGrade, setGrade, GRADE_DEFAULT, GRADE_RANGE } from './quadcolour.js';
 import { xrPrefs, setXrPref, recentreXR, isPresenting } from './xr.js';
 import { xrGlyphAvailable } from './mictoggle.js';
 
@@ -52,6 +53,17 @@ export function initVRPanel() {
       (on) => { setXrPref('seated', !!on); flashHint(`VR seated ${on ? 'on' : 'off'}`); if (isPresenting()) recentreXR('seated'); });
     seated.title = 'playing from a chair: the body stands at its own height under your head, and your real height is not measured. Recentres when toggled.';
     body.appendChild(seated);
+
+    // the VR panels' look (owner, 09-30: colours read less vibrant in the headset): saturation and contrast applied to
+    // the panel quads only (quadcolour.js), never the design tokens or the desktop. Live while presenting; persisted.
+    const g = { ...currentGrade() };
+    const grade = sliderTable([['saturation', ...GRADE_RANGE.saturation, 0.05], ['contrast', ...GRADE_RANGE.contrast, 0.02]], g, {
+      set: (k, v) => { g[k] = v; Object.assign(g, setGrade({ [k]: v })); },
+      fmt: (k, v) => Number(v).toFixed(2), label: (k) => (k === 'saturation' ? 'panel sat' : 'panel contr'), nmW: '64px', vW: '34px',
+    });
+    grade.el.title = 'VR panels only: how saturated and how contrasty the panels look in the headset. The desktop and your style colours are untouched.';
+    body.appendChild(grade.el);
+    body.appendChild(btn('panel look: defaults', () => { Object.assign(g, setGrade(GRADE_DEFAULT)); grade.repaint(); flashHint(`VR panels: saturation ${GRADE_DEFAULT.saturation}, contrast ${GRADE_DEFAULT.contrast}`); }));
 
     const rc = btn('recentre now', () => { if (!recentreXR('settings')) flashHint('recentre: enter VR first'); else flashHint('recentred'); });
     rc.title = 'body under your head, facing where you face. Also on the VR ring (right-stick press).';

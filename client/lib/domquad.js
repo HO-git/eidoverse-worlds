@@ -6,10 +6,11 @@
 // element is moved into an offscreen-but-laid-out stage (HTMLMesh measures with
 // getBoundingClientRect, never elementFromPoint, so negative coordinates are fine) and
 // returned, with its display state, on exit. Fallback for comparison: ?canvasquads=1.
-import { THREE } from './core.js';
+import { THREE, renderer } from './core.js';
 import { tee, bus } from './base.js';
 import { allFrames, getFrame } from './frames.js';
 import { HTMLMesh } from './vendor/htmlmesh.js';
+import { quadMaterial } from './quadcolour.js';
 
 const PX_PER_M = 900;      // xrpanels' density — the number the tester's eyes accepted
 const W = 0.58;            // metres across, like the canvas quads
@@ -77,6 +78,7 @@ function build(q) {
   builds++;
   mesh.material.transparent = false;   // stays in the opaque pass (no sorting, no blending)…
   mesh.material.alphaTest = 0.5;       // …while the raster's clear corners (a frame's border-radius) cut out instead of drawing black
+  prepareQuadMaterial(mesh);           // the authored colour after the output pass (quadcolour.js says why)
   const k = W / (cssW * 0.001);   // HTMLMesh geometry = CSS px × 1 mm; rescale to W metres
   mesh.scale.setScalar(k);
   const a = (q.i - (q.n - 1) / 2) * 0.55;
@@ -89,6 +91,9 @@ function build(q) {
   mesh.userData.noCamCollide = true;
   q.mesh = mesh; q.builtAt = [el.offsetWidth, el.offsetHeight];
 }
+
+/** The quad's material: undoes the renderer's ACES output pass and applies the VR panel grade (exported for the probe). */
+export const prepareQuadMaterial = (mesh) => quadMaterial(mesh, renderer);
 
 function drop(q) { if (!q.mesh) return; q.mesh.removeFromParent(); q.mesh.dispose(); q.mesh = null; }
 

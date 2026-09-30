@@ -9,6 +9,8 @@ const { browser, page } = await launchBrowser();
 try {
   const pg = await page();
   const errs = []; pg.on('pageerror', (e) => errs.push(String(e)));
+  // THE SKY GUARD, before any module reads localStorage: a cloudy sky bakes on the CPU in headless Chromium
+  await pg.addInitScript(() => { try { localStorage.setItem('ew-cloud-quality', 'off'); } catch {} });
   // the real catalog has no stale/deferred entries today — without these the ⚠ rule for them would pass on an
   // EMPTY measurement. Append synthetic entries (every state the server can emit) to the real response.
   const SYN = [

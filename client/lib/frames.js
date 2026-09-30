@@ -959,7 +959,10 @@ export function claimEscape(fn) { escClaims.push(fn); }
 addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || e.defaultPrevented) return;
   if (escapeIsClaimed()) return;
-  escapeToggle();
+  const did = escapeToggle();
+  // said, not only done: ui.js flashes "panels hidden · Esc to bring back" on the hint bar (the lantern's resting line
+  // steps aside for it) — frames imports no ui, so the gesture goes out on the bus
+  if (did !== 'nothing') bus.emit('esc-quiet', did);
 });
 export function escapeToggle() {
   const open = [...frames.values()].filter((f) => f.visible);

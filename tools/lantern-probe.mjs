@@ -112,6 +112,7 @@ try {
     let st = await openState();
     check('open (left, the default): the chip is hidden; the column sits LEFT of the chat, its header a button with ‹',
       !st.chipShown && st.role === 'button' && st.chev === '‹' && st.sideLeftOfMain && st.sideW > 0, JSON.stringify(st));
+    await pg.mouse.move(900, 300); await sleep(150);
     await shot(pg, '13-people-open-header-close.png');
     // the gear: at the right end of the compose box, its popover opening UPWARD from there
     const gear = await rect(pg, '.chat-frame .chat-compose > .chat-gear'), line = await rect(pg, '#chatline');
@@ -186,6 +187,34 @@ try {
     JSON.stringify(during));
   await sleep(2200);
   check('…and the line comes back when the flash is done', (await rect(pg, '#lantern-pill'))?.shown);
+
+  // ESC QUIET: with nothing else claiming Esc it puts every open panel away and says how to get them back; Esc again
+  // brings back exactly those. The layered closes come first: an open ∃ menu or the chat gear's popover takes Esc
+  // and the panels stay.
+  { const shown = () => pg.evaluate(() => [...document.querySelectorAll('.frame')].filter((f) => getComputedStyle(f).display !== 'none')
+      .map((f) => f.dataset.frame).sort().join());
+    await pg.mouse.click(900, 300); await sleep(200);
+    const before = await shown();
+    await pg.click('#hud'); await sleep(250);
+    await pg.keyboard.press('Escape'); await sleep(200);
+    check('Esc with the ∃ menu open closes the menu, not the panels',
+      await pg.evaluate(() => document.getElementById('emenu').hidden) && (await shown()) === before, JSON.stringify({ before, now: await shown() }));
+    await pg.click('.chat-frame .chat-compose > .chat-gear'); await sleep(200);
+    await pg.keyboard.press('Escape'); await sleep(200);
+    check('Esc with the chat gear’s popover open folds it, not the panels',
+      await pg.evaluate(() => document.querySelector('.chat-gearpop').hidden) && (await shown()) === before, JSON.stringify({ before, now: await shown() }));
+    await pg.mouse.click(900, 300); await sleep(200);
+    await pg.keyboard.press('Escape'); await sleep(300);
+    const hid = { frames: await shown(), hint: await rect(pg, '#hintbar'), hintText: await pg.evaluate(() => document.getElementById('hintbar').textContent),
+      pill: await rect(pg, '#lantern-pill') };
+    check('Esc (nothing else claiming it) hides every open panel', before.length > 0 && hid.frames === '', JSON.stringify({ before, ...hid }));
+    check('…and the hint bar says "panels hidden · Esc to bring back" in the resting line’s place', hid.hint?.shown && /^panels hidden · Esc to bring back$/.test(hid.hintText.trim()) && !hid.pill?.shown,
+      JSON.stringify(hid));
+    await shot(pg, '15-esc-hidden.png');
+    await pg.keyboard.press('Escape'); await sleep(300);
+    const back = { frames: await shown(), hintGone: await pg.evaluate(() => document.getElementById('hintbar').classList.contains('gone')), pill: await rect(pg, '#lantern-pill') };
+    check('Esc again brings back exactly those panels, and the hint gives the spot back at once', back.frames === before && back.hintGone && back.pill?.shown, JSON.stringify({ before, ...back }));
+  }
 
   // observe the acts the keys may or may not fire
   await pg.evaluate(async () => {

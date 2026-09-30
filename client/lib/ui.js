@@ -109,15 +109,23 @@ export function setAmbientHint(html) {
   if (ambientHint) { el.hint.innerHTML = ambientHint; el.hint.classList.remove('gone'); }
   else el.hint.classList.add('gone');
 }
+// Esc put every panel away (frames.js): say how to get them back, for a few seconds; when they come back, stop saying it
+bus.on('esc-quiet', (did) => {
+  if (did === 'closed') flashHint('<span>panels hidden · <kbd>Esc</kbd> to bring back</span>', 4000);   // one span: the bar is a flex row, which would eat the spaces around the key
+  else if (did === 'restored' && el.hint._t && /panels hidden/.test(el.hint.textContent)) endFlash();
+});
 export function flashHint(html, ms = 2600) {
   el.hint.innerHTML = html;
   el.hint.classList.remove('gone');
   clearTimeout(el.hint._t);
-  el.hint._t = setTimeout(() => {
-    el.hint._t = null;
-    if (ambientHint) el.hint.innerHTML = ambientHint;
-    else el.hint.classList.add('gone');
-  }, ms);
+  el.hint._t = setTimeout(endFlash, ms);
+}
+// a flash is over (its time ran out, or what it said stopped being true): the bar goes back to the ambient offer or away
+function endFlash() {
+  clearTimeout(el.hint._t);
+  el.hint._t = null;
+  if (ambientHint) el.hint.innerHTML = ambientHint;
+  else el.hint.classList.add('gone');
 }
 
 // ============================================================ cursors

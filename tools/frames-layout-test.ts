@@ -452,10 +452,15 @@ f.show(); mid.show();
 const esc = (target: EventTarget = document.body) => target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 const open = () => allFrames().filter((x: any) => x.visible).map((x: any) => x.id);
 check("setup: two frames open", open().join() === "t,mid", open().join());
+const { bus: stubBus } = await import("./chat-core-stub.mjs");
+const quiet: string[] = [];
+stubBus.on("esc-quiet", (d: string) => quiet.push(d));
 esc();
 check("Esc closes every open frame", open().length === 0, open().join());
+check("…and says so on the bus (ui.js flashes 'panels hidden · Esc to bring back')", quiet.join() === "closed", quiet.join());
 esc();
 check("Esc again restores exactly that set", open().sort().join() === "mid,t", open().join());
+check("…and says that too (the hint stops)", quiet.join() === "closed,restored", quiet.join());
 {
   const input = document.createElement("input");
   document.body.appendChild(input);
@@ -463,6 +468,7 @@ check("Esc again restores exactly that set", open().sort().join() === "mid,t", o
   check("escapeIsClaimed() = 'field' while an input is focused", escapeIsClaimed() === "field", String(escapeIsClaimed()));
   esc(input);
   check("Esc with an input focused leaves the frames alone", open().length === 2, open().join());
+  check("…and announces nothing", quiet.join() === "closed,restored", quiet.join());
   input.blur(); input.remove();
   check("...and is unclaimed once it blurs", escapeIsClaimed() === null, String(escapeIsClaimed()));
 }

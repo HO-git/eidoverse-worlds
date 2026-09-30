@@ -20,6 +20,8 @@ try {
   const errs = [];
   pg.on('pageerror', (e) => errs.push(e.message));
   pg.on('dialog', (d) => d.dismiss().catch(() => {}));   // decline the STT consent ask
+  // THE SKY GUARD, before any module reads localStorage: a cloudy sky bakes on the CPU in headless Chromium
+  await pg.addInitScript(() => { try { localStorage.setItem('ew-cloud-quality', 'off'); } catch {} });
   await pg.goto(`${world.origin}/?world=probe&key=${world.key}&name=micprobe`,
     { waitUntil: 'domcontentloaded' });
   await pg.fill('#d-name', 'micprobe').catch(() => {});

@@ -33,3 +33,34 @@ export function applyVoiceWire(target, sample) {
   if (typeof sample.hear === 'boolean') { target.hear = sample.hear; did = true; }
   return did;
 }
+
+// This body's size and nameplate lift (2026-09-30, Profile › Avatar "this body"): `scale` — the wearer's chosen size
+// multiplier (Basis/VRChat semantics: the body, its eyes, stride and collider grow together); `plateY` — metres the
+// nameplate hangs above the measured crown, at the body's authored size (it grows with the body). Both are sent only
+// when they differ from the default, so ABSENCE MEANS DEFAULT (1 and 0): a client that predates this sends neither and
+// its body is exactly what it always was; a sender resetting to default simply stops sending. Never trust the wire —
+// every receiver clamps (scale 0.5–2, plateY −0.3…+0.8 m) and anything non-finite reads as the default.
+export const BODY_SCALE_MIN = 0.5, BODY_SCALE_MAX = 2;
+export const PLATE_Y_MIN = -0.3, PLATE_Y_MAX = 0.8;
+const clampTo = (v, lo, hi, dflt) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt);
+export const clampBodyScale = (v) => clampTo(v, BODY_SCALE_MIN, BODY_SCALE_MAX, 1);
+export const clampPlateY = (v) => clampTo(v, PLATE_Y_MIN, PLATE_Y_MAX, 0);
+
+export function bodyWire(b) {
+  const o = {};
+  const s = Math.round(clampBodyScale(b?.scale) * 100) / 100;      // 1% steps: what the slider offers
+  const y = Math.round(clampPlateY(b?.plateY) * 100) / 100;        // 1 cm
+  if (s !== 1) o.scale = s;
+  if (y !== 0) o.plateY = y;
+  return o;
+}
+
+/** Writes { scale, plateY } onto target from one pose sample — always both, absence = default. Returns true when
+ *  either changed (so a receiver can skip the re-apply). */
+export function applyBodyWire(target, sample) {
+  if (!target || !sample) return false;
+  const s = clampBodyScale(sample.scale), y = clampPlateY(sample.plateY);
+  const did = target.scale !== s || target.plateY !== y;
+  target.scale = s; target.plateY = y;
+  return did;
+}

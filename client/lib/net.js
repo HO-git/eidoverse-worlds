@@ -15,7 +15,7 @@ import { pending, P } from './scheduler.js';
 // the net → chat → net cycle). One writer per verb, always.
 
 import { wingFoldPresence } from '../../shared/wingpresence.js';
-import { presenceWire, voiceWire } from '../../shared/presencewire.js';
+import { presenceWire, voiceWire, bodyWire } from '../../shared/presencewire.js';
 import { presence } from './presence.js';
 import { logChat, logWhisper, noteTyping, noteHistoryContext } from './chat.js';
 import { markPhase } from './boot.js';
@@ -243,6 +243,7 @@ export function sendPose(now) {
     ...voiceWire(hooks.myVoice()),      // mic live / hearing voices — the nameplate ear and hover card
   };
   const avatar = hooks.me();
+  Object.assign(pose, bodyWire({ scale: avatar.userScale, plateY: avatar.plateY }));   // this body's size / plate lift — only when not default
   if (!avatar.emote && !avatar._limp && Number.isFinite(avatar.current?.time)) {
     pose.clipTime = avatar.current.time;
     pose.clipTimeSlot = avatar.currentSlot;

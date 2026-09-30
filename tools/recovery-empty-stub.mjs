@@ -43,3 +43,5 @@ export const xrBodyDebug = () => null;
 export function applyPresenceWire() {}
 export function applyVoiceWire() {}   // mic / hear ride the same packet (platecard.js); recovery never reads them
 export function presenceWire() { return null; }
+export function applyBodyWire() { return false; }   // this body's size / plate lift — recovery applies nothing
+export function bodyWire() { return {}; }

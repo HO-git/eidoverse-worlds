@@ -493,8 +493,12 @@ export function tickXRBody(dt) {
   // DeviceScale, Basis's way: the PUPPET wears the scale (vrm.scene.scale = 1/k), tracking stays 1:1 —
   // hands land on the controllers by construction. A change re-measures the legs (ankle height and
   // hip width are read in world units) and is announced once.
+  // The chosen size (Profile › Avatar, bodyscale.js) composes ON TOP: vrm.scene wears userScale × 1/k and xr.js scales
+  // the rig by userScale, so eyes stay at the HMD and hands on the controllers at any size. The legs are re-measured
+  // on ANY change of the body's world size (either factor), since the size slider can move mid-session.
   { const ps = simHead ? 1 : puppetScale(); const ud = vrm.userData = vrm.userData || {};
-    if (Math.abs(vrm.scene.scale.x - ps) > 1e-4) { vrm.scene.scale.setScalar(ps); ud.ankleH = null; ud._gait = null; tee(`[xr] puppet scale ${ps.toFixed(3)} (avatar sized to you; targets 1:1)`); } }
+    if (av.setPuppetScale) av.setPuppetScale(ps); else if (Math.abs(vrm.scene.scale.x - ps) > 1e-4) vrm.scene.scale.setScalar(ps);
+    if (Math.abs((ud._bodyS ?? -1) - vrm.scene.scale.x) > 1e-4) { ud._bodyS = vrm.scene.scale.x; ud.ankleH = null; ud._gait = null; tee(`[xr] puppet scale ${ps.toFixed(3)} × size ${(av.userScale ?? 1).toFixed(2)} = body ${vrm.scene.scale.x.toFixed(3)} (avatar sized to you; targets 1:1)`); } }
 
   // 1. distributed look-at
   // facing = the body's TRUE world yaw. The controller already turns the body to

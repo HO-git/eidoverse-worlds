@@ -33,6 +33,7 @@ import { stroke as strokeIcon, strokeBold } from './icons.js';
 import { plateSize, plateClear, ownClearance, reachAbove, markBake, CLEAR_MIN } from './platesize.js';
 import { revealLevel } from './namereveal.js';
 import { crownEstimate, plateGap, plateAnchor, smoothY, DEAD as PLATE_DEAD } from './plateanchor.js';
+import { clampBodyScale, clampPlateY, plateLift, clipRate } from './bodyscale.js';
 import { Fn, userData, positionView, cameraNear, cameraFar, min, viewZToPerspectiveDepth, viewZToReversedPerspectiveDepth,
   viewZToOrthographicDepth } from 'three/tsl';
 import { SEAT_CLIP_FILE } from './seatcore.js';
@@ -588,6 +589,12 @@ export class Avatar {
     this.root.userData.isBody = true;   // so the sky's scene-diff never claims a person
     this.root.userData.who = id;        // perf attribution: this subtree is a PERSON (perfscope)
     this.root.add(vrm.scene);
+    // THIS BODY's chosen size and plate lift (bodyscale.js; Profile › Avatar). The size lives on vrm.scene, multiplied
+    // with the VR puppet fit, never on the root: the root also carries the plate, the ear, the pill and the bubble,
+    // which platesize.js keeps screen-sized. A pooled VRM may come back still wearing its last owner's size, so the
+    // scale is written fresh here, before anything below measures the body.
+    this.userScale = 1; this.plateY = 0; this._puppet = 1;
+    vrm.scene.scale.setScalar(1);
     // A LAMP IN THE BODY. attachLamps walks for emissive meshes and requests a
     // real point light at each one's centre. main already does this for spawned
     // models (realize/models.js, owner `entity:<id>`); avatars are the other
@@ -1136,8 +1143,7 @@ export class Avatar {
     this._setAction(this.actions[use], use, fade, ease);
     const a = this.actions[use];
     if (!a) return;
-    const nat = CLIP_SPEED[slot];
-    a.timeScale = nat > 0 && speed > 0 ? THREE.MathUtils.clamp(speed / nat, 0.6, 1.6) : 1;
+    a.timeScale = clipRate(speed, CLIP_SPEED[slot], this.userScale);   // a bigger stride is a slower cadence at the same speed
   }
   _setAction(a, slot, fadeIn, ease = false) {
     if (!a || this.current === a) return;
@@ -1909,6 +1915,38 @@ export class Avatar {
     this._labelName = name;
     this.repaintLabel();
   }
+  /** This body's chosen size (bodyscale.js: 0.5–2; the body, its eyes, stride and collider — see the header there).
+   *  → true when it changed. */
+  setUserScale(u) {
+    const v = clampBodyScale(u);
+    if (v === (this.userScale ?? 1)) return false;
+    this.userScale = v; this._applyBodyScale();
+    return true;
+  }
+  /** The VR device fit (xr.js puppetScale, 1/k), composed under the chosen size. xrbody.js is its one writer. */
+  setPuppetScale(p) {
+    const v = p > 0 && Number.isFinite(p) ? p : 1;
+    if (v === (this._puppet ?? 1)) return false;
+    this._puppet = v; this._applyBodyScale();
+    return true;
+  }
+  /** The body's model→root multiplier: chosen size × VR fit. The seat seam (seats.js riderScalar) reads this. */
+  bodyScale() { return (this.userScale ?? 1) * (this._puppet ?? 1); }
+  _applyBodyScale() {
+    const sc = this.vrm?.scene;
+    if (!sc) return;
+    sc.scale.setScalar(this.bodyScale());
+    sc.updateMatrixWorld(true);
+    this._ownClear = null;   // the clearance over the plate is in world units: re-measure at the new size
+  }
+  /** Metres the nameplate hangs over the measured crown, at the authored size (bodyscale.js plateLift). 0 = auto. */
+  setPlateY(m) {
+    const v = clampPlateY(m);
+    if (v === (this.plateY ?? 0)) return false;
+    this.plateY = v; this._ownClear = null;
+    return true;
+  }
+
   /** The crown, measured ONCE while the body is at rest (constructor: a fresh or pooled VRM is in its rest pose, no
    *  clip applied yet) — plateanchor.js crownEstimate over the raw head/hips/eye bones and the SKINNED mesh top (vertex
    *  positions through the posed bones, ≤4000 a mesh). All in the VRM scene's own frame: model units, so a live
@@ -1957,6 +1995,7 @@ export class Avatar {
     this.root.updateWorldMatrix(true, false);
     const s = sc.getWorldScale(_pScale).y || 1;   // model units → world (root scale × puppet scale)
     const gap = plateGap((r.height ?? 1.7) * s);
+    const lift = plateLift(this.plateY, s);   // the wearer's own lift over the crown (Profile › Avatar), grows with the body
     const rootY = this.root.getWorldPosition(_pRoot).y;
     const bone = (n) => h?.getRawBoneNode?.(n) ?? h?.getNormalizedBoneNode?.(n) ?? null;
     const hipsN = r.hipsToCrown != null ? bone('hips') : null, headN = hipsN ? bone('head') : null;
@@ -1967,12 +2006,12 @@ export class Avatar {
       for (const n of ['leftFoot', 'rightFoot']) { const f = bone(n); if (f) feetY = Math.min(feetY, f.getWorldPosition(_pFoot).y); }
       if (!Number.isFinite(feetY)) feetY = rootY;
       const { p, lie } = plateAnchor({ hips: [_pHips.x, _pHips.y, _pHips.z], head: [_pHead.x, _pHead.y, _pHead.z],
-        feetY, rest: r, s, gap });
+        feetY, rest: r, s, gap, lift });
       [x, y, z] = p;
       this._plateLie = lie;
     } else {
       _pHips.set(0, r.boundsTop, 0); sc.localToWorld(_pHips);
-      x = _pHips.x; y = _pHips.y + gap; z = _pHips.z;
+      x = _pHips.x; y = _pHips.y + gap + lift; z = _pHips.z;
       this._plateLie = 0;
     }
     this._plateOff = smoothY(this._plateOff, y - rootY, dt, { dead: PLATE_DEAD });
@@ -2390,7 +2429,7 @@ export class Avatar {
       this.shadow.position.y = (gy - rp.y) + 0.02;
       // 3 m up the blob is gone; directly underfoot it is full size.
       const k = THREE.MathUtils.clamp(1 - gap / 3, 0, 1);
-      this.shadow.scale.setScalar(0.55 + 0.45 * k);
+      this.shadow.scale.setScalar((0.55 + 0.45 * k) * (this.userScale ?? 1));   // a bigger body throws a bigger blob
       this.shadow.material.opacity = k * k;
       this.shadow.visible = k > 0.02;
     }

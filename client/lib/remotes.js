@@ -15,7 +15,7 @@ import { applyRemoteReach, noteReachEvents } from './reachnet.js';
 import { syncClipPhase } from './poseclips.js';
 import { applyWingFoldPresence } from '../../shared/wingpresence.js';
 import { poseChannels } from '../../shared/humanoid.js';
-import { applyPresenceWire, applyVoiceWire } from '../../shared/presencewire.js';
+import { applyPresenceWire, applyVoiceWire, applyBodyWire } from '../../shared/presencewire.js';
 import { applyRemoteXR, resetFingers } from './xrbody.js';
 
 export const remotes = new Map(); // id -> RemoteBody
@@ -305,6 +305,15 @@ function planPoseBlend(r, pa, pb) {
   }
 }
 
+/** A remote's chosen size and plate lift (shared/presencewire.js bodyWire: clamped, absence = default). Written onto
+ *  the record every sample and onto the Avatar — idempotent, and a body swap (a fresh Avatar at 1) picks it up on the
+ *  very next sample. Exported for tools/bodyscale-test.ts (a stand-in avatar) and tools/bodyscale-probe.mjs (the real one). */
+export function applyRemoteBody(r, s) {
+  applyBodyWire(r, s);
+  r.avatar?.setUserScale?.(r.scale);
+  r.avatar?.setPlateY?.(r.plateY);
+}
+
 /** Presence extras that aren't position or bones: emotes and the locomotion
  *  clip. Driven by the NEWER sample of the pair and never blended — these are
  *  discrete events, and half a wave is not a wave. Applied in BOTH the
@@ -313,6 +322,7 @@ function applyPresenceExtras(r, s) {
   applyWingFoldPresence(r.avatar, s);
   applyPresenceWire(r, s);            // present / away / busy, for the Who panel
   applyVoiceWire(r, s);              // mic / hear, for the nameplate ear and hover card
+  applyRemoteBody(r, s);             // their chosen size / plate lift (absence = default)
   const clip = s.clip ?? 'idle';
   if (s.emote && s.emote !== r.lastEmote) {
     r.lastEmote = s.emote;
@@ -399,6 +409,7 @@ export function updateRemotes(dt, now = performance.now()) {
           applyWingFoldPresence(r.avatar, s);
           applyPresenceWire(r, s);
           applyVoiceWire(r, s);
+          applyRemoteBody(r, s);
           if (s.emote && s.emote !== r.lastEmote) {
             r.lastEmote = s.emote;
             r.avatar.playEmote(s.emote);

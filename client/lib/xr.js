@@ -38,6 +38,7 @@ import { markXrAbsent, registerXrGlyph, micGlyph, earGlyph, xrGlyph, micLive, ea
 import { markActive } from './presence.js';
 import { setReveal } from './namereveal.js';
 import { dockPins } from './ui.js';
+import { xrScales, toRigLocal } from './bodyscale.js';   // the chosen size composes with the device fit (rig = u, body = u/k)
 import { perf } from './perf.js';
 import { renderCensusTake, renderCensusTick, renderCensusPeek, setXRCurtain, drawStats } from './render.js';
 import { warm, P_AMBIENT } from './warmqueue.js';
@@ -796,11 +797,12 @@ async function enterVR({ retryOf = null } = {}) {
       if (radialOpen) closeRadial(false);   // a session the browser ended leaves the ring open and the stick owned by it
       resetFingers(getSelf()?.vrm);
       selfFirstPerson(false);
-      { const v = getSelf()?.vrm; if (v) { v.scene.scale.setScalar(1); v.scene.position.set(0, 0, 0); v.scene.updateMatrixWorld(true); if (v.userData) { v.userData.ankleH = null; v.userData._gait = null; } } }   // the puppet scale AND the eye-anchor offset (xrbody writes vrm.scene.position every presenting frame; left in place it sank the feet on the desktop — owner 09-08 00:38) are presenting things
+      { const av = getSelf(), v = av?.vrm; if (v) { if (av.setPuppetScale) av.setPuppetScale(1); else v.scene.scale.setScalar(1); v.scene.position.set(0, 0, 0); v.scene.updateMatrixWorld(true); if (v.userData) { v.userData.ankleH = null; v.userData._gait = null; } } }   // the puppet scale AND the eye-anchor offset (xrbody writes vrm.scene.position every presenting frame; left in place it sank the feet on the desktop — owner 09-08 00:38) are presenting things
       releaseGrab();      // a gripped panel goes back to the rig BEFORE the quads are disposed, or a dead mesh stays in the rig
       { const t = performance.now(); xrPanelsExit(rig); tee(`[xr] panels exit ${(performance.now() - t).toFixed(1)} ms`); }
       rig.remove(camera);
       scene.remove(rig);
+      rig.scale.setScalar(1);   // the chosen-size tracking scale (syncRigToBody) is a presenting thing too
       session = null;
       camera.position.set(3.5, 2.6, 5.5);
       // FISHEYE FIX (porch-old :925): WebXR overwrote the projection with the
@@ -879,8 +881,13 @@ async function enterVR({ retryOf = null } = {}) {
  *  Rebuilds the stereo camera from the fresh rig so the eye pose xrbody reads is this frame's. */
 export function syncRigToBody() {
   if (!presenting) return;
+  // THE CHOSEN SIZE scales the tracking space (bodyscale.js xrScales: rig = u, body = u/k): the HMD reads u× your real
+  // height and the controllers sit u× as far out, which is exactly where a u× body's eyes and hands are. recentre is
+  // measured rig-local (recentreXR's worldToLocal divides the scale out), so it goes back out × u here.
+  const u = xrScales(getSelf()?.userScale ?? 1, scaleState.k).rig;
+  if (rig.scale.x !== u) rig.scale.setScalar(u);
   const c = Math.cos(rig.rotation.y), sn = Math.sin(rig.rotation.y);
-  rig.position.set(myState.pos.x - (c * recentre.x + sn * recentre.z), myState.pos.y + recentre.y, myState.pos.z - (-sn * recentre.x + c * recentre.z));
+  rig.position.set(myState.pos.x - u * (c * recentre.x + sn * recentre.z), myState.pos.y + u * recentre.y, myState.pos.z - u * (-sn * recentre.x + c * recentre.z));
   rig.updateMatrixWorld(true);
   renderer.xr.updateCamera(camera);
 }
@@ -1064,7 +1071,7 @@ export function updateXR(dtSec = 1 / 72) {
   if (entryClock) { const now = performance.now(); entryClock.frames.push(+(now - (entryClock.last || entryClock.t0)).toFixed(0)); entryClock.last = now;
     if (entryClock.frames.length === 8) { tee(`[xr] entry: setSession ${entryClock.setSessionMs} ms; first frame +${entryClock.frames[0]} ms; next gaps ${entryClock.frames.slice(1).join(',')} ms; programs so far ${entryClock.programs} (${entryClock.programMs.toFixed(0)} ms), pipelines ${entryClock.pipelines}; sync pipelines total ${buildTotals.syncPipelines} (${buildTotals.syncMs.toFixed(0)} ms)`); } }
   if (entryClock && (entryClock.frames.length > 120 || performance.now() - entryClock.t0 > 12000)) entryClock = null;   // the probe retires after 12 s (the line above tees ONCE, at frame 8 — it teed every frame for 12 s on 09-06 23:34)
-  if (!xrPrefs.seated) { const e = renderer.xr.getCamera().matrixWorld.elements; const hy = e[13] - rig.position.y; if (Number.isFinite(hy)) sampleDeviceScale(hy); }   // Basis: seated suppresses height capture
+  if (!xrPrefs.seated) { const e = renderer.xr.getCamera().matrixWorld.elements; const hy = toRigLocal(e[13] - rig.position.y, rig.scale.y); if (Number.isFinite(hy)) sampleDeviceScale(hy); }   // rig-local: k is YOUR height, whatever size you chose   // Basis: seated suppresses height capture
   sampleFingerCurl();
   if (recentre.pending) { recentre.pending = false; recentreXR('entry'); }
 

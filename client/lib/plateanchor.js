@@ -61,12 +61,15 @@ export function lieAmount(headAboveFeet, restHeadAboveFeet, headOverHips = null,
 
 /** Where the plate wants to be this frame (WORLD, y up), before smoothing.
  *  hips, head: [x,y,z] live bone positions; feetY: the lower foot's height (or the ground under the body);
- *  rest: crownEstimate()'s result plus restHeadAboveFeet (all model units); s: the live model→world scale; gap: m.
+ *  rest: crownEstimate()'s result plus restHeadAboveFeet (all model units); s: the live model→world scale; gap: m;
+ *  lift: the wearer's own offset over the crown (Profile › Avatar, bodyscale.js plateLift — already world m), added to
+ *  both the standing and the lying anchor, so it follows posture exactly as auto does. 0 = auto.
  *  → { p: [x,y,z], lie } */
-export function plateAnchor({ hips, head, feetY, rest, s = 1, gap }) {
-  const stand = Math.max(hips[1] + rest.hipsToCrown * s, head[1] + rest.headSpan * s) + gap;
+export function plateAnchor({ hips, head, feetY, rest, s = 1, gap, lift = 0 }) {
+  const up = gap + (fin(lift) ? lift : 0);
+  const stand = Math.max(hips[1] + rest.hipsToCrown * s, head[1] + rest.headSpan * s) + up;
   const lie = lieAmount(head[1] - feetY, rest.restHeadAboveFeet * s, head[1] - hips[1], (rest.hipsToCrown - rest.headSpan) * s);
-  const lieY = head[1] + rest.headSpan * s + gap;
+  const lieY = head[1] + rest.headSpan * s + up;
   return {
     p: [hips[0] + (head[0] - hips[0]) * lie, stand + (lieY - stand) * lie, hips[2] + (head[2] - hips[2]) * lie],
     lie,

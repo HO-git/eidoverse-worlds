@@ -11,8 +11,8 @@ try {
   await pg.goto(`${world.origin}/`, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await pg.evaluate(() => localStorage.setItem('ew-cloud-quality', 'off'));
   await pg.goto(`${world.origin}/?world=staging&name=skystate&key=${world.key}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await pg.waitForFunction(() => globalThis.__ewEngineUp && document.querySelector('#sec-sky .head'), null, { timeout: 90000 });
-  await pg.evaluate(() => document.querySelector('#sec-sky .head').click());
+  await pg.waitForFunction(() => globalThis.__ewEngineUp && document.querySelector('#sec-sky-tab'), null, { timeout: 90000 });
+  await pg.evaluate(() => document.querySelector('#sec-sky-tab').click());
   await pg.waitForFunction(() => document.querySelector('#sec-sky .sky-state'), null, { timeout: 20000 });
   const read = () => pg.evaluate(() => {
     const w = document.querySelector('#sec-sky .state-world')?.textContent ?? null;

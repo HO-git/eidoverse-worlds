@@ -11,7 +11,7 @@
 //   Ctrl+K opens the prompt; THE KEYS: Enter SAYS what you typed (the say row is always first), Tab
 //   DOES the highlighted action (default: the best match, wearing a Tab badge) — so "sit"+Enter says
 //   "sit" in chat and does NOT sit, "sit"+Tab sits, "wave"+Tab plays the emote (playEmote observed),
-//   "sky"+Tab opens the world panel with its sky section expanded; a highlight MOVED with ↑/↓ makes
+//   "sky"+Tab opens the world panel on its sky tab; a highlight MOVED with ↑/↓ makes
 //   Enter run that row; "hello there" + Enter goes through chat's own send path (server echo in #chatlog);
 //   the resting line and the open panel keep clear of the chat compose box, and the hint bar and the
 //   resting line never show at once;
@@ -245,8 +245,10 @@ try {
   await pg.keyboard.type('y'); await sleep(150);
   await pg.keyboard.press('Tab'); await sleep(1500);
   const sky = await pg.evaluate(() => ({ world: getComputedStyle(document.querySelector('.frame[data-frame="world"]')).display,
-    open: document.getElementById('sec-sky')?.classList.contains('open') ?? null }));
-  check('"sky" + Tab opens the world panel with the sky section expanded', sky.world !== 'none' && sky.open === true, JSON.stringify(sky));
+    open: document.getElementById('sec-sky')?.classList.contains('open') ?? null,
+    tab: document.getElementById('sec-sky-tab')?.classList.contains('on') ?? null,
+    others: [...document.querySelectorAll('.frame[data-frame="world"] .sec.open')].map((x) => x.id) }));
+  check('"sky" + Tab opens the world panel on its sky TAB (that pane alone, its tab chosen)', sky.world !== 'none' && sky.open === true && sky.tab === true && sky.others.join() === 'sec-sky', JSON.stringify(sky));
   check('running an action closes the prompt', !(await lantern(pg)).open);
   await acts();
   await pg.evaluate(() => { document.querySelector('#dock button[data-toggles="world"]')?.click(); });   // put it away again
@@ -322,8 +324,10 @@ try {
   await pg.locator('#lantern .ln-row', { has: pg.locator('.ln-title', { hasText: /^audio$/ }) }).first().click();
   await sleep(1000);
   const audio = await pg.evaluate(() => ({ settings: getComputedStyle(document.querySelector('.frame[data-frame="settings"]')).display,
-    open: document.getElementById('sec-audio')?.classList.contains('open') ?? null }));
-  check('clicking the "audio" row opens settings ▸ audio', audio.settings !== 'none' && audio.open === true, JSON.stringify(audio));
+    open: document.getElementById('sec-audio')?.classList.contains('open') ?? null,
+    tab: document.getElementById('sec-audio-tab')?.classList.contains('on') ?? null,
+    others: [...document.querySelectorAll('.frame[data-frame="settings"] .sec.open')].map((x) => x.id) }));
+  check('clicking the "audio" row opens settings on its audio TAB', audio.settings !== 'none' && audio.open === true && audio.tab === true && audio.others.join() === 'sec-audio', JSON.stringify(audio));
   check('no page errors on the desktop run', errs.length === 0, errs.slice(0, 3).join(' | '));
   await ctx.close();
 

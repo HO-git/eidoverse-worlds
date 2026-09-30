@@ -3,7 +3,7 @@
 // and the two overlays (help, front door).
 
 import { bus, CONFIG, setName, setToken, setErrorSink, report } from './base.js';
-import { resizeZoneAt } from './frames.js';
+import { resizeZoneAt, fitTabStrip } from './frames.js';
 import { flipMic, flipEar, micLive, earOn, glyphPinned, setGlyphPinned, micGlyph, earGlyph, xrGlyph, xrGlyphAvailable, xrLive, flipXr } from './mictoggle.js';
 import { svg, fsvg, hasFill, rsvg, hasLine } from './icons.js';
 
@@ -32,7 +32,7 @@ let loadingItems = () => [];
 export function setLoadingItems(fn) { loadingItems = fn; }
 import { makeFrame, getFrame, isLocked, setLocked, resetLayout } from './frames.js';
 import { defsRegistry } from './defs.js';
-import { register as registerAction, get as getAction } from './actions.js';
+import { register as registerAction, unregister as unregisterAction, get as getAction } from './actions.js';
 import { openLantern, closeLantern, isLanternOpen, CHORD } from './lantern.js';
 
 const $ = (id) => document.getElementById(id);
@@ -247,82 +247,137 @@ new MutationObserver(() => {
 
 // ============================================================ panel frames
 
+// World and Settings hold their sections as TABS (owner, 09-29: the A-kit mockup's tabs, not the accordion):
+// a strip on top, one pane below. The strip is the profile's own recipe (.pf-tabs/.pf-tab — one tab
+// mechanism in this client, not three), and it tightens as the frame narrows: full labels → the chosen
+// tab alone keeps its label → icons only → the strip scrolls. Every tab keeps its name as a tooltip.
+function tabbedFrame(id, opts) {
+  const f = makeFrame(id, opts);
+  f.body.classList.add('tabbed');
+  const strip = document.createElement('div');
+  strip.className = 'pf-tabs sec-tabs'; strip.setAttribute('role', 'tablist');
+  const stack = document.createElement('div');
+  stack.className = 'stack';
+  f.body.append(strip, stack);
+  f.stack = stack; f.strip = strip; f.sections = [];
+  // how much label the strip can afford, re-decided whenever it or its tabs change size
+  const fitStrip = () => fitTabStrip(strip);
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(fitStrip).observe(strip);
+  f.fitStrip = fitStrip;
+  // A frame never shows an empty pane: shown with no tab chosen, it opens the one last chosen here, else the first.
+  const LS = `ew-tab-${id}`;
+  f.ensureTab = () => {
+    if (!f.visible || f.sections.some((x) => x.isOpen) || !f.sections.length) return;
+    let want = null; try { want = localStorage.getItem(LS); } catch {}
+    const pick = f.sections.find((x) => x.key === want) ?? f.sections[0];
+    pick.toggle(true).catch((e) => report(pick.key, e));
+  };
+  f.rememberTab = (key) => { try { localStorage.setItem(LS, key); } catch {} };
+  const show = f.show;
+  f.show = () => { show.call(f); f.ensureTab(); fitStrip(); return f; };
+  return f;
+}
+
 let worldFrame = null;
 export function panelFrame() {
   if (!worldFrame) {
-    worldFrame = makeFrame('world', {
-      title: 'world', x: -10, y: 52, w: 232, h: 300, minW: 200,   // eight rows, no bleed
+    worldFrame = tabbedFrame('world', {
+      title: 'world', x: -10, y: 52, w: 280, h: 320, minW: 200,   // 280: eight tabs with the chosen one's name (the A-kit mockup's column)
     });
-    const stack = document.createElement('div');
-    stack.className = 'stack';
-    worldFrame.body.appendChild(stack);
-    worldFrame.stack = stack;
   }
   return worldFrame;
 }
 
 // engine settings — machine-noun home (video, sound, controls). First tenant:
-// the audio panel, moved out of the world menu. Same stack shape.
+// the audio panel, moved out of the world menu. Same tabbed shape.
 let settingsFrameApi = null;
 export function settingsFrame() {
   if (!settingsFrameApi) {
-    settingsFrameApi = makeFrame('settings', {
-      title: 'settings', x: -10, y: 364, w: 232, h: 260, minW: 210, hidden: true,   // right column, UNDER world (52+300+12)
+    settingsFrameApi = tabbedFrame('settings', {
+      title: 'settings', x: -10, y: 384, w: 280, h: 280, minW: 210, hidden: true,   // right column, UNDER world (52+320+12)
     });
-    const stack = document.createElement('div');
-    stack.className = 'stack';
-    settingsFrameApi.body.appendChild(stack);
-    settingsFrameApi.stack = stack;
-    // the frame registers its own dock entry (its section heads live INSIDE it, so nothing else can open it);
+    // the frame registers its own dock entry (its tabs live INSIDE it, so nothing else can open it);
     // a caller that already listed 'settings' wins, and a frame born after initDock still gets its button
     if (!dockEntries.some((e) => e.id === 'settings')) { const entry = { id: 'settings', icon: 'gear-six' }; dockEntries.push(entry); if (el?.dock) { addDockButton(entry); paintDock(); } }
   }
   return settingsFrameApi;
 }
 
-/** Collapsible section inside the world frame. onOpen is awaited each time it
- *  opens, so rosters and catalogs re-fetch instead of going stale. */
+/** A section of the world (or settings) frame: a TAB in its strip and a pane under it. onOpen is
+ *  awaited each time the tab is chosen, so rosters and catalogs re-fetch instead of going stale.
+ *  The api is the accordion's: `box` (#sec-<id>, the pane, .open while chosen) holds `body`; `head`
+ *  is the tab button (#sec-<id>-tab); toggle(true) chooses it, toggle(false) folds the pane away. */
 export function makeSection(title, onOpen, { id = '', host: hostName = 'world' } = {}) {
   const hostFrame = hostName === 'settings' ? settingsFrame() : panelFrame();
-  const host = hostFrame.stack;
   const box = document.createElement('div');
   box.className = 'sec';
+  box.setAttribute('role', 'tabpanel');
   if (id) box.id = `sec-${id}`;
   const head = document.createElement('button');
-  head.className = 'head';
+  head.className = 'pf-tab head';
+  head.setAttribute('role', 'tab');
+  if (id) head.id = `sec-${id}-tab`;
   const m = title.match(/^(\S+)\s+(.*)$/);
   const glyph = m && EMOJI_ICON[m[1].replace(/️/g, '')];
   if (glyph && hasFill(glyph)) head.innerHTML = `${fsvg(glyph, 15)}<span>${m[2]}</span>`;
   else head.textContent = title;
-  head.setAttribute('aria-expanded', 'false');
+  const label = /^[\p{L}\p{N}]/u.test(title) ? title : title.replace(/^\S+\s+/, '');   // "☀ sky" → "sky"
+  head.title = label;
+  head.setAttribute('aria-selected', 'false');
+  head.setAttribute('aria-expanded', 'false');   // kept for anything reading the accordion's attribute
   const body = document.createElement('div');
   body.className = 'body';
 
+  const select = (on) => {
+    box.classList.toggle('open', on); head.classList.toggle('on', on);
+    head.setAttribute('aria-selected', String(on)); head.setAttribute('aria-expanded', String(on));
+  };
   const api = {
-    box, head, body,
+    box, head, body, key: id || label,
     get isOpen() { return box.classList.contains('open'); },
     async toggle(force) {
-      const open = force ?? !box.classList.contains('open');
-      box.classList.toggle('open', open);
-      head.setAttribute('aria-expanded', String(open));
-      if (open) { hostFrame.show(); await onOpen?.(body); }
+      const open = force ?? true;   // a tab click CHOOSES; only an explicit false folds the pane
+      if (open) {
+        for (const o of hostFrame.sections) if (o !== api && o.isOpen) o.toggle(false);
+        select(true);
+        hostFrame.rememberTab(api.key);
+        hostFrame.show();   // shows and raises; its ensureTab finds this tab open and leaves it be
+        hostFrame.stack.scrollTop = 0;
+        hostFrame.fitStrip();
+        { const st = hostFrame.strip, l = head.offsetLeft - st.offsetLeft, r = l + head.offsetWidth;   // a scrolled strip brings its chosen tab into view
+          if (l < st.scrollLeft) st.scrollLeft = l; else if (r > st.scrollLeft + st.clientWidth) st.scrollLeft = r - st.clientWidth; }
+        await onOpen?.(body);
+      } else select(false);
+    },
+    /** take the tab and its pane out (a mod switched off) */
+    remove() {
+      const i = hostFrame.sections.indexOf(api); if (i >= 0) hostFrame.sections.splice(i, 1);
+      head.remove(); box.remove(); unregisterAction(actionId);
+      if (api.isOpen) { select(false); hostFrame.ensureTab(); }
+      hostFrame.fitStrip();
     },
   };
-  head.onclick = () => api.toggle().catch((e) => report(title, e));
-  box.append(head, body);
-  host.appendChild(box);
-  // the lantern finds a section by its own name ("sky", "audio"): open the panel AND the section
-  const label = /^[\p{L}\p{N}]/u.test(title) ? title : title.replace(/^\S+\s+/, '');   // "☀ sky" → "sky"
+  head.onclick = () => api.toggle(true).catch((e) => report(title, e));
+  box.append(body);
+  hostFrame.strip.appendChild(head);
+  hostFrame.stack.appendChild(box);
+  hostFrame.sections.push(api);
+  hostFrame.fitStrip();
+  // a frame already on screen (restored open) gets its tab once this tick's registrations are in
+  if (!hostFrame._tabQueued) { hostFrame._tabQueued = true; setTimeout(() => { hostFrame._tabQueued = false; hostFrame.ensureTab(); }, 0); }
+  // the lantern finds a section by its own name ("sky", "audio"): open the panel AND the tab
+  const actionId = `section:${hostName}:${label}`;
   registerAction({
-    id: `section:${hostName}:${label}`, title: label, group: hostName, keywords: [hostName],
-    icon: glyph ?? undefined, detail: `open the ${label} section`,
-    run: () => api.toggle(true).then(() => box.scrollIntoView({ block: 'nearest' })).catch((e) => report(title, e)),
+    id: actionId, title: label, group: hostName, keywords: [hostName],
+    icon: glyph ?? undefined, detail: `open the ${label} tab`,
+    run: () => api.toggle(true).catch((e) => report(title, e)),
   });
   return api;
 }
 
+/** Fold every open pane away (placing a ghost wants the view): the strips stay, no tab chosen. */
 export function collapseAll() {
-  for (const s of document.querySelectorAll('.sec.open')) s.classList.remove('open');
+  for (const f of [worldFrame, settingsFrameApi]) for (const x of f?.sections ?? []) if (x.isOpen) x.toggle(false);
 }
 
 // ============================================================ who's here

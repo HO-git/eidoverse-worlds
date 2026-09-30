@@ -56,7 +56,8 @@ const tokens = () => JSON.parse(localStorage.getItem('ew-style-tokens') || '{}')
 const since = (i: number, name: string) => calls.slice(i).filter((c) => c[0] === name);
 const emits = (i: number, t: string) => emitted.slice(i).filter((e) => e[0] === t).length;
 const fire = (el: Element, type: string) => el.dispatchEvent(new Event(type, { bubbles: true }));
-const openSection = async (id: string) => { const sec = document.getElementById(`sec-${id}`)!; (sec.querySelector('.head') as HTMLElement).click(); await tick(); return sec.querySelector('.body')!; };
+// Settings is TABBED (ui.js makeSection): #sec-<id>-tab chooses the pane #sec-<id>
+const openSection = async (id: string) => { (document.getElementById(`sec-${id}-tab`) as HTMLElement).click(); await tick(); return document.getElementById(`sec-${id}`)!.querySelector('.body')!; };
 
 // ============================================================ style: --panel-a
 console.log('STYLE — setPanelAlpha persists and repaints --panel-a');
@@ -242,6 +243,36 @@ console.log('BODIES — the list populates on avatar-worn, which setMe emits');
     check('re-wearing an existing body does not duplicate it', stored.filter((n: string) => n === 'fox').length === 1, JSON.stringify(stored));
     check('...and moves it to the front (newest first)', stored[0] === 'fox', JSON.stringify(stored));
     void e2; }
+
+// ============================================================ tabs
+console.log('TABS — every registered section is a tab; choosing one shows its pane alone, and its action opens it');
+{ const actions = await import('../client/lib/actions.js');
+  const frame = ui.settingsFrame() as any;
+  const strip = frame.strip as HTMLElement;
+  const ids = ['style', 'video'];
+  check('the settings frame carries a tab strip with one tab per section, in registration order',
+    [...strip.querySelectorAll('.pf-tab')].map((b) => b.id).join() === ids.map((i) => `sec-${i}-tab`).join(),
+    [...strip.querySelectorAll('.pf-tab')].map((b) => b.id).join());
+  check('no pane lives in the strip, no tab in a pane (a strip, not an accordion)',
+    !strip.querySelector('.sec') && ids.every((i) => !document.getElementById(`sec-${i}`)!.querySelector('.pf-tab')));
+  const state = () => ids.map((i) => `${i}:${document.getElementById(`sec-${i}`)!.classList.contains('open') ? 'open' : '-'}/${document.getElementById(`sec-${i}-tab`)!.classList.contains('on') ? 'on' : '-'}/${document.getElementById(`sec-${i}-tab`)!.getAttribute('aria-selected')}`).join(' ');
+  for (const id of ids) {
+    await openSection(id);
+    check(`clicking the ${id} tab shows its pane ALONE, the tab marked chosen`,
+      state() === ids.map((i) => (i === id ? `${i}:open/on/true` : `${i}:-/-/false`)).join(' '), state());
+  }
+  frame.hide();
+  for (const id of ids) {
+    actions.run(`section:settings:${id}`); await tick(); await tick();
+    check(`the lantern action section:settings:${id} opens the frame on the ${id} tab`,
+      frame.visible && state() === ids.map((i) => (i === id ? `${i}:open/on/true` : `${i}:-/-/false`)).join(' '), `${frame.visible} ${state()}`);
+  }
+  // a frame shown with no tab chosen opens the one last chosen (never an empty pane)
+  ui.collapseAll(); await tick();
+  check('collapseAll folds the pane away (placing a ghost wants the view)', !ids.some((i) => document.getElementById(`sec-${i}`)!.classList.contains('open')), state());
+  frame.hide(); frame.show(); await tick();
+  check('shown again with nothing chosen, the frame opens its last tab (video)', state() === 'style:-/-/false video:open/on/true', state());
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -31,16 +31,16 @@ try {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, queued: ['ktx2', 'lod'] }) });
   });
   await pg.goto(`${world.origin}/?world=staging&name=badgeprobe&key=${world.key}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await pg.waitForFunction(() => globalThis.__ewEngineUp && document.querySelector('#sec-build .head'), null, { timeout: 60000 });
+  await pg.waitForFunction(() => globalThis.__ewEngineUp && document.querySelector('#sec-build-tab'), null, { timeout: 60000 });
   const r = await pg.evaluate(async () => {
     // the panel's OPENING cards (the starters, before any search) carry status too
-    document.querySelector('#sec-build .head').click();
+    document.querySelector('#sec-build-tab').click();
     for (let i = 0; i < 60 && !document.querySelector('#sec-build .grid .card .opt-rank'); i++) await new Promise((res) => setTimeout(res, 100));
     const opening = [...document.querySelectorAll('#sec-build .grid .card')].map((c) => ({ name: c.querySelector('span')?.textContent, rank: c.querySelector('.opt-rank')?.dataset.rank ?? null }));
-    document.querySelector('#sec-build .head').click();
+    document.querySelector('#sec-build-tab').click();
     globalThis.__opening = opening;
     const Q = 'glb';   // every filename-scored entry matches; store entries match on their manifest names or not at all
-    document.querySelector('#sec-build .head').click();
+    document.querySelector('#sec-build-tab').click();
     for (let i = 0; i < 40 && !document.querySelector('#sec-build input[type=search]'); i++) await new Promise((res) => setTimeout(res, 100));
     const input = document.querySelector('#sec-build input[type=search]');
     // the empty box: the curated starters, carrying the catalog's rank like any search result (Greptile #207)
@@ -143,7 +143,7 @@ try {
     const chipSel = '.opt-rebuild';
     const card = await pg.evaluateHandle((s) => [...document.querySelectorAll('#sec-build .grid .card')].find((c) => c.querySelector(s)), chipSel);
     // the card-body control above held a ghost, which collapses the panels: open the Build panel again
-    await pg.evaluate(async () => { if (!document.querySelector('#sec-build .grid .card .opt-rebuild')?.offsetParent) document.querySelector('#sec-build .head').click();
+    await pg.evaluate(async () => { if (!document.querySelector('#sec-build .grid .card .opt-rebuild')?.offsetParent) document.querySelector('#sec-build-tab').click();
       for (let i = 0; i < 40 && !document.querySelector('#sec-build .grid .card .opt-rebuild')?.offsetParent; i++) await new Promise((r) => setTimeout(r, 100)); });
     const el = await card.asElement()?.$(chipSel);
     if (el) {

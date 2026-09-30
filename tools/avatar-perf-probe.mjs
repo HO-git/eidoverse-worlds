@@ -77,7 +77,7 @@ try {
   else check('OLD server (perf not confirmed): the switch-back stamps again — nothing was lost to a false "done"', other.now === live.name && stamps(live.name) === 2, [other.now, stamps(live.name)]);
   // (3) the avatar cards
   const cards = await pg.evaluate(async () => {
-    document.querySelector('#sec-avatar .head')?.click();
+    document.querySelector('#sec-avatar-tab')?.click();
     for (let i = 0; i < 60 && !document.querySelector('#sec-avatar .av-grid .card'); i++) await new Promise((r) => setTimeout(r, 100));
     return [...document.querySelectorAll('#sec-avatar .av-grid .card')].map((c) => ({ name: c.querySelector('span')?.textContent, title: c.querySelector('.av-shot .opt-rank')?.title ?? '', cardTitle: c.title,
       pill: c.querySelector('.av-shot .opt-rank') ? { rank: c.querySelector('.opt-rank').dataset.rank, bg: getComputedStyle(c.querySelector('.opt-rank')).backgroundColor,

@@ -15,7 +15,7 @@ try {
   await pg.waitForTimeout(6000);
   const r = await pg.evaluate(async () => {
     const wait = (ms) => new Promise((res) => setTimeout(res, ms));
-    if (!document.querySelector('#sec-sky .state-you')) document.querySelector('#sec-sky .head')?.click();
+    if (!document.querySelector('#sec-sky .state-you')) document.querySelector('#sec-sky-tab')?.click();
     await wait(400);
     const you = () => { const e = document.querySelector('#sec-sky .state-you'); return e && !e.hidden ? e.textContent : ''; };
     const before = you();

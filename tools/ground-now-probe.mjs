@@ -9,9 +9,9 @@ try {
   const pg = await page();
   const errs = []; pg.on('pageerror', (e) => errs.push(String(e)));
   await pg.goto(`${world.origin}/?world=staging&name=groundnow&key=${world.key}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await pg.waitForFunction(() => globalThis.__ewEngineUp && document.querySelector('#sec-ground .head'), null, { timeout: 90000 });
+  await pg.waitForFunction(() => globalThis.__ewEngineUp && document.querySelector('#sec-ground-tab'), null, { timeout: 90000 });
   const read = () => pg.evaluate(() => document.querySelector('#sec-ground .ground-now .state-world')?.textContent ?? null);
-  await pg.evaluate(() => document.querySelector('#sec-ground .head').click());
+  await pg.evaluate(() => document.querySelector('#sec-ground-tab').click());
   await pg.waitForFunction(() => document.querySelector('#sec-ground .ground-now'), null, { timeout: 20000 });
   const empty = await read();
   const grow = async (args) => { await pg.evaluate(async (a) => { const { sendVerb } = await import('./lib/net.js'); sendVerb('grass', a); }, args); await pg.waitForTimeout(2500); return read(); };

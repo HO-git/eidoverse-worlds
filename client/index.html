@@ -86,7 +86,7 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
    by the LIVE --brand (CSS url() can't read vars) and publishes it as
    --cur-loupe; the rule falls back to the native cursor until then. */
 button, .btn, select, a, label, .mrow, .mpin, .dbg-row, .ps-row, .card,
-.ac-row, .chat-gear, .fr-btn, .sec > .head, .chat-tabs button,
+.ac-row, .chat-gear, .fr-btn, .chat-tabs button,
 .chat-side-tog, .sp-skip { cursor: pointer; }
 body.loupe-on canvas { cursor: var(--cur-loupe, crosshair); }
 /* ONE house scrollbar — the standard properties, nothing else. On Chromium,
@@ -181,6 +181,7 @@ select option:checked { background: var(--well); color: var(--brand); font-weigh
 select.dd-native { position: absolute !important; opacity: 0; pointer-events: none; width: 1px; height: 1px; margin: 0; }
 .dd { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 88px; max-width: 100%;
   padding: 3px 8px 3px 9px; background: var(--well); border: 1px solid var(--edge); border-radius: 6px; color: var(--fg); font-size: var(--fs-sm); cursor: pointer; text-align: left; }
+.row.wide .dd { min-width: min(88px, 100%); }   /* a narrow pane (a 200 px phone frame: 7rem label + 74 px) must not push the trigger past its edge */
 .dd:hover { border-color: color-mix(in srgb, var(--brand) 45%, var(--edge)); }
 .dd[aria-expanded="true"] { border-color: var(--brand); }
 .dd svg, .dd-caret { flex: none; color: var(--dim); }
@@ -617,37 +618,45 @@ a:hover { color: var(--fg); text-decoration-color: var(--brand); }
 }
 
 /* ------------------------------------------------------------ panel frames */
-.sec { display: flex; flex-direction: column; gap: 5px; }
-.sec > .head {
-  display: flex; align-items: center; gap: 9px;
-  font-weight: 500; background: none; border: none; text-align: left;
-  padding: 6px 10px; border-radius: 6px; color: var(--dim);
-}
-.sec > .head svg { flex: none; opacity: .8; color: var(--icon); }
-.sec > .head:hover { background: var(--hov); }
-.sec.open > .head {
-  position: relative; background: rgb(255 255 255 / 0.05); font-weight: 600;
-  color: color-mix(in srgb, var(--brand) 35%, var(--fg));
-}
-.sec.open > .head svg { opacity: 1; color: var(--brand); }
-/* no left bar on an extended section: first seen on Debug; not the panels' convention — the brand icon + lifted body edge carry 'extended' */
-.sec.open > .body { border-color: var(--edge-hi); }
-.sec > .body {
-  display: none; flex-direction: column; gap: 4px;
-  padding: 6px; max-height: 44vh; overflow-y: auto;
-  border: 1px solid var(--edge); border-radius: 5px;
-}
-.sec.open > .body { display: flex; }
-/* debug subsections: collapsible with a ▸/▾ arrow (Debug is split into
-   subareas). Looser than panel sections, so arrow not icon; tighter spacing. */
-.dbg-sec { margin-top: 4px; }
-.dbg-sec > .head { display: flex; align-items: center; gap: 7px; padding: 5px 8px; color: var(--dim); }
-.dbg-sec.open > .head { color: color-mix(in srgb, var(--brand) 35%, var(--fg)); }
-.dbg-sec .dbg-arrow { font-size: 13px; width: 13px;   /* was 9: "teensy, very hard to see" (live, 09-04) */ color: var(--icon); flex: none; }
-/* panel content hierarchy: heads = fg with brand-whisper glyphs,
-   body copy = dim; outlined buttons hug their text, never stretch the column */
-.sec > .body { color: var(--dim); }
+/* World and Settings are TABBED (ui.js tabbedFrame/makeSection; owner 09-29, the A-kit mockup): the
+   strip is the profile's .pf-tabs recipe, the pane is one .sec at a time. The strip tightens as the frame
+   narrows (data-fit, measured in ui.js): '' full labels · compact = the chosen tab alone keeps its
+   label · icons = glyphs only · then it scrolls, bar hidden. */
+.tabbed { display: flex; flex-direction: column; min-height: 0; }
+.pf-tabs.sec-tabs { flex: none; margin: 6px 7px 0; overflow-x: auto; scrollbar-width: none; }
+.sec-tabs::-webkit-scrollbar { display: none; }
+.sec-tabs .pf-tab { flex: none; white-space: nowrap; padding: 6px 8px 7px; }
+.pf-tabs[data-fit="compact"] .pf-tab:not(.on):has(svg) > span,
+.pf-tabs[data-fit="icons"] .pf-tab:has(svg) > span { display: none; }
+.pf-tabs[data-fit="icons"] .pf-tab { padding: 6px 7px 7px; }
+.sec { display: none; flex-direction: column; }
+.sec.open { display: flex; }
+.sec > .body { display: flex; flex-direction: column; gap: 4px; color: var(--dim); }
+/* panel content hierarchy: body copy = dim; outlined buttons hug their text, never stretch the column */
 .sec > .body button { align-self: flex-start; width: fit-content; }
+/* Debug's tabs are TEXT, by job (debug.js dbgTabs) — the same strip, no glyphs; its groups inside a tab
+   are quiet captions, not more collapsing */
+.pf-tabs.dbg-tabs { margin: 0 0 6px; flex: none; overflow-x: auto; scrollbar-width: none; }
+.dbg-pane { display: none; flex-direction: column; gap: 4px; }
+.dbg-pane.open { display: flex; }
+.dbg-group-body > button { align-self: flex-start; }   /* the panes' rule: a lone button hugs its words */
+/* a caption inside a pane: groups rows without another level of collapsing (Debug's groups, the mods pane) */
+.dbg-group, .sec-cap { font-size: var(--fs-xs); letter-spacing: .06em; text-transform: lowercase; color: color-mix(in srgb, var(--brand) 35%, var(--fg)); margin: 8px 0 2px; }
+.dbg-group:first-child, .sec-cap:first-child { margin-top: 2px; }
+/* a list nested in a pane is not a second scroller: the frame's .stack scrolls, this one only groups */
+.sec .stack { padding: 0; flex: none; min-height: auto; }
+/* the mods pane (mods.js): name + what it is on the left, its control on the right; a row with several
+   controls puts them under its text */
+.mod-row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.mod-row.stacked { flex-direction: column; align-items: stretch; gap: 4px; }
+.mod-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.mod-nm { color: var(--fg); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.mod-note { color: var(--dim); font-size: var(--fs-xs); line-height: 1.35; }
+.mod-note.warn { color: color-mix(in srgb, var(--attn) 70%, var(--dim)); }
+.mod-row > button { flex: none; }
+.sec > .body .mod-btns { display: flex; flex-wrap: wrap; gap: 4px; }
+.sec > .body .mod-btns > button { padding: 3px 8px; font-size: var(--fs-xs); }
+.sec > .body #mod-src { font: 11px/1.4 ui-monospace, monospace; width: 100%; box-sizing: border-box; resize: vertical; }
 .stack { padding: 7px; gap: 6px; display: flex; flex-direction: column; overflow-y: auto; flex: 1; min-height: 0; }
 
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
@@ -852,8 +861,8 @@ body.arranging #dock #hud.emark {
 .pf-pop-row { display: flex; align-items: center; gap: 10px; text-align: left; padding: 6px 10px; border: none; border-radius: 6px; background: none; color: var(--fg); font-size: var(--fs-sm); cursor: pointer; }
 .pf-pop-row:hover { background: rgb(255 255 255 / .06); }
 .pf-pop-row.on { background: var(--well); color: var(--brand); font-weight: 600; }
-.pf-tabs { display: flex; gap: 2px; margin: 10px 0 8px; border-bottom: 1px solid var(--edge); }
-.pf-tab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px 7px; border: none; border-bottom: 1px solid transparent; background: none; color: var(--dim); font-size: var(--fs-sm); cursor: pointer; border-radius: 6px 6px 0 0; }   /* INSIDE the box, same as the chat strip: one tab mechanism, not two (R, 2026-09-11: "Should we consolidate style here") */
+.pf-tabs { display: flex; gap: 2px; margin: 10px 0 8px; border-bottom: 1px solid var(--edge); overflow-x: auto; scrollbar-width: none; }   /* past icons-only (frames.js fitTabStrip) the strip scrolls rather than clip */
+.pf-tab { flex: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px 7px; border: none; border-bottom: 1px solid transparent; background: none; color: var(--dim); font-size: var(--fs-sm); cursor: pointer; border-radius: 6px 6px 0 0; }   /* INSIDE the box, same as the chat strip: one tab mechanism, not two (R, 2026-09-11: "Should we consolidate style here") */
 .pf-tab svg { opacity: .8; color: var(--icon); }          /* the section-head recipe: desaturated brand at .8 when idle (live, 09-05) */
 /* THE PROFILE TABS NEVER OPTED OUT OF THE GLOBAL BUTTON CHAIN, and it showed:
    measured with a real mouse hover, `.pf-tab:hover` painted NOTHING while

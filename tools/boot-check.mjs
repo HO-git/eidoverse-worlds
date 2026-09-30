@@ -53,6 +53,9 @@ let close = async () => {};
 try {
   ({ page, close } = await launchBrowser());
   const pg = await page();
+  // BOOT_CHECK_CLOUDS_OFF=1: the sky guard, before any module reads localStorage (sky.js) — a cloudy sky bakes on
+  // the CPU in headless Chromium and has frozen a small host; the rest of the boot is checked as ever
+  if (process.env.BOOT_CHECK_CLOUDS_OFF === '1') await pg.addInitScript(() => { try { localStorage.setItem('ew-cloud-quality', 'off'); } catch {} });
   const errs = [], logs = [], bodyErrs = [];
   pg.on('pageerror', e => errs.push(e.message));
   pg.on('console', m => { const t = m.text(); if (/^\[boot\]|^\[body\]|^\[render\]/.test(t)) logs.push(t); if (/^avatar\b/.test(t)) bodyErrs.push(t); });

@@ -802,6 +802,23 @@ export function makeFrame(id, opts = {}) {
           }
           state.x = Math.max(8, Math.min(state.x, innerWidth - state.w - 8));
         }
+        // ...AND WHEN SIDEWAYS CANNOT CLEAR IT, DOWN. A phone is too narrow for a frame to step beside the
+        // top row (the status chips beside the ∃, the lantern's pill in the corner): measured at 390x844 the
+        // world frame's tabs sat under both and could not be pressed. An unplaced frame whose top still meets
+        // top-row chrome starts below it, and gives up height to stay on screen.
+        if (!placed) {
+          let below = 0;
+          for (const sel of ['#hudstatus', '#lantern-pill', '#micbtn', '#earbtn']) {
+            const el = document.querySelector(sel); const g = el?.getBoundingClientRect();
+            if (!g || !g.width || getComputedStyle(el).visibility === 'hidden' || g.top > innerHeight / 3) continue;
+            if (g.left < state.x + state.w && state.x < g.right && g.top < state.y + hh && state.y < g.bottom) below = Math.max(below, g.bottom);
+          }
+          if (below) {
+            state.y = Math.round(below + 8);
+            const room = innerHeight - 8 - state.y - chrome;
+            if (room < state.h) state.h = Math.max(40, room);
+          }
+        }
       }
     paint();
   }
@@ -943,6 +960,15 @@ addEventListener('resize', () => {
 });
 
 export function getFrame(id) { return frames.get(id); }
+/** How much label a tab strip (.pf-tabs) can afford, decided by measuring: full labels → the chosen tab
+ *  alone keeps its label (data-fit=compact) → icons only (data-fit=icons) → the strip scrolls. */
+export function fitTabStrip(strip) {
+  if (!strip) return;
+  for (const level of ['', 'compact', 'icons']) {
+    strip.dataset.fit = level;
+    if (strip.scrollWidth <= strip.clientWidth + 1) return;
+  }
+}
 export function allFrames() { return [...frames.values()]; }
 // Esc toggles the whole set of open frames closed ⇄ back (live, 09-05 16:08),
 // but only when nothing more specific wants the key: an open pop, a focused

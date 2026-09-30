@@ -1301,8 +1301,9 @@ kbd {
   font-size: var(--fs); background: none; border: none; color: var(--dim);
 }
 
-/* capability notice: top-centre, over everything until dismissed (owner, 09-27). capnotice.js writes top:8px inline,
-   so no rule below sets `top`; the history of the old placements is in git (#185 B2). */
+/* the lite client's "Light version" card (lite.js liteBanner). The full client's capability notices were the same card
+   and are now chips on the status strip (#hudstatus below, statuschips.js); lite.js places this one under its emote row
+   inline. The history of the old placements is in git (#185 B2). */
 .capnotice {
   position: fixed; left: 50%; transform: translateX(-50%); top: 8px; z-index: 95;   /* top-centre, over everything until dismissed (owner, 09-27; capnotice.js says why) */
   max-width: min(320px, 46vw);   /* NARROW, not merely right-anchored: at 720px the card still reached back across the centred emote bar and blocked 7 of 9 tiles even from top-right. The long text is the title tooltip anyway (09-05 note above). #185 B2. */ padding: 5px 10px; font-size: var(--fs-sm); line-height: 1.4;
@@ -1332,7 +1333,42 @@ kbd {
 .capnotice .cn-btns button { padding: 4px 10px; font-size: var(--fs-xs); }
 /* photo mode hides every chrome layer but keeps the canvas */
 body.photo .frame, body.photo #hud, body.photo #trayzone,
-body.photo #hintbar, body.photo #dock, body.photo #lantern-pill { display: none !important; }
+body.photo #hintbar, body.photo #dock, body.photo #lantern-pill,
+body.photo #hudstatus, body.photo #stpop { display: none !important; }
+
+/* THE STATUS STRIP (statuschips.js): small pills on the ∃'s status line, past the mic/ear glyphs — "WebGL 2 ⓘ",
+   "reduced detail", "graphics reset". Amber = a caveat, red = a failure. statuschips.js writes left/top; the strip runs
+   along the ∃'s row on a vertical rail and down (up) its column on a horizontal one. z 45: the glyphs' own layer —
+   over frames (≤25), the rail (27) and the ∃ menu (40, which opens clear of it), under hints/toasts (60). */
+#hudstatus { position: fixed; z-index: 45; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }   /* wraps when the row runs out (statuschips.js sets max-width to the room) */
+#hudstatus[hidden] { display: none; }
+#hudstatus[data-edge="right"] { flex-direction: row-reverse; }
+#hudstatus[data-edge="top"] { flex-direction: column; flex-wrap: nowrap; align-items: flex-start; }
+#hudstatus[data-edge="bottom"] { flex-direction: column-reverse; flex-wrap: nowrap; align-items: flex-start; }
+.stchip {
+  --c: var(--attn);
+  display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px 0 9px; border-radius: 999px;
+  font: var(--fs-xs) var(--font); letter-spacing: .01em; color: var(--c); white-space: nowrap; cursor: pointer;
+  background: var(--chip); border: 1px solid color-mix(in srgb, var(--c) 40%, transparent);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.stchip[data-level="err"] { --c: var(--err); }
+.stchip svg { opacity: .75; flex: none; }
+.stchip:hover, .stchip[aria-expanded="true"] { border-color: var(--c); background: color-mix(in srgb, var(--c) 12%, var(--chip)); }
+.stchip:hover svg, .stchip[aria-expanded="true"] svg { opacity: 1; }
+#stpop {
+  --c: var(--attn);
+  position: fixed; z-index: 46; width: min(300px, calc(100vw - 16px)); box-sizing: border-box; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-sm); line-height: 1.4; border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--c) 55%, transparent);
+  background: color-mix(in srgb, var(--c) 8%, rgb(var(--panel-rgb) / .96));   /* floats over the world: near-opaque, like the chat gear pop */
+}
+#stpop[hidden] { display: none; }
+#stpop[data-level="err"] { --c: var(--err); }
+#stpop b { color: var(--c); font-weight: 600; }
+#stpop p { margin: 0; color: var(--dim); }
+#stpop .st-btns { display: flex; gap: 6px; margin-top: 4px; }
+#stpop .st-btns button { padding: 4px 10px; font-size: var(--fs-xs); }
 
 #touch { position: fixed; inset: 0; z-index: 3; display: none; pointer-events: none; }
 body.touch #touch { display: block; }

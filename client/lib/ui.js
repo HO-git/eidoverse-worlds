@@ -625,7 +625,7 @@ function initEMenu() {
     const t = e.target;
     if (el.hud.contains(t)) return;                       // ∃ itself toggles via click
     const inChrome = (t instanceof Element &&
-      (m.contains(t) || t.closest('.frame, #dock, .panel, .hud-pop, #micbtn, #earbtn'))) ||
+      (m.contains(t) || t.closest('.frame, #dock, .panel, .hud-pop, #micbtn, #earbtn, #hudstatus'))) ||
       resizeZoneAt(e.clientX, e.clientY);   // the grab band hangs 6px outside frames
     if (!inChrome) toggleEMenu(false);
   }, true);
@@ -684,8 +684,23 @@ export function toggleEMenu(force) {
       m.style.bottom = below ? 'auto' : `${Math.round(innerHeight - h.bottom)}px`;
     }
     paintEMenu();
+    clearStatusStrip(m);
     dodgeEMenu(m);
   }
+}
+// The status chips (statuschips.js) sit on the ∃'s row at z 45, over the menu's 40: a menu opened into them would have
+// its tab and top rows covered. It opens BELOW them instead (on a horizontal rail, where the chips stack down the ∃'s
+// column, BESIDE them), its tab included — the tab hangs above the menu's box.
+function clearStatusStrip(m) {
+  const st = document.getElementById('hudstatus');
+  if (!st || st.hidden) return;
+  const s = st.getBoundingClientRect(), r = m.getBoundingClientRect();
+  if (!s.width || !r.width) return;
+  const tab = m.querySelector(':scope > .fr-head')?.offsetHeight ?? 0;
+  if (!(r.left < s.right + 6 && r.right > s.left - 6 && r.top - tab < s.bottom + 6 && r.bottom > s.top - 6)) return;
+  const horiz = el.dock.classList.contains('horizontal');
+  if (horiz) { m.style.left = `${Math.round(Math.min(innerWidth - r.width - 4, s.right + 8))}px`; m.style.right = 'auto'; }
+  else { m.style.top = `${Math.round(Math.min(innerHeight - r.height - 4, s.bottom + 6 + tab))}px`; m.style.bottom = 'auto'; }
 }
 // The menu opens onto the nearest EMPTY spot (live 09-07 11:07: it opened over the profile panel). Its remembered
 // or default position is kept when clear; otherwise candidate positions spiral outward from it on a 40 px grid
@@ -694,6 +709,12 @@ function dodgeEMenu(m) {
   const r = m.getBoundingClientRect(); if (!r.width) return;
   const frames = [...document.querySelectorAll('.frame')].filter((f) => f.style.display !== 'none')   // frames are position:fixed — offsetParent is null for them, so don't test it
     .map((f) => f.getBoundingClientRect()).filter((b) => b.width && b.height);
+  // …and the status chips, with the menu's tab headroom (it hangs above the box): a dodge must not land on them either
+  const st = document.getElementById('hudstatus');
+  if (st && !st.hidden) {
+    const s = st.getBoundingClientRect(), tab = m.querySelector(':scope > .fr-head')?.offsetHeight ?? 0;
+    if (s.width) frames.push({ left: s.left, right: s.right, top: s.top, bottom: s.bottom + tab });
+  }
   const hits = (x, y) => frames.some((b) => x < b.right + 6 && x + r.width > b.left - 6 && y < b.bottom + 6 && y + r.height > b.top - 6);
   if (!hits(r.left, r.top)) return;
   const W = innerWidth, H = innerHeight, step = 40;

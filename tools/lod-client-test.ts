@@ -52,7 +52,7 @@ plugin({
     for (const f of ['^\\.\\./core\\.js$', '^\\.\\./assets\\.js$', '^\\.\\./colliders\\.js$',
       '^\\.\\./lightrig\\.js$', '^\\.\\./lights\\.js$', '^\\.\\./world\\.js$',
       '^\\./core\\.js$', '^\\./warmqueue\\.js$', '^\\./loadwork\\.js$', '^\\./lightrig\\.js$',
-      '^\\./emitters\\.js$', '^\\./terrain\\.js$', '^\\./remotes\\.js$', '^\\./frame\\.js$', '^\\./ui\\.js$']) {
+      '^\\./emitters\\.js$', '^\\./terrain\\.js$', '^\\./remotes\\.js$', '^\\./frame\\.js$', '^\\./ui\\.js$', '^\\./statuschips\\.js$']) {
       b.onResolve({ filter: new RegExp(f) }, () => ({ path: STUB }));
     }
   },
@@ -254,17 +254,18 @@ console.log('\n  entry points — the governor lever and the dial callback\n');
   const hist = () => G.governorDebug().history as string[];
   let windows = 0;
   while (!hist().some((h) => h.startsWith('− lod')) && windows++ < 4) for (let i = 0; i < 4; i++) G.governPerformance(12);
-  check('slow seconds with nothing else to shed: the ladder reaches "lod" — the session dial sheds, the resident is told once',
-    M.modelQuality.shed === true && hist().some((h) => h.startsWith('− lod')) && stub.toasts.length === toastsBefore + 1,
-    JSON.stringify({ shed: M.modelQuality.shed, hist: hist().slice(-3), toasts: stub.toasts.slice(-1) }));
+  check('slow seconds with nothing else to shed: the ladder reaches "lod" — the session dial sheds, and a status chip says so (no toast)',
+    M.modelQuality.shed === true && hist().some((h) => h.startsWith('− lod')) && stub.chips.has('quality-reduced')
+      && stub.chips.get('quality-reduced').level === 'attn' && stub.toasts.length === toastsBefore,
+    JSON.stringify({ shed: M.modelQuality.shed, hist: hist().slice(-3), chips: [...stub.chips.keys()], toasts: stub.toasts.slice(-1) }));
   M.residencySweep(); await settle(); drain();   // drained: the governor's grace holds while a promote tail is pending
   check('…and it CROSSES into the realizer: gov (25m > the halved 19.5m edge) re-tiers to lod on the next beat',
     obj('gov')?.userData.tierAsked === 'lod' && obj('gov')?.userData.tier === 'lod', JSON.stringify(obj('gov')?.userData));
   windows = 0;
   while (M.modelQuality.shed && windows++ < 4) for (let i = 0; i < 6; i++) G.governPerformance(60);
-  check('smooth seconds: "lod" restores SILENTLY — the dial is off, no toast',
-    !M.modelQuality.shed && hist().some((h) => h.startsWith('+ lod')) && stub.toasts.length === toastsBefore + 1,
-    JSON.stringify({ shed: M.modelQuality.shed, hist: hist().slice(-3) }));
+  check('smooth seconds: "lod" restores SILENTLY — the dial is off, no toast, and the chip goes with it',
+    !M.modelQuality.shed && hist().some((h) => h.startsWith('+ lod')) && stub.toasts.length === toastsBefore && !stub.chips.has('quality-reduced'),
+    JSON.stringify({ shed: M.modelQuality.shed, hist: hist().slice(-3), chips: [...stub.chips.keys()] }));
   M.modelQuality.setQuality('full');
   drain();
   const histLen = hist().length;

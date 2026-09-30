@@ -475,6 +475,17 @@ check("Esc again restores exactly that set", open().sort().join() === "mid,t", o
   pop.remove();
 }
 {
+  // a status chip's popover (statuschips.js #stpop) claims Esc while shown — its own handler folds it — and not while hidden
+  const sp = document.createElement("div"); sp.id = "stpop"; sp.hidden = true;
+  document.body.appendChild(sp);
+  check("a HIDDEN status-chip popover does not claim Esc", escapeIsClaimed() === null, String(escapeIsClaimed()));
+  sp.hidden = false;
+  check("a shown status-chip popover claims Esc (the panels stay)", escapeIsClaimed() === "pop", String(escapeIsClaimed()));
+  esc();
+  check("…Esc with it open leaves the frames alone", open().length === 2, open().join());
+  sp.remove();
+}
+{
   let claim: string | null = null;
   claimEscape(() => claim);
   claim = "edit";

@@ -748,7 +748,7 @@ export function makeFrame(id, opts = {}) {
         // .capnotice is NOT in this list: the card steps aside for frames (capnotice.js placeTop measures its span and
         // drops below them); a frame yielding to the card as well drove the 1000×700 emote bar to 313 px under the dock
         // (round 3 B1 — its declared right anchor charged a centred card as 671 px of right chrome)
-        for (const sel of (placed ? ['#dock'] : ['#dock', '#micbtn', '#earbtn'])) {   // a placed frame yields to the DOCK only
+        for (const sel of (placed ? ['#dock'] : ['#dock', '#micbtn', '#earbtn', '#hudstatus'])) {   // a placed frame yields to the DOCK only
           const g = document.querySelector(sel)?.getBoundingClientRect();
           if (g && g.width && g.left < state.x + state.w && state.x < g.right
               && g.top < state.y + hh && state.y < g.bottom) {
@@ -829,7 +829,8 @@ const CHROME_ANCHOR = {
   '#dock':      (el) => el?.dataset.edge || 'left',    // dynamic: ui.js applyDockEdge
   '#micbtn':    (el) => el?.dataset.edge || 'left',    // hangs off the rail, follows its edge
   '#earbtn':    (el) => el?.dataset.edge || 'left',
-  '.capnotice': (el) => el?.dataset.anchor || 'right', // capnotice.js, from the CSS breakpoint
+  '.capnotice': (el) => el?.dataset.anchor || 'right', // the lite banner (lite.js)
+  '#hudstatus': (el) => (el?.dataset.edge === 'right' ? 'right' : 'left'),   // statuschips.js: beside the ∃, away from its edge
 };
 
 // What a piece of chrome costs a frame, per side of the horizontal axis.
@@ -970,7 +971,7 @@ export function escapeIsClaimed() {
   for (const fn of escClaims) { const c = fn(); if (c) return c; }
   const a = document.activeElement;
   if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return 'field';
-  if (document.querySelector('.pf-pop, .dd-pop, .chat-gearpop:not([hidden]), #emenu:not([hidden])')) return 'pop';   // the gear pop lives in the DOM hidden; only a SHOWN one claims Esc
+  if (document.querySelector('.pf-pop, .dd-pop, .chat-gearpop:not([hidden]), #emenu:not([hidden]), #stpop:not([hidden])')) return 'pop';   // #stpop: a status chip's popover (statuschips.js)   // the gear pop lives in the DOM hidden; only a SHOWN one claims Esc
   if (document.querySelector('.scrim.open')) return 'overlay';
   if (document.pointerLockElement) return 'pointer-lock';
   return null;

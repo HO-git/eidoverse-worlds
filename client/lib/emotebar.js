@@ -123,7 +123,8 @@ export function initEmoteBar() {
     // top became computed: room went negative and the 9-across bar reflowed to a 48x350
     // column on a phone. The card is transient chrome with a dismiss button; the bar is
     // a primary control. The card yields, and it is placed second so it can.
-    for (const sel of ['#dock', '#micbtn', '#earbtn']) {
+    // #hudstatus: the status chips on the ∃'s row (statuschips.js) — placed from the ∃ and its glyphs alone, so no cycle
+    for (const sel of ['#dock', '#micbtn', '#earbtn', '#hudstatus']) {
       const g = document.querySelector(sel)?.getBoundingClientRect();
       if (g && g.width && g.top < 60 && g.bottom > 8) {
         const c = chromeCost(sel, g, innerWidth);

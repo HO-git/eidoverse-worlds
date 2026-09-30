@@ -128,6 +128,10 @@ export const getSystemEvery = (k) => every[k] ?? 1;
 // ui.js: toasts recorded
 export const toasts = [];
 export const toast = (msg, kind, ms) => { toasts.push({ msg, kind, ms }); };
+// statuschips.js: the chips on show, by id (the governor's model-detail shed posts one and lifts it)
+export const chips = new Map();
+export const statusChip = (spec) => { chips.set(spec.id, spec); };
+export const clearStatusChip = (id) => { chips.delete(id); };
 
 // ---- world.js (its maps) ----------------------------------------------------
 export const entities = new Map();

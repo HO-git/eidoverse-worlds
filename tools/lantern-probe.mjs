@@ -66,23 +66,23 @@ try {
 
   const d = await pg.evaluate(() => {
     const w = document.querySelector('.frame[data-frame="world"]');
-    const chip = document.getElementById('capchip')?.getBoundingClientRect();
-    const pop = document.querySelector('.capnotice .cn-pop');
+    const chip = document.getElementById('stchip-webgl')?.getBoundingClientRect();   // statuschips.js: #stchip-<id>
+    const pop = document.getElementById('stpop');
     return { world: w ? getComputedStyle(w).display : 'absent', chip: chip ? [chip.width, chip.height] : null,
-      popHidden: pop?.hidden ?? null, backend: document.querySelector('.capnotice') ? 'webgl-chip' : 'none' };
+      popHidden: pop?.hidden ?? null, card: !!document.querySelector('.capnotice:not(#lite-banner)') };
   });
   check('quiet default: the world panel starts CLOSED on a fresh profile', d.world === 'none', JSON.stringify(d));
   check('quiet default: the WebGL 2 note is a small chip (≤ 140×32), its text folded away',
-    d.chip && d.chip[0] > 0 && d.chip[0] <= 140 && d.chip[1] <= 32 && d.popHidden === true, JSON.stringify(d));
+    d.chip && d.chip[0] > 0 && d.chip[0] <= 140 && d.chip[1] <= 32 && d.popHidden === true && !d.card, JSON.stringify(d));
 
-  await pg.click('#capchip');
+  await pg.click('#stchip-webgl');
   await sleep(300);
-  const pop = await pg.evaluate(() => { const p = document.querySelector('.capnotice .cn-pop'); const r = p.getBoundingClientRect();
+  const pop = await pg.evaluate(() => { const p = document.getElementById('stpop'); const r = p.getBoundingClientRect();
     return { hidden: p.hidden, text: p.textContent, inView: r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight }; });
   check('chip click expands the full text, with "don’t show again", inside the viewport',
     !pop.hidden && /Running on WebGL 2/.test(pop.text) && /show again/.test(pop.text) && pop.inView, JSON.stringify(pop));
   await shot(pg, '04-chip-expanded-1280x720.png');
-  await pg.click('#capchip'); await sleep(200);
+  await pg.click('#stchip-webgl'); await sleep(200);
 
   // Enter-to-chat is untouched
   await pg.mouse.click(640, 300); await sleep(200);

@@ -99,26 +99,46 @@ try {
       !strip?.shown && cols && main && Math.abs(main.l - cols.l) < 1 && Math.abs(main.r - cols.r) < 1, JSON.stringify({ cols, main, strip }));
     check('…and the presence chip sits in the tab row, reading "just you"', chip?.shown && chipText === 'just you', JSON.stringify({ chip, chipText }));
     await pg.click('.chat-frame .chat-who'); await sleep(250);
-    const side = await rect(pg, '.chat-frame .chat-side');
-    const on = await pg.evaluate(() => document.querySelector('.chat-frame .chat-who')?.classList.contains('on'));
-    check('clicking the chip opens today\'s people column, the chip marked active', side?.shown && on, JSON.stringify({ side, on }));
-    const place = () => pg.evaluate(() => { const c = document.querySelector('.chat-frame .chat-who'), bar = c?.parentElement;
-      return { text: c?.textContent?.trim() ?? null, first: bar?.firstElementChild === c, beforeGear: c?.nextElementSibling?.classList.contains('chat-gear') }; });
-    let pl = await place();
-    check('open, the chip drops its words: the column header already says who\'s here', pl.text === '', JSON.stringify(pl));
-    check('pane on the LEFT (the default): the chip is the first thing in the tab row', pl.first && !pl.beforeGear, JSON.stringify(pl));
-    await shot(pg, '08-people-open-1280x720.png');
-    await pg.click('.chat-frame .chat-gear'); await sleep(200);
+    // OPEN: the chip steps out of the tab row and the column's header is the close control, its chevron toward the edge
+    // the column collapses to; the column sits on the side Chat ▸ settings names
+    const openState = () => pg.evaluate(() => {
+      const c = document.querySelector('.chat-frame .chat-who'), head = document.querySelector('.chat-frame .chat-side-head');
+      const side = document.querySelector('.chat-frame .chat-side').getBoundingClientRect(), main = document.querySelector('.chat-frame .chat-main').getBoundingClientRect();
+      const cs = getComputedStyle(head, head.dataset.chev && document.querySelector('.chat-frame .chat-cols').classList.contains('side-left') ? '::before' : '::after');
+      return { chipShown: !!c && getComputedStyle(c).display !== 'none', role: head.getAttribute('role'), chev: cs.content.replace(/"/g, ''), headText: head.textContent,
+        sideLeftOfMain: side.right <= main.left + 1, sideRightOfMain: side.left >= main.right - 1, sideW: side.width,
+        chevX: head.getBoundingClientRect(), bar: [...(c?.parentElement?.children ?? [])].map((x) => x.className) };
+    });
+    let st = await openState();
+    check('open (left, the default): the chip is hidden; the column sits LEFT of the chat, its header a button with ‹',
+      !st.chipShown && st.role === 'button' && st.chev === '‹' && st.sideLeftOfMain && st.sideW > 0, JSON.stringify(st));
+    await shot(pg, '13-people-open-header-close.png');
+    // the gear: at the right end of the compose box, its popover opening UPWARD from there
+    const gear = await rect(pg, '.chat-frame .chat-compose > .chat-gear'), line = await rect(pg, '#chatline');
+    check('the gear sits inside the compose box, at its right end (not in the tab row)',
+      gear?.shown && line && gear.l > line.l && gear.r <= line.r && gear.t >= line.t - 1 && gear.b <= line.b + 1 && line.r - gear.r < 16
+      && !(await pg.$('.chat-frame .chat-tabs .chat-gear')), JSON.stringify({ gear, line }));
+    await pg.click('.chat-frame .chat-compose > .chat-gear'); await sleep(200);
+    const gp = await rect(pg, '.chat-frame .chat-gearpop');
+    check('…its popover opens upward from it, right edges aligned', gp?.shown && gp.b <= gear.t && gear.t - gp.b <= 10 && Math.abs(gp.r - gear.r) <= 1, JSON.stringify({ gp, gear }));
+    await shot(pg, '12-chat-gear-in-compose.png');
     await pg.click('.chat-gearpop [data-side="right"]'); await sleep(250);
-    pl = await place();
-    check('Chat ▸ settings → right: the chip moves to the right end, beside the gear', !pl.first && pl.beforeGear, JSON.stringify(pl));
-    await shot(pg, '09-people-open-right-1280x720.png');
     await pg.keyboard.press('Escape'); await sleep(150);
-    await pg.click('.chat-frame .chat-gear'); await sleep(200);
+    st = await openState();
+    check('Chat ▸ settings → right: the column moves RIGHT of the chat, its header’s chevron ›, the chip still hidden',
+      !st.chipShown && st.chev === '›' && st.sideRightOfMain, JSON.stringify(st));
+    await pg.mouse.move(900, 300);
+    await shot(pg, '13b-people-open-right-header-close.png');
+    await pg.click('.chat-frame .chat-side-head'); await sleep(250);
+    const back = await pg.evaluate(() => { const c = document.querySelector('.chat-frame .chat-who');
+      return { shown: getComputedStyle(c).display !== 'none', last: c.parentElement.lastElementChild === c, text: c.textContent.trim(),
+        closed: document.querySelector('.chat-frame .chat-side').classList.contains('closed') }; });
+    check('clicking the header closes the column; the chip comes back at the right end of the tab row', back.closed && back.shown && back.last && back.text === 'just you', JSON.stringify(back));
+    await pg.click('.chat-frame .chat-compose > .chat-gear'); await sleep(200);
     await pg.click('.chat-gearpop [data-side="left"]'); await sleep(250);
     await pg.keyboard.press('Escape'); await sleep(150);
-    await pg.click('.chat-frame .chat-who'); await sleep(250);
-    check('…and clicking it again collapses the column', !(await rect(pg, '.chat-frame .chat-side'))?.shown);
+    const lf = await pg.evaluate(() => { const c = document.querySelector('.chat-frame .chat-who'); return c.parentElement.firstElementChild === c; });
+    check('…and back on the left, the chip is first in the row', lf);
   }
 
   // Ctrl+K opens

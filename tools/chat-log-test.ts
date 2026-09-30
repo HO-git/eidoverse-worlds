@@ -160,8 +160,14 @@ const tabLabels = () => [...tabs().querySelectorAll(".tabscroll button")].map((b
 const openPane = () => (frameStub.body!.querySelector(".chat-side-tog") as HTMLElement)?.click();
 
 check("the tab strip starts with the three fixed tabs", tabLabels().join("|") === "all|mentions|system", tabLabels().join("|"));
-check("tabs live INSIDE the scroller, the gear outside it",
-  !!tabs().querySelector(".tabscroll") && !!tabs().querySelector(":scope > .chat-gear") && !tabs().querySelector(".tabscroll .chat-gear"));
+check("tabs live INSIDE the scroller; the tab row holds the tabs and the people chip only (no gear)",
+  !!tabs().querySelector(".tabscroll") && !tabs().querySelector(".chat-gear")
+    && [...tabs().children].every((c: any) => c.matches(".tabscroll, .tabarrow, .chat-who")), [...tabs().children].map((c: any) => c.className).join(","));
+check("the gear sits at the right end of the compose row, after the line", (() => {
+  const compose = frameStub.body!.querySelector(".chat-compose")!;
+  const g = compose.querySelector(":scope > .chat-gear");
+  return !!g && compose.lastElementChild === g && g.previousElementSibling?.id === "chatline";
+})());
 check("both scroll arrows exist", tabs().querySelectorAll(".tabarrow").length === 2);
 
 // an inbound whisper opens a conversation, files the line, and bumps unread
@@ -173,6 +179,19 @@ check("...and it renders as a whisper", !!wline?.classList.contains("whisper"));
 
 // the People Here pane: double-click a name -> that DM tab
 openPane();
+{ // OPEN: the tab-row chip steps out and the column's header is the way back (a chevron toward the edge it collapses to)
+  const chip = tabs().querySelector(":scope > .chat-who") as HTMLElement;
+  const head = frameStub.body!.querySelector(":scope > .chat-cols > .chat-side > .chat-side-head") as HTMLElement;
+  const left = frameStub.body!.querySelector(":scope > .chat-cols")!.classList.contains("side-left");
+  check("open: the people chip is hidden", chip?.hidden === true);
+  check("…and the column's header is a button whose chevron points at its edge", head?.getAttribute("role") === "button"
+    && head.dataset.chev === (left ? "‹" : "›") && !/[‹›]/.test(head.textContent!), JSON.stringify({ role: head?.getAttribute("role"), chev: head?.dataset.chev, text: head?.textContent, left }));
+  head.click();
+  check("clicking the header closes the column and brings the chip back",
+    frameStub.body!.querySelector(".chat-side")!.classList.contains("closed") && chip.hidden === false);
+  (tabs().querySelector(":scope > .chat-who") as HTMLElement).click();
+  check("…and the chip opens it again", !frameStub.body!.querySelector(".chat-side")!.classList.contains("closed"));
+}
 const rows2 = () => [...frameStub.body!.querySelectorAll(".chat-side-list .who-row")];
 check("the People Here pane lists everyone", rows2().length === 3, `${rows2().length} rows`);
 // A BUTTON, not a div — this IS the fix. frames.js:_contentClaims exempts only

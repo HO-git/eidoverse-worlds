@@ -356,12 +356,14 @@ a:hover { color: var(--fg); text-decoration-color: var(--brand); }
   border-radius: 0; color: var(--dim); font-size: 12px;
 }
 .chat-side-tog:hover { color: var(--fg); background: rgb(255 255 255 / .05); }
+.chat-side-tog { display: none; }   /* the 14px strip toggler is retired (the node stays: ui.js Tab and mods address it): collapsed, the tab-row chip opens the column; open, the column's header closes it */
 .chat-cols.side-closed .chat-side-tog { display: none; }   /* collapsed: no strip at all, so the chat sits centred; the tab row's presence chip opens it (R, 09-29) */   /* no pane, no grab edge, no line — on EITHER side (live 09-07: left leaked a line) */
-.chat-side { flex: none; display: flex; flex-direction: column; position: relative; min-height: 0; }
+.chat-side { flex: none; display: flex; flex-direction: column; position: relative; min-height: 0; border-left: 1px solid var(--edge); }
+.chat-cols.side-left .chat-side { border-left: none; border-right: 1px solid var(--edge); }   /* the line between log and column is the column's own edge now */
 .chat-side.closed { display: none; }
 /* the grip straddles the LINE you can see (the toggler's border, between the log
    and the 14px strip) — it used to sit on the strip's far side, invisible (live, 09-04) */
-.chat-side-grip { position: absolute; left: calc(-14px - 4px); top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 3; }
+.chat-side-grip { position: absolute; left: -5px; top: 0; bottom: 0; width: 8px; cursor: ew-resize; z-index: 3; }
 /* the affordance is the LINE itself, not a band: a 1px stroke that turns brand under the pointer */
 .chat-side-grip::before { content: ''; position: absolute; left: 4px; top: 0; bottom: 0; width: 1px; background: transparent; }
 .chat-side-grip:hover::before, .chat-side-grip:active::before { background: var(--brand); }
@@ -381,28 +383,31 @@ a:hover { color: var(--fg); text-decoration-color: var(--brand); }
 .chat-side-list .who-row .d { color: var(--dim); font-size: var(--fs-xs); margin-left: auto; }
 .chat-side-list .who-empty { color: var(--dim); font-size: var(--fs-sm); }
 .chat-side-head { flex: none; padding: 6px 6px 2px; font-size: var(--fs-xs); color: var(--dim); text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
+/* OPEN, the header is the column's close control: a chevron pointing at the edge it collapses to (chat.js data-chev) —
+   at the header's outer end, on whichever side the column sits */
+.chat-side-head[role="button"] { display: flex; align-items: center; gap: 5px; margin: 4px 4px 0; padding: 3px 6px; border-radius: 5px; cursor: pointer; }
+.chat-side-head[role="button"]:hover, .chat-side-head[role="button"]:focus-visible { color: var(--fg); background: var(--hov); outline: none; }
+.chat-side-head[data-chev]::after { content: attr(data-chev); margin-left: auto; font-size: 15px; line-height: 1; letter-spacing: 0; opacity: .8; }
+.chat-cols.side-left .chat-side-head[data-chev]::after { content: none; }
+.chat-cols.side-left .chat-side-head[data-chev]::before { content: attr(data-chev); font-size: 15px; line-height: 1; letter-spacing: 0; opacity: .8; }
 .chat-cols.side-left { flex-direction: row-reverse; }
 .chat-cols.side-left .chat-side-tog { border-left: none; border-right: 1px solid var(--edge); }
 .chat-cols.side-left.side-closed .chat-side-tog { border-right-color: transparent; }   /* closed = no line, same as the right (live 09-07 10:55) */
-.chat-cols.side-left .chat-side-grip { left: auto; right: calc(-14px - 4px); }   /* mirror of the right: over the toggler's border line, not the pane's own edge (live, 09-06 23:34: 'the right behaviour is preferred') */
-.chat-tabs .chat-gear {
-  /* min-width:0 because `.chat-tabs button`'s min-width matches the gear too,
-     and inheriting the tabs' floor made the gear eat strip space they needed. */
-  /* LIFTED off the rail. With the strip bottom-aligned the gear sat level with
-     the separator and crowded it — R, 2026-09-11 item 4: "Move the
-     'Chat>Settings' icon up to be in line with the other tab icons so it
-     doesn't get so close to the separator line". */
-  flex: none; min-width: 0; margin-left: 2px; padding: 3px 6px; align-self: center;
+.chat-cols.side-left .chat-side-grip { left: auto; right: -5px; }   /* mirror of the right: over the toggler's border line, not the pane's own edge (live, 09-06 23:34: 'the right behaviour is preferred') */
+/* the gear: a settings affordance INSIDE the compose field, at its right end (its popover opens upward, chat.js) */
+.chat-compose > .chat-gear {
+  position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
+  width: 24px; height: 24px; padding: 0; display: grid; place-items: center;
   background: none; border: none; color: var(--dim); border-radius: 5px;
-  display: grid; place-items: center;
 }
+.chat-compose > .chat-gear[aria-expanded="true"] { opacity: 1; color: var(--fg); background: var(--hov); }
+.chat-compose input { padding-right: 32px; text-overflow: ellipsis; }   /* a long placeholder ends in … before the gear, not under it */
 .chat-tabs .chat-who { flex: none; min-width: 0; align-self: center; display: inline-flex; align-items: center; gap: 6px;
   margin-left: 4px; padding: 2px 8px; background: none; border: 1px solid transparent; border-radius: 999px;
   color: var(--dim); font-size: var(--fs-xs); white-space: nowrap; cursor: pointer; }
 .chat-tabs .chat-who:hover { color: var(--fg); background: var(--hov); }
 .chat-tabs .chat-who.at-left { margin-left: 0; margin-right: 4px; }
-.chat-tabs .chat-who .who-n:empty { display: none; }
-.chat-tabs .chat-who.on { color: var(--fg); border-color: color-mix(in srgb, var(--brand) 35%, transparent); background: rgb(0 0 0 / .3); }
+.chat-tabs .chat-who[hidden] { display: none; }
 .chat-who .who-dots { display: inline-flex; }
 .chat-who .who-dot { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 0 1.5px rgb(var(--panel-rgb)), 0 0 0 2.5px var(--ok); }
 .chat-who .who-dot + .who-dot { margin-left: -3px; }

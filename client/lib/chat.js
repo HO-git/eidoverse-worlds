@@ -733,6 +733,15 @@ function initSidePane() {
   // thesis, which is the point. (agent review round 3)
   const tog = sideEl('tog');
   if (tog) tog.onclick = toggleSide;
+  // the open column's header closes it (the tab-row chip is hidden while it is open)
+  const head = sideEl('head');
+  if (head) {
+    head.setAttribute('role', 'button'); head.tabIndex = 0;
+    head.addEventListener('click', () => { if (sideSt.open) toggleSide(); });
+    head.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ' ') && sideSt.open) { e.preventDefault(); e.stopPropagation(); toggleSide(); }
+    });
+  }
 
     // DOUBLE-CLICK A NAME -> ITS DM TAB. R, 2026-09-11: "can you double-click on
     // a name in the People Here pane and have a DM tab show up correctly".
@@ -776,17 +785,17 @@ function paintWho() {
   const people = getPeople(), others = people.filter((p) => !p.me).length;
   const dots = [...people.filter((p) => !p.me), ...people.filter((p) => p.me)].slice(0, 3).map((p) =>
     `<span class="who-dot" data-presence="${esc(p.presence ?? 'present')}" style="background:${colorFor(p.id)}"></span>`).join('');
-  // open, the column's own header says who's here: the chip keeps only its dots (R, 09-29: "just you" twice on one line)
-  const n = sideSt.open ? '' : `<span class="who-n">${others === 0 ? 'just you' : `${people.length} here`}</span>`;
-  chip.innerHTML = `<span class="who-dots">${dots}</span>${n}`;
-  // on the side the column opens from (Chat ▸ settings): first in the row on the left, before the gear on the right
+  chip.innerHTML = `<span class="who-dots">${dots}</span><span class="who-n">${others === 0 ? 'just you' : `${people.length} here`}</span>`;
+  // on the side the column opens from (Chat ▸ settings): first in the row on the left, last on the right
   const bar = chip.parentElement, left = sideSt.pos === 'left';
   if (left && bar.firstElementChild !== chip) bar.prepend(chip);
-  else if (!left) { const gear = bar.querySelector(':scope > .chat-gear'); if (chip.nextElementSibling !== gear) bar.insertBefore(chip, gear); }
+  else if (!left && bar.lastElementChild !== chip) bar.appendChild(chip);
   chip.classList.toggle('at-left', left);
-  chip.classList.toggle('on', !!sideSt.open);
-  chip.setAttribute('aria-pressed', String(!!sideSt.open));
-  chip.title = sideSt.open ? 'hide people here' : 'people here';
+  // OPEN, the chip steps out: the column's own header says who's here and is the way back (R, 09-29 — "just you"
+  // twice on one line). Closing returns it.
+  chip.hidden = !!sideSt.open;
+  chip.setAttribute('aria-expanded', String(!!sideSt.open));
+  chip.title = 'people here';
 }
 function applySide() {
   const side = sideEl('side');
@@ -799,7 +808,12 @@ function applySide() {
   side.style.width = sideSt.open ? `${sideSt.w}px` : '';
   // the chevron points the way the pane will move: on the right › closes / ‹ opens; mirrored on the left
   const left = sideSt.pos === 'left';
-  const t = sideEl('tog'); if (t) t.textContent = (sideSt.open !== left) ? '›' : '‹';
+  const chev = (sideSt.open !== left) ? '›' : '‹';
+  const t = sideEl('tog'); if (t) t.textContent = chev;
+  // the open column's header is its close control, its chevron pointing at the edge it collapses to — drawn from
+  // data-chev by CSS, so the header's text stays exactly who's here
+  const head = sideEl('head');
+  if (head) { head.dataset.chev = chev; head.title = 'hide people here'; }
   paintSide();
 }
 function paintSide() {
@@ -879,11 +893,19 @@ function initChatGear() {
     gearAnchor = anchor;
     if (!pop.hidden) {
       paintPop();
+      // UPWARD from the compose row's gear, its right edge on the gear's: the log is above, the frame's edge below
       const a = anchor.getBoundingClientRect(), f = frame.el.getBoundingClientRect();
       pop.style.right = `${Math.max(4, f.right - a.right)}px`;
-      pop.style.top = `${a.bottom - f.top + 6}px`;
+      pop.style.top = 'auto';
+      pop.style.bottom = `${f.bottom - a.top + 6}px`;
     }
   };
+  // the gear lives at the right end of the compose box, like a settings affordance in a text field
+  const gear = frame.body.querySelector('.chat-compose > .chat-gear');
+  if (gear) {
+    gear.innerHTML = fsvg('gear-six', 14);
+    gear.onclick = (e) => { e.stopPropagation(); gearToggle(gear); };
+  }
   const closePop = () => { if (!pop.hidden && gearAnchor) gearToggle(gearAnchor); };
   document.addEventListener('pointerdown', (e) => {
     if (!pop.hidden && !pop.contains(e.target) && !gearAnchor?.contains(e.target)) closePop();
@@ -923,6 +945,7 @@ export function initChat({ send, whisper, typing, people }) {
         <div class="chat-compose">
           <div id="chat-ac" class="ac panel"></div>
           <input id="chatline" placeholder="say something…  @ to mention · / for commands">
+          <button type="button" class="chat-gear" title="chat options" aria-expanded="false" aria-haspopup="dialog"></button>
         </div>
       </div>
       <button class="chat-side-tog" title="People Here"></button>
@@ -1229,16 +1252,6 @@ function paintTabs() {
   who.type = 'button'; who.className = 'chat-who';
   who.onclick = (e) => { e.stopPropagation(); toggleSide(); };
   bar.appendChild(who);
-  const gear = document.createElement('button');
-  gear.className = 'chat-gear';
-  gear.title = 'chat options';
-  gear.innerHTML = fsvg('gear-six', 13);
-  // tabs repaint while the popover may be open: the new gear inherits it
-  const open = gearOpen();
-  gear.setAttribute('aria-expanded', String(open));
-  if (open) gearAnchor = gear;
-  gear.onclick = (e) => { e.stopPropagation(); gearToggle?.(gear); };
-  bar.appendChild(gear);                     // the gear stays OUTSIDE the scroller — always reachable
   paintWho();
   paintArrows();
   // KEEP THE ACTIVE TAB IN VIEW. Overflow was sacrificing the tab you are

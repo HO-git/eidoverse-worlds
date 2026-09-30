@@ -106,6 +106,7 @@ import { updateVoiceMouths } from './lib/voicemouths.js';
 import { initEmoteBar } from './lib/emotebar.js';
 import { initXRKeyboard } from './lib/xrkeyboard.js';
 import { initCommands, saveScreenshot } from './lib/commands/handlers.js';
+import { register as registerAction } from './lib/actions.js';
 import { deriveLandmarks, debugMarkers, landmarkWorld } from './lib/landmarks.js';
 import { measureChain, solveChain } from './lib/reachbone.js';
 import { canonicalPoint } from '../shared/contact.js';
@@ -418,16 +419,33 @@ initCommands();   // the /command surface (lib/commands/) + its bus subscription
 
 // ---------------------------------------------------------------- keys
 
+// The main keys, as data: the handler below dispatches from this table and the
+// lantern prompt lists it (lib/actions.js), so a key and its row cannot drift.
+// `id` names an existing action to merge into (the dock's debug/edit/chat rows
+// gain their key) or a new one; `guard` gates the KEY only (edit mode rebinds H
+// and R) — from the prompt the act is always the act.
+const MAIN_KEYS = [
+  { code: 'KeyH', key: 'H', id: 'key:help', title: 'help — keys and controls', keywords: ['?', 'keys', 'controls', 'how'], group: 'view',
+    guard: () => !isEditing(), run: () => toggleHelp() },
+  { code: 'Tab', key: 'Tab', id: 'key:people', title: 'people here', keywords: ['who', 'present', 'roster'], group: 'panels',
+    prevent: true, run: () => togglePeopleHere() },
+  { code: 'KeyB', key: 'B', id: 'panel:edit', run: () => toggleEditMode() },
+  { code: 'KeyP', key: 'P', id: 'key:photo', title: 'photo mode (free camera)', keywords: ['camera', 'picture'], group: 'view', run: () => togglePhotoMode() },
+  { code: 'F1', key: 'F1', id: 'key:hidehud', title: 'hide the HUD', keywords: ['interface', 'clean', 'photo'], group: 'view',
+    prevent: true, run: () => document.body.classList.toggle('photo') },
+  { code: 'F2', key: 'F2', id: 'key:screenshot', title: 'save a screenshot', keywords: ['picture', 'capture'], group: 'view', prevent: true, run: () => saveScreenshot() },
+  { code: 'F3', key: 'F3', id: 'panel:debug', prevent: true, run: () => toggleDebug() },
+  { code: 'KeyR', key: 'R', id: 'body:limp', title: 'go limp / get up', keywords: ['ragdoll', 'fall', 'flop'], group: 'body',
+    guard: () => !isEditing(), run: () => (isDowned() ? getUp() : goLimp()) },
+];
+// merge-into rows keep the dock's title/run (the same act) and only add the key; new rows register whole
+for (const { code, guard, prevent, ...a } of MAIN_KEYS) registerAction(a.title ? a : { id: a.id, key: a.key });
+registerAction({ id: 'panel:chat', key: 'Enter' });
+
 bus.on('key', (e) => {
   if (e.code === 'Slash' && e.shiftKey) { toggleHelp(); return; }
-  if (e.code === 'KeyH' && !isEditing()) { toggleHelp(); return; }
-  if (e.code === 'Tab') { e.preventDefault(); togglePeopleHere(); return; }
-  if (e.code === 'KeyB') { toggleEditMode(); return; }
-  if (e.code === 'KeyP') { togglePhotoMode(); return; }
-  if (e.code === 'F1') { e.preventDefault(); document.body.classList.toggle('photo'); return; }
-  if (e.code === 'F2') { e.preventDefault(); saveScreenshot(); return; }
-  if (e.code === 'F3') { e.preventDefault(); toggleDebug(); return; }
-  if (e.code === 'KeyR' && !isEditing()) { isDowned() ? getUp() : goLimp(); return; }
+  const k = MAIN_KEYS.find((m) => m.code === e.code && (!m.guard || m.guard()));
+  if (k) { if (k.prevent) e.preventDefault(); k.run(); return; }
   // any movement stands you back up
   if (isDowned() && ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) getUp();
   // emotes on the number row — the world is a performance space and there was

@@ -22,6 +22,7 @@ import { requestHistory } from './net.js';
 // ONLY the registry — never handlers.js, or the cycle chat→handlers→net→chat
 // closes (§14.2). The registry is a pure table with no imports of its own.
 import { COMMANDS, resolveCommand } from './commands/registry.js';
+import { register as registerAction } from './actions.js';
 
 const MAX_LINES = 400;
 const HISTORY = 'ew-chat-history';
@@ -648,6 +649,22 @@ const CHAT_LOCAL = {
   },
 };
 
+/** One line, as if typed into the compose box and Entered: history, then a
+ *  /command or speech — a whisper while a conversation tab is showing. The
+ *  lantern prompt sends through here, so there is ONE send path. */
+function submitLine(v) {
+  sentHistory.push(v);
+  while (sentHistory.length > 50) sentHistory.shift();
+  try { localStorage.setItem(HISTORY, JSON.stringify(sentHistory.slice(-20))); } catch { /* full */ }
+  if (v.startsWith('/')) { runCommand(v); return; }
+  // In a conversation tab, plain typing is a whisper — you should not have
+  // to prefix every line of a private conversation with a command, and you
+  // REALLY should not be able to say something aloud while looking at a
+  // window that reads like a private one.
+  if (filter.startsWith('w:')) onWhisper(filter.slice(2), v.slice(0, 4000));
+  else onSend(v.slice(0, 4000));
+}
+
 function runCommand(raw) {
   const [cmd, ...rest] = raw.slice(1).split(/\s+/);
   const arg = rest.join(' ');
@@ -676,6 +693,9 @@ export const chat = {
   close() { inputEl.value = ''; closeAC(); inputEl.blur(); },
   get isOpen() { return document.activeElement === inputEl; },
   toggle() { frame.toggle(); },
+  submit: (text) => { const v = String(text ?? '').trim(); if (v) submitLine(v); },
+  /** who a plain line would reach right now: null = the room, else a whisper target */
+  whisperTarget: () => (filter.startsWith('w:') ? filter.slice(2) : null),
   frame: () => frame,
   // unread accounting is observable so tests can pin it (Sol review, PR#7)
   unreadCounts: () => ({ unread, mentions: unreadMentions }),
@@ -982,18 +1002,20 @@ export function initChat({ send, whisper, typing, people }) {
       historyIdx = -1;
       closeAC();
       if (!v) { inputEl.blur(); return; }
-      sentHistory.push(v);
-      while (sentHistory.length > 50) sentHistory.shift();
-      try { localStorage.setItem(HISTORY, JSON.stringify(sentHistory.slice(-20))); } catch { /* full */ }
-      if (v.startsWith('/')) { runCommand(v); return; }
-      // In a conversation tab, plain typing is a whisper — you should not have
-      // to prefix every line of a private conversation with a command, and you
-      // REALLY should not be able to say something aloud while looking at a
-      // window that reads like a private one.
-      if (filter.startsWith('w:')) onWhisper(filter.slice(2), v.slice(0, 4000));
-      else onSend(v.slice(0, 4000));
+      submitLine(v);
     }
   });
+
+  // every listed slash command is an action too; one that needs an argument FILLS the prompt instead of running
+  for (const row of COMMANDS) {
+    if (row.listed === false) continue;
+    const needsArg = new RegExp(`^/${row.name} <`).test(row.help);
+    registerAction({
+      id: `cmd:${row.name}`, title: `/${row.name}`, group: 'commands',
+      keywords: [row.name, ...(row.aliases ?? []), row.help.replace(/^\/\S+\s*/, '').replace(/[<>[\]—|"]/g, ' ')],
+      ...(needsArg ? { fill: `/${row.name} ` } : { run: () => submitLine(`/${row.name}`) }),
+    });
+  }
 
   try { sentHistory.push(...(JSON.parse(localStorage.getItem(HISTORY) ?? '[]'))); } catch { /* none */ }
 

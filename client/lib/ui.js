@@ -32,6 +32,7 @@ let loadingItems = () => [];
 export function setLoadingItems(fn) { loadingItems = fn; }
 import { makeFrame, getFrame, isLocked, setLocked, resetLayout } from './frames.js';
 import { defsRegistry } from './defs.js';
+import { register as registerAction } from './actions.js';
 
 const $ = (id) => document.getElementById(id);
 export const el = {
@@ -295,6 +296,12 @@ export function makeSection(title, onOpen, { id = '', host: hostName = 'world' }
   head.onclick = () => api.toggle().catch((e) => report(title, e));
   box.append(head, body);
   host.appendChild(box);
+  // the lantern finds a section by its own name ("sky", "audio"): open the panel AND the section
+  const label = /^[\p{L}\p{N}]/u.test(title) ? title : title.replace(/^\S+\s+/, '');   // "☀ sky" → "sky"
+  registerAction({
+    id: `section:${hostName}:${label}`, title: label, group: hostName, keywords: [hostName],
+    run: () => api.toggle(true).then(() => box.scrollIntoView({ block: 'nearest' })).catch((e) => report(title, e)),
+  });
   return api;
 }
 
@@ -369,6 +376,10 @@ export function dockPins() {
     .map((e) => ({ id: e.id, icon: iconOf(e), open: !!getFrame(e.id)?.visible }));
 }
 
+// how a rail entry reads as a lantern row (the rail itself shows only a glyph)
+const PANEL_TITLE = { emotes: 'emote bar', edit: 'edit mode', debug: 'debug panel' };
+const PANEL_WORDS = { world: ['catalog', 'build'], profile: ['avatar', 'presence', 'friends', 'satchel'],
+  chat: ['messages', 'log', 'people'], edit: ['build', 'place'], settings: ['preferences', 'options'] };
 function addDockButton(entry) {
   const { id, label, action } = entry;
   const icon = iconOf(entry);   // upstream main.js still labels the rail with emoji; chrome never rides emoji
@@ -387,6 +398,13 @@ function addDockButton(entry) {
     paintDock();
   };
   b.dataset.toggles = id;   // NOT data-frame — that belongs to the window itself
+  // the same act, findable by name in the lantern; a key table may merge its key in (main.js)
+  registerAction({
+    id: `panel:${id}`, title: PANEL_TITLE[id] ?? id, group: 'panels',
+    keywords: [id, 'panel', ...(PANEL_WORDS[id] ?? [])],
+    when: action && entry.gate ? entry.gate : undefined,
+    run: () => b.onclick(),
+  });
   if (entry.last) b.dataset.last = '1';
   // before the first `last` button if there is one, else before the grip — so
   // the wrench keeps the end and the grip stays after it

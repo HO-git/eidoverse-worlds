@@ -13,6 +13,7 @@ import { resolveColliders, lastBlockedTop, findSeat, raySegment } from './collid
 import { chat } from './chat.js';
 import { isOverlayOpen, flashHint } from './ui.js';
 import { selectClip } from './locomotion_clip.js';
+import { register as registerAction } from './actions.js';
 import {
   resolveFirstPersonAnchor, FP_FORWARD, FP_EYE_LIFT, FP_GAZE_AHEAD, FP_GAZE_DROP,
 } from './fp_view.js';
@@ -305,11 +306,18 @@ bus.on('key', (e) => {
   // build.js binds R/F and the arrows to nudge/raise/turn, where holding the
   // key to keep moving a thing is the whole interaction.
   if (e.repeat) return;
-  if (e.code === 'KeyX') toggleSit();
-  if (e.code === 'KeyF') { const m = toggleFlight(); if (m) flashHint?.(m); }
-  if (e.code === 'KeyZ') { posture = posture === 'lie' ? null : 'lie'; myState.seat = null; }
-  if (e.code === 'KeyG') { const m = toggleFold(meRef()); if (m) flashHint?.(m); }
+  BODY_KEYS.find((k) => k.code === e.code)?.run();
 });
+
+// The body's keys, as data: the handler above dispatches from this table and the
+// lantern lists it (actions.js), so a key and its row cannot drift apart.
+const BODY_KEYS = [
+  { code: 'KeyX', key: 'X', id: 'sit', title: 'sit / stand', keywords: ['seat', 'chair', 'posture'], run: () => toggleSit() },
+  { code: 'KeyF', key: 'F', id: 'fly', title: 'fly', keywords: ['flight', 'wings', 'land'], run: () => { const m = toggleFlight(); if (m) flashHint?.(m); } },
+  { code: 'KeyZ', key: 'Z', id: 'lie', title: 'lie down', keywords: ['posture', 'rest', 'sleep'], run: () => { posture = posture === 'lie' ? null : 'lie'; myState.seat = null; } },
+  { code: 'KeyG', key: 'G', id: 'fold', title: 'fold wings', keywords: ['wings', 'unfold'], run: () => { const m = toggleFold(meRef()); if (m) flashHint?.(m); } },
+];
+for (const { code, ...a } of BODY_KEYS) registerAction({ ...a, id: `body:${a.id}`, group: 'body' });
 
 // Declared seats (the `sockets` component — mount verb, rides motion) live in
 // main.js with the rest of the world vocabulary; the controller only knows

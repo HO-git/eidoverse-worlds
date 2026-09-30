@@ -9,6 +9,7 @@ import { bus } from './base.js';
 import { EMOTE_ORDER, EMOTE_ICONS } from './emotedefs.js';   // names + glyphs, no engine
 import { getMe } from './mybody.js';
 import { registerXRPanel } from './xrpanels.js';
+import { register as registerAction } from './actions.js';
 import { myState, setPosture, sitHere, standUp, getPosture } from './controller.js';
 const POSTURES = ['sit', 'stand', 'lie'];
 // through the same flows the ring used: a nearby seat wins for sit, stand dismounts
@@ -242,7 +243,13 @@ export function initEmoteBar() {
       b.onclick = () => { getMe()?.playEmote(name); myState.emote = name; litEmote = name; litUntil = performance.now() + 1500; paint(); };
       grid.appendChild(b);
       tiles.set(name, b);
+      // the tile's own act, findable by name; number keys 1–9 follow EMOTE_ORDER (main.js)
+      registerAction({ id: `emote:${name}`, title: name, group: 'emotes', keywords: ['emote', 'gesture'],
+        key: i < 9 ? String(i + 1) : undefined, run: b.onclick });
     });
+    // sit and lie are keys (X, Z — controller.js registers those); standing up has no key, only this tile
+    registerAction({ id: 'posture:stand', title: 'stand up', group: 'body', keywords: ['posture', 'get up'],
+      run: () => { posture('stand'); paint(); } });
     if (f._state) snapTo(f._state.w);
   };
   const paint = () => { const lit = myState.emote ?? (performance.now() < litUntil ? litEmote : null); for (const [n, b] of tiles) b.classList.toggle('on', n.startsWith('posture:') ? (myState.clip === n.slice(8) || (n === 'posture:sit' && myState.clip === 'sitchair')) : lit === n); };

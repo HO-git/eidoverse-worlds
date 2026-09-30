@@ -6,7 +6,7 @@
 // matches xrpanels' 900 px/m; (2) inline <svg> drawn via serialise→Image (the icon system);
 // (3) `pause`/`resume` + a per-instance min interval so live panels don't re-rasterise at 60 Hz;
 // (4) events are NOT re-dispatched on window (three's did — it tripped desktop handlers);
-// (8) wrapped text nodes draw word by word; (5) elementAt/scrollAt for trigger-scroll; (7) a pick targets ONE element and bubbles; (6) `suspend`/`unsuspend` — the DOM observer off while a
+// (8) wrapped text nodes draw word by word; (9) unpainted elements (opacity 0, CSS display/visibility) are skipped; (10) colour inputs are swatches; (11) a native <select> draws its label; (5) elementAt/scrollAt for trigger-scroll; (7) a pick targets ONE element and bubbles; (6) `suspend`/`unsuspend` — the DOM observer off while a
 // kept quad's element is back on the desktop (domquad's soft swap).
 import {
 	CanvasTexture,
@@ -323,6 +323,18 @@ function html2canvas( element, scale = 1 ) {   // EIDO (1)
 
 		}
 
+		// EIDO (9): what the browser does not PAINT, the quad must not paint. three checked only an inline display:none, so a
+		// control hidden by CSS was drawn anyway: the house dropdown keeps each native <select> as its value store at
+		// opacity:0, 1×1 px (dropdown.js, index.html select.dd-native) and the quad drew it, background plus EVERY option's
+		// text stacked in one spot: the "little black squares like checkboxes" over World › Sky's labels (owner, 09-30).
+		// Opacity 0 and display:none take the subtree; visibility:hidden too (a visible child inside one is rare here).
+		if ( element.nodeType === Node.ELEMENT_NODE ) {
+
+			const cs = window.getComputedStyle( element );
+			if ( cs.display === 'none' || cs.visibility === 'hidden' || parseFloat( cs.opacity ) === 0 ) return;
+
+		}
+
 		let x = 0, y = 0, width = 0, height = 0;
 
 		if ( element.nodeType === Node.TEXT_NODE ) {
@@ -561,7 +573,21 @@ function html2canvas( element, scale = 1 ) {   // EIDO (1)
 
 				}
 
-				if ( element.type === 'color' || element.type === 'text' || element.type === 'number' || element.type === 'email' || element.type === 'password' ) {
+				// EIDO (10): a colour input is a SWATCH, not its value as text: three drew '#8fe8c8' clipped into a 26 px box
+				// (Settings › Style in a headset, owner 09-30). Fill the content box with the colour, radius as the house
+				// ::-webkit-color-swatch has it (index.html: 3 px inside a 4 px-radius, 1 px border).
+				if ( element.type === 'color' ) {
+
+					const bw = parseFloat( style.borderTopWidth ) || 0;
+					const pl = parseFloat( style.paddingLeft ) || 0, pt = parseFloat( style.paddingTop ) || 0;
+					const pr = parseFloat( style.paddingRight ) || 0, pb = parseFloat( style.paddingBottom ) || 0;
+					buildRectPath( x + bw + pl, y + bw + pt, width - 2 * bw - pl - pr, height - 2 * bw - pt - pb, Math.max( 0, parseFloat( style.borderRadius ) - bw ) );
+					context.fillStyle = element.value;
+					context.fill();
+
+				}
+
+				if ( element.type === 'text' || element.type === 'number' || element.type === 'email' || element.type === 'password' ) {
 
 					clipper.add( { x: x, y: y, width: width, height: height } );
 
@@ -582,6 +608,18 @@ function html2canvas( element, scale = 1 ) {   // EIDO (1)
 		context.strokeStyle = '#' + Math.random().toString( 16 ).slice( - 3 );
 		context.strokeRect( x - 0.5, y - 0.5, width + 1, height + 1 );
 		*/
+
+		// EIDO (11): a VISIBLE native <select> (data-native opts out of the house skin) shows its chosen label; its <option>
+		// children are a closed popup's rows, never laid out, and walking them stacked every label in one place.
+		if ( element instanceof HTMLSelectElement ) {
+
+			const label = element.selectedOptions[ 0 ]?.textContent ?? '';
+			clipper.add( { x: x, y: y, width: width, height: height } );
+			drawText( style, x + ( parseFloat( style.paddingLeft ) || 0 ) + ( parseFloat( style.borderLeftWidth ) || 0 ), y + ( height - parseFloat( style.fontSize ) * 1.2 ) / 2, label.trim() );
+			clipper.remove();
+			return;
+
+		}
 
 		const isClipping = style.overflow === 'auto' || style.overflow === 'hidden';
 

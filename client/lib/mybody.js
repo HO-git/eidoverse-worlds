@@ -11,6 +11,7 @@ import { makeAvatar, contributeThumbnail } from './avatar.js';
 import { setMyAvatarPath, wireAvatarSwitch } from './palette.js';
 import { toast } from './ui.js';
 import { net } from './net.js';
+import { loadBodyPrefs, saveBodyPrefs } from './bodyscale.js';
 
 // ---------------------------------------------------------------- identity
 
@@ -93,8 +94,30 @@ export function chooseAvatar(path, name, { remember = false } = {}) {
 let me = null;
 let seenFirstBody = false;
 export function getMe() { return me; }
+// ---------------------------------------------------------------- this body's size / plate lift
+// Per body, per browser (bodyscale.js: ew-body-prefs, keyed by the worn body's NAME, like ew-xr-scale). Applied on
+// every setMe — boot, a switch, a server-side refresh — so wearing a body again restores what you chose for it. The
+// wire (net.js sendPose → bodyWire) reads it off the Avatar; nothing else needs telling.
+let lsRef = null;
+try { lsRef = globalThis.localStorage ?? null; } catch { lsRef = null; }
+export function myBodyPrefs() { return loadBodyPrefs(lsRef, getMyAvatarName()); }
+function applyMyBodyPrefs(av) {
+  if (!av) return;
+  const p = myBodyPrefs();
+  av.setUserScale?.(p.scale);
+  av.setPlateY?.(p.plateY);
+}
+/** Profile › Avatar writes here: { scale?, plateY? } for the body you have on, saved and worn at once. */
+export function setMyBodyPref(patch) {
+  const p = saveBodyPrefs(lsRef, getMyAvatarName(), patch);
+  if (me) { me.setUserScale?.(p.scale); me.setPlateY?.(p.plateY); }
+  bus.emit('body-prefs', p);
+  return p;
+}
+
 export function setMe(av) {
   me = av;
+  applyMyBodyPrefs(av);
   if (me) {
     releaseBodyGate('body on screen');
     // ONE '[body] on screen' per page — it is the load metric. Later setMe calls

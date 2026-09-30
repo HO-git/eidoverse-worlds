@@ -92,5 +92,32 @@ check('the same-path early return exempts the capsule',
   /if \(path === myAvatarPath && !me\?\.isCapsule\) return;/.test(mybody),
   'clicking wear on the failed body would silently do nothing');
 
+// ---------------------------------------------------------------- THIS BODY: size and nameplate (R, 2026-09-30)
+// The worn body's own section: fields (so the profile quad renders the same sliders in VR), shown only for a real
+// body, writing through mybody's setMyBodyPref, with a reset only when there is something to reset.
+const { bodiesDispatch } = await import('../client/lib/bodies.js');
+const byK = (f, k) => f.find((x) => x.k === k);
+state.me = { isCapsule: false }; state.prefs = { scale: 1, plateY: 0 }; state.writes = 0;
+f = bodiesFields();
+const size = byK(f, 'body-scale'), plate = byK(f, 'plate-y');
+check('this body: a size slider, 50–200 %', size?.t === 'range' && size.min === 50 && size.max === 200 && size.value === 100, JSON.stringify(size));
+check('this body: a nameplate slider, −30…+80 cm', plate?.t === 'range' && plate.min === -30 && plate.max === 80 && plate.value === 0, JSON.stringify(plate));
+check('this body: the resulting height in m (roster 1.60 m at 100%)', f.some((x) => x.label === 'height' && /^1\.60 m/.test(x.value)), JSON.stringify(f.find((x) => x.label === 'height')));
+check('this body: at default, no reset buttons', !byK(f, 'body-scale-reset') && !byK(f, 'plate-y-reset'));
+bodiesDispatch('body-scale', 150);
+bodiesDispatch('plate-y', 30);
+check('the sliders write through to the worn body\'s prefs (percent → ×, cm → m)', state.prefs.scale === 1.5 && state.prefs.plateY === 0.3, JSON.stringify(state.prefs));
+f = bodiesFields();
+check('...the height reads 2.40 m (1.60 m at 100%)', f.some((x) => x.label === 'height' && /^2\.40 m \(1\.60 m at 100%\)/.test(x.value)), JSON.stringify(f.find((x) => x.label === 'height')));
+check('...and both resets appear', !!byK(f, 'body-scale-reset') && !!byK(f, 'plate-y-reset'));
+bodiesDispatch('plate-y-reset');
+check('nameplate reset → auto (0), size kept', state.prefs.plateY === 0 && state.prefs.scale === 1.5, JSON.stringify(state.prefs));
+bodiesDispatch('body-scale-reset');
+check('size reset → 100 %', state.prefs.scale === 1, JSON.stringify(state.prefs));
+state.me = { isCapsule: true };
+check('no section for the capsule (there is no body to size)', !byK(bodiesFields(), 'body-scale'));
+state.me = null;
+check('no section with no body', !byK(bodiesFields(), 'body-scale'));
+
 console.log(`\n${pass}/${pass + fail} passed`);
 process.exit(fail ? 1 : 0);

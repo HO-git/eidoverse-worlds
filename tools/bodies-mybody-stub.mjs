@@ -4,3 +4,6 @@
 const state = (globalThis.__bodyState ||= { me: null, name: null });
 export function getMe() { return state.me; }
 export function getMyAvatarName() { return state.name; }
+// this body's size / plate lift (Profile › Avatar): the prefs the section reads, and the writer it calls
+export function myBodyPrefs() { return state.prefs ?? { scale: 1, plateY: 0 }; }
+export function setMyBodyPref(patch) { state.prefs = { ...myBodyPrefs(), ...patch }; state.writes = (state.writes ?? 0) + 1; return state.prefs; }

@@ -59,7 +59,7 @@ import { tickXRVignette } from './lib/xrvignette.js';
 import { initVRPanel } from './lib/vrpanel.js';
 import { trySitOn as xrTrySitOn, dismountMe as xrDismountMe } from './lib/localbody.js';
 import {
-  toast, setHint, flashHint, buildHelp, toggleHelp,
+  toast, flashHint, buildHelp, toggleHelp,
   openDoor, togglePeopleHere, initDock, paintPresence, panelFrame, settingsFrame, setLoadingItems,
 } from './lib/ui.js';
 import { registerXRPanel } from './lib/xrpanels.js';
@@ -313,7 +313,8 @@ function start() {
     .then((vs) => vs.speakOwnSays(bus, () => net.myId || CONFIG.name))
     .catch((e) => console.warn('[voice] own-say hook not installed:', e));
   initSceneGraph();   // 🌳 the world as a tree + 📜 the scripts that animate it
-  setHint('<kbd>WASD</kbd> move · <kbd>Enter</kbd> chat · <kbd>B</kbd> build · <kbd>?</kbd> help');
+  // the boot hint ('WASD move · Enter chat · B build · ? help') merged into the lantern's resting line
+  // (lib/lantern.js), which owns bottom-centre; the hint bar now only borrows that spot for offers and flashes
 
   if (!isViewer) {
     // A body is never optional (owner, in-headset 09-04: no avatar at all, on
@@ -430,11 +431,11 @@ initCommands();   // the /command surface (lib/commands/) + its bus subscription
 const MAIN_KEYS = [
   { code: 'KeyH', key: 'H', id: 'key:help', title: 'help — keys and controls', keywords: ['?', 'keys', 'controls', 'how'], group: 'view',
     guard: () => !isEditing(), run: () => toggleHelp() },
-  { code: 'Tab', key: 'Tab', id: 'key:people', title: 'people here', keywords: ['who', 'present', 'roster'], group: 'panels',
+  { code: 'Tab', key: 'Tab', id: 'key:people', title: 'people here', keywords: ['who', 'present', 'roster'], group: 'panels', icon: 'users',
     prevent: true, run: () => togglePeopleHere() },
   { code: 'KeyB', key: 'B', id: 'panel:edit', run: () => toggleEditMode() },
   { code: 'KeyP', key: 'P', id: 'key:photo', title: 'photo mode (free camera)', keywords: ['camera', 'picture'], group: 'view', run: () => togglePhotoMode() },
-  { code: 'F1', key: 'F1', id: 'key:hidehud', title: 'hide the HUD', keywords: ['interface', 'clean', 'photo'], group: 'view',
+  { code: 'F1', key: 'F1', id: 'key:hidehud', title: 'hide the HUD', keywords: ['interface', 'clean', 'photo'], group: 'view', icon: 'eye-slash',
     prevent: true, run: () => document.body.classList.toggle('photo') },
   { code: 'F2', key: 'F2', id: 'key:screenshot', title: 'save a screenshot', keywords: ['picture', 'capture'], group: 'view', prevent: true, run: () => saveScreenshot() },
   { code: 'F3', key: 'F3', id: 'panel:debug', prevent: true, run: () => toggleDebug() },

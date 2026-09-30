@@ -107,6 +107,7 @@ import { initEmoteBar } from './lib/emotebar.js';
 import { initXRKeyboard } from './lib/xrkeyboard.js';
 import { initCommands, saveScreenshot } from './lib/commands/handlers.js';
 import { register as registerAction } from './lib/actions.js';
+import { initLantern } from './lib/lantern.js';
 import { deriveLandmarks, debugMarkers, landmarkWorld } from './lib/landmarks.js';
 import { measureChain, solveChain } from './lib/reachbone.js';
 import { canonicalPoint } from '../shared/contact.js';
@@ -150,12 +151,14 @@ initSimWorld();
 
 initBoot({ world: CONFIG.world, name: CONFIG.name });
 buildHelp();
-initChat({
+const chatApi = initChat({
   send: (text) => sendVerb('say', { text }),
   whisper: sendWhisper,
   typing: (to) => { sendTyping(to); getMe()?.setTyping(); },
   people,
 });
+// the lantern prompt (Ctrl/Cmd+K): actions from lib/actions.js, speech and /commands through chat's own submit
+initLantern({ submit: chatApi.submit, whisperTarget: chatApi.whisperTarget });
 initEmoteBar();
 initXRKeyboard();   // C16: types into the last-focused text input; a quad in VR
 initWorldQuad();

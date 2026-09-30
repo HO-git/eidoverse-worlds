@@ -23,7 +23,7 @@ A.register({ id: 'emote:wave', title: 'wave', group: 'emotes', key: '4', run: no
 A.register({ id: 'section:world:sky', title: 'sky', keywords: ['world', 'weather'], group: 'world', run: noop });
 A.register({ id: 'key:screenshot', title: 'save a screenshot', keywords: ['picture'], group: 'view', key: 'F2', run: noop });
 A.register({ id: 'cmd:who', title: '/who — list everyone present', keywords: ['who'], group: 'commands', run: noop });
-A.register({ id: 'voice:mic', title: 'microphone on / off', keywords: ['mute', 'talk'], group: 'voice', key: 'V', run: noop });
+A.register({ id: 'voice:mic', title: 'microphone on / off', keywords: ['mute', 'talk', 'speak'], group: 'voice', key: 'V', run: noop });
 A.register({ id: 'panel:settings', title: 'settings', group: 'panels', run: noop });
 A.register({ id: 'section:settings:audio', title: 'audio', keywords: ['settings', 'sound'], group: 'settings', run: noop });
 A.register({ id: 'body:skydive', title: 'skydive', group: 'body', run: noop });
@@ -50,7 +50,14 @@ check('one stray letter is not a subsequence match ("q" matches nothing here)', 
 
 console.log('keywords and keys');
 check('a keyword finds it: "mute" → voice:mic first', ids('mute')[0] === 'voice:mic', ids('mute').join());
-check('a keyword counts a notch under the same match on a title', A.score('mute', A.get('voice:mic')) === 975);
+check('a keyword counts a tier under the same match on a title (exact keyword = 900)', A.score('mute', A.get('voice:mic')) === 900);
+check('STRONG: exact keyword, title prefix and key are strong; a keyword prefix is not ("mu")',
+  A.score('mute', A.get('voice:mic')) >= A.STRONG && A.score('sk', A.get('section:world:sky')) >= A.STRONG
+  && A.score('f2', A.get('key:screenshot')) >= A.STRONG && A.score('mu', A.get('voice:mic')) < A.STRONG,
+  `mu=${A.score('mu', A.get('voice:mic'))}`);
+check('a keyword SUBSEQUENCE is not a match ("sk" is in "speak" only as s…k): the mic stays out of "sk"',
+  A.score('sk', A.get('voice:mic')) === 0, String(A.score('sk', A.get('voice:mic'))));
+check('a keyword SUBSTRING is not a match either ("ute" inside "mute")', A.score('ute', A.get('voice:mic')) === 0);
 check('the key finds it: "f2" → screenshot', ids('f2')[0] === 'key:screenshot', ids('f2').join());
 check('"audio" (title) outranks "settings" matched only as a keyword for query "settings": panel first',
   ids('settings')[0] === 'panel:settings' && ids('settings').includes('section:settings:audio'), ids('settings').join());

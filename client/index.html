@@ -985,6 +985,48 @@ body.edit-mode::after {
 #hintbar kbd { font-size: var(--fs-xs); }
 #hintbar.gone { opacity: 0; }
 
+/* ---- the lantern (lib/lantern.js): one line for talk, /commands and actions.
+   The pill owns bottom-centre, so the hint bar rides one row above it.
+   z 38: over frames (≤25), the rail (27) and the frame rim (30); under the ∃
+   menu and the scrims (40), the glyphs (45), notices (60) and the door (120). */
+#hintbar { bottom: 46px; }
+#lantern-pill {
+  position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 38;
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px 12px;
+  font: var(--fs-sm) var(--font); color: var(--dim); cursor: text; white-space: nowrap;
+  border: none; outline: 1px solid var(--edge); outline-offset: -1px;
+}
+#lantern-pill:hover, #lantern-pill.open { color: var(--fg); outline-color: var(--edge-hi); }
+#lantern-pill .lp-glyph { color: var(--brand); }
+#lantern-pill kbd { font-size: var(--fs-xs); }
+#lantern-pill.fresh { color: var(--fg); outline-color: color-mix(in srgb, var(--brand) 55%, transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--brand) 30%, transparent); }
+#lantern {
+  position: fixed; bottom: 46px; left: 50%; transform: translateX(-50%); z-index: 38;
+  width: min(560px, calc(100vw - 24px)); padding: 6px;
+  display: flex; flex-direction: column-reverse; gap: 4px;
+  outline: 1px solid var(--edge-hi); outline-offset: -1px;
+  background: rgb(var(--panel-rgb)); backdrop-filter: none; -webkit-backdrop-filter: none;   /* opaque, like every floating notice: legible over anything */
+}
+#lantern[hidden] { display: none; }
+#lantern .ln-input { width: 100%; box-sizing: border-box; font-size: var(--fs); padding: 8px 10px; }
+#lantern .ln-list { max-height: min(50vh, 420px); overflow-y: auto; }
+#lantern .ln-group { padding: 6px 8px 2px; font-size: var(--fs-xs); color: var(--dim); letter-spacing: .04em; }
+#lantern .ln-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; cursor: pointer; }
+#lantern .ln-row.sel { background: var(--act); }
+#lantern .ln-row .ln-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#lantern .ln-row.say .ln-title, #lantern .ln-row.raw .ln-title { color: var(--brand); }
+#lantern .ln-row kbd { font-size: var(--fs-xs); flex: none; }
+#lantern .ln-empty { padding: 6px 8px; color: var(--dim); font-size: var(--fs-sm); }
+/* a phone: the keyboard owns the bottom, so the line opens at the TOP and the pill
+   is a glyph in the top-right corner (the world panel no longer lives there by default) */
+@media (max-width: 600px) {
+  #lantern-pill { top: 10px; bottom: auto; left: auto; right: 10px; transform: none; padding: 6px 10px; }
+  #lantern-pill .lp-text, #lantern-pill kbd { display: none; }
+  #lantern { top: 52px; bottom: auto; flex-direction: column; }
+  #hintbar { bottom: 10px; }
+}
+
 /* dock: one row of toggles so a closed frame is never lost */
 #dock {
   /* hotbar: ∃ + window glyphs, ONE movable unit. Grip appears only while
@@ -1227,7 +1269,7 @@ kbd {
 .capnotice .cn-btns button { padding: 4px 10px; font-size: var(--fs-xs); }
 /* photo mode hides every chrome layer but keeps the canvas */
 body.photo .frame, body.photo #hud, body.photo #trayzone,
-body.photo #hintbar, body.photo #dock { display: none !important; }
+body.photo #hintbar, body.photo #dock, body.photo #lantern-pill { display: none !important; }
 
 #touch { position: fixed; inset: 0; z-index: 3; display: none; pointer-events: none; }
 body.touch #touch { display: block; }

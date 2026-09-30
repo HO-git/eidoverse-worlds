@@ -50,8 +50,12 @@ const visible = (a) => { try { return a.when ? !!a.when() : true; } catch { retu
 // Tiers, highest first — the ranking contract the tests pin:
 //   exact (1000) > prefix (900) > key (850) > word-start (700) > all-words (650)
 //   > substring (400) > subsequence (100..199, tighter spans higher).
-// A KEYWORD match counts one notch lower (-25) than the same match on the title,
-// so "mute" finds the mic through its keyword but a title that says "mute" wins.
+// A KEYWORD match (word-start or better) counts a tier lower (-100) than the same match on the title,
+// so "mute" finds the mic through its keyword but a title that says "mute" wins,
+// and a keyword merely STARTING with what you typed ("hi" → "hide") is never STRONG.
+//
+// STRONG (>= 850) is the line a prompt uses to decide whether plain text is a
+// command or speech: a title exact/prefix, an exact keyword, or the key itself.
 const WORD_SPLIT = /[\s\-_/·:▸.,()'"]+/;
 
 function tier(q, text) {
@@ -78,10 +82,14 @@ export function score(query, a) {
   const q = String(query ?? '').trim().toLowerCase();
   if (!q) return 1;
   let s = tier(q, a.title);
-  for (const k of a.keywords ?? []) s = Math.max(s, tier(q, String(k)) - 25);
+  // keywords count only as whole words or word-starts: a keyword SUBSTRING or subsequence ("sk" in "speak",
+  // or anywhere inside a command's help line) is noise that buries the real match
+  for (const k of a.keywords ?? []) { const t = tier(q, String(k)); if (t >= 650) s = Math.max(s, t - 100); }
   if (a.key && String(a.key).toLowerCase() === q) s = Math.max(s, 850);
   return s;
 }
+
+export const STRONG = 850;
 
 export function list(query = '', { limit = 50 } = {}) {
   const out = [];

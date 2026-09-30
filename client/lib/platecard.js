@@ -3,10 +3,10 @@
 // maybe hovering your cursor on their nameplate can pop that info beside their nameplate? … a little like an in-world
 // tooltip").
 //
-// THE EAR: a person who is not hearing voices (their ear glyph off — `hear: false` on their presence packet,
-// shared/presencewire.js) and is inside voice range of you (VOICE_SILENT_M, the rolloff's silent edge) wears a grey
-// ear-off beside their plate. It is avatar.js's sprite; this only decides who. Far away, nobody hears you anyway;
-// a client too old to say leaves `hear` undefined and gets no ear — unknown is not "can't hear you".
+// THE EAR: a person who is not hearing voices (their headphones off — `hear: false` on their presence packet,
+// shared/presencewire.js) and is inside voice range of you (VOICE_SILENT_M, the rolloff's silent edge) wears grey
+// crossed-out headphones beside their plate. It is avatar.js's sprite; this only decides who. Far away, nobody hears
+// you anyway; a client too old to say leaves `hear` undefined and gets no ear — unknown is not "can't hear you".
 //
 // THE CARD: rest the pointer on a nameplate (or the head under it) for HOVER_MS and a small card opens beside the
 // plate — name, presence, mic and hearing in words, distance / VR / agent, and the one per-person action the people
@@ -179,7 +179,7 @@ function paint() {
   if (known) {
     rows.push(`<div class="pc-row" data-k="mic" data-on="${r.mic === true}">${svg(r.mic === true ? 'mic' : 'micOff', 14)}<span>${
       r.mic === true ? 'mic on' : r.mic === false ? 'mic off' : 'mic: not shared'}</span></div>`);
-    rows.push(`<div class="pc-row" data-k="hear" data-on="${r.hear === true}">${svg(r.hear === false ? 'earOff' : 'ear', 14)}<span>${
+    rows.push(`<div class="pc-row" data-k="hear" data-on="${r.hear === true}">${svg(r.hear === false ? 'headphonesOff' : 'headphones', 14)}<span>${
       r.hear === true ? 'hearing voices' : r.hear === false ? (near ? 'voices off — can’t hear you' : 'voices off') : 'hearing: not shared'}</span></div>`);
   } else {
     rows.push(`<div class="pc-row" data-k="voice"><span>voice state not shared</span></div>`);

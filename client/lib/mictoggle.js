@@ -15,6 +15,7 @@ import { receivingVoice, setReceiveVoice, ensureSttConsent, sttConsented,
   isHushed, setHush, pttMode } from './voiceconsent.js';
 import { bus } from './base.js';
 import { register as registerAction } from './actions.js';
+import { pathData } from './icons.js';
 
 // three states: off = grey + slash · live = clean bright white ·
 // hot (picking up your voice for STT) = warm yellow glow. No rings.
@@ -61,15 +62,18 @@ const MIC_SVG = (on, hot) => {
 // you set once, not a thing you toggle situationally. That split is the
 // convention everywhere it matters (Discord's deafen, VRChat's voice
 // controls) and it is the one people already have hands for.
+// The glyph lives in icons.js ('headphonesOff' = the phones + the slash), shared with the nameplate mark and the
+// hover card; drawn here on its 24 grid at 1.35 wide, which is the old 32-grid 1.8 to the pixel.
 const EAR_SVG = (on) => {
   const c = on ? INK.on : INK.off;
+  const [band, cupL, cupR, slash] = pathData('headphonesOff');
   return `
-<svg viewBox="0 0 32 32" width="26" height="26">
-  <g fill="none" stroke="${c}" stroke-width="1.8" stroke-linecap="round">
-    <path d="M6 19 v-3 a10 10 0 0 1 20 0 v3"/>
-    <rect x="4" y="18" width="6" height="9" rx="3"/>
-    <rect x="22" y="18" width="6" height="9" rx="3"/>
-    ${on ? '' : `<line x1="7" y1="4" x2="25" y2="28" stroke="${INK.slash}"/>`}
+<svg viewBox="0 0 24 24" width="26" height="26">
+  <g fill="none" stroke="${c}" stroke-width="1.35" stroke-linecap="round">
+    <path d="${band}"/>
+    <path d="${cupL}"/>
+    <path d="${cupR}"/>
+    ${on ? '' : `<path d="${slash}" stroke="${INK.slash}"/>`}
   </g>
 </svg>`;
 };

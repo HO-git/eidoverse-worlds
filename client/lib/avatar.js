@@ -307,8 +307,9 @@ const makeLabel = (name) => {
   return s;
 };
 
-// THE NAMEPLATE EAR (owner, 09-30: "anyone muted near you can pop up a grayed out ear *next* to their name plate"):
-// a small separate sprite BESIDE the pill, never the plate restyled — a grey ear-off on the pill's own dark disc (a
+// THE NAMEPLATE EAR (owner, 09-30: "anyone muted near you can pop up a grayed out ear *next* to their name plate"),
+// drawn as the HUD's own crossed-out headphones (icons.js 'headphonesOff') so it reads as the toggle they flipped:
+// a small separate sprite BESIDE the pill, never the plate restyled — grey, on the pill's own dark disc (a
 // bare grey stroke vanishes against a bright sky), a little taller than the pill so the glyph reads. Placed each frame
 // at the plate's anchor plus the camera's RIGHT (in the body's frame) — beside the plate from every view and in VR.
 // Not Sprite.center: the WebGPU sprite material drew it on the plate's middle (seen in the render, 09-30).
@@ -318,7 +319,7 @@ const makeEar = () => textSprite((ctx) => {
   // stroke() draws 2 canvas px at any size, a hair at 15 px on screen: draw it on a doubled grid so the line holds
   ctx.translate(32, 32); ctx.scale(2, 2);
   ctx.strokeStyle = tokv('--dim', '#97979b');
-  strokeIcon(ctx, 'earOff', 17);
+  strokeIcon(ctx, 'headphonesOff', 17);
 }, 64, 64, 0.9 * 64 / 512);
 const EAR_GAP = 0.03;    // metres between pill and ear, at the plate's base size
 const EAR_K = 1.3;       // the ear's side, in plate heights

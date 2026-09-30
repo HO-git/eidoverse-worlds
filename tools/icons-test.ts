@@ -21,8 +21,8 @@ const check = (name: string, ok: boolean, detail = "") => {
   else { fail++; console.log(`  \x1b[31m✗\x1b[0m ${name}${detail ? ` — ${detail}` : ""}`); }
 };
 
-// the three states the typing relay actually admits
-const SHIPPED = ["ear", "think", "wrench"];
+// the three states the typing relay actually admits, and the hear glyph pair (HUD toggle, nameplate mark, hover card)
+const SHIPPED = ["ear", "think", "wrench", "headphones", "headphonesOff"];
 
 const rendered: Record<string, string> = {};
 for (const name of SHIPPED) {

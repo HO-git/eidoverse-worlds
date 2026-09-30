@@ -7,9 +7,11 @@
 //
 // What must hold:
 //   the wire — this client's own pose packets carry `mic` and `hear` (booleans), so peers can know;
-//   the ear — a grey ear sits BESIDE (right of, level with, not on) the plate of a NEAR peer with hearing off; none
-//     for a near peer who hears, none for a far one (past the voice range) with hearing off; a live flip of `hear`
-//     brings it in and fades it out;
+//   the ear — grey crossed-out headphones (the HUD's hear glyph, pixel-equal to icons.js 'headphonesOff') sit BESIDE
+//     (right of, level with, not on) the plate of a NEAR peer with hearing off; none for a near peer who hears, none
+//     for a far one (past the voice range) with hearing off; a live flip of `hear` brings it in and fades it out;
+//   the plate's size — its width and fade are platesize.js's answer for the world distance (tools/platesize-test.ts
+//     holds the curve itself);
 //   the card — resting on a plate opens it only after the delay; it names the person and says mic off / can't hear
 //     you; it follows the plate while the pointer rests on it; leaving plate and card closes it; Esc closes it and
 //     leaves the panels alone; "message" opens their DM tab;
@@ -140,6 +142,32 @@ try {
   check('ear: a NEAR peer with hearing off wears it', earOn(a), JSON.stringify(a));
   check('…beside the plate, not on it: right of the pill, level with it', a?.ear && a.ear.l >= a.r && a.ear.l - a.r < 20
     && Math.abs((a.ear.t + a.ear.b) / 2 - a.y) < 3 && a.ear.b - a.ear.t <= (a.b - a.t) * 1.8, JSON.stringify(a));
+  // THE GLYPH: the sprite's own canvas is the HUD's crossed-out headphones (icons.js 'headphonesOff'), not the old
+  // lucide ear — drawn with the registry glyph on the same disc, and it must differ from the unslashed phones
+  const glyph = await pg.evaluate(async () => {
+    const { stroke } = await import('/lib/icons.js');
+    const src = EW.remotes.get('nearmute')?.avatar?.ear?.material?.map?.image;
+    if (!src?.getContext) return { err: 'no ear canvas' };
+    const got = src.getContext('2d').getImageData(0, 0, 64, 64).data;
+    const disc = getComputedStyle(document.documentElement);
+    const draw = (name) => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d');
+      x.fillStyle = (disc.getPropertyValue('--pill-bg') || 'rgba(8,20,28,0.86)').trim(); x.beginPath(); x.arc(32, 32, 26, 0, Math.PI * 2); x.fill();
+      x.translate(32, 32); x.scale(2, 2); x.strokeStyle = (disc.getPropertyValue('--dim') || '#97979b').trim(); stroke(x, name, 17);
+      return x.getImageData(0, 0, 64, 64).data; };
+    const diff = (a) => { let n = 0; for (let i = 3; i < a.length; i += 4) if (Math.abs(a[i] - got[i]) > 40 || Math.abs(a[i - 3] - got[i - 3]) > 40) n++; return n; };
+    return { vsOff: diff(draw('headphonesOff')), vsOn: diff(draw('headphones')) };
+  }).catch((e) => ({ err: String(e).slice(0, 160) }));
+  check('ear glyph: the sprite IS crossed-out headphones (pixel-equal to icons.js headphonesOff; ≠ unslashed)',
+    glyph.vsOff === 0 && glyph.vsOn > 20, JSON.stringify(glyph));
+  // THE SIZE: the plate's width is platesize.js's answer for the world distance this frame (the wiring, not the math)
+  const size = await pg.evaluate(async () => {
+    const { plateSize } = await import('/lib/platesize.js');
+    const av = EW.remotes.get('farmute')?.avatar, e = new EW.THREE.Vector3(); EW.camera.getWorldPosition(e);
+    const d = av.root.position.distanceTo(e);
+    return { d, lw: av.label.scale.x, want: plateSize(d).lw, op: av.label.material.opacity, wantOp: plateSize(d).vis };
+  }).catch((e) => ({ err: String(e).slice(0, 160) }));
+  check('plate size: a far peer’s label width and fade are plateSize(world distance)',
+    Math.abs(size.lw - size.want) < 0.01 && Math.abs(size.op - size.wantOp) < 0.02 && size.lw > 0.9, JSON.stringify(size));
   check('ear: none for a near peer who hears', earOff(b), JSON.stringify(b?.ear));
   check('ear: none for a FAR peer (past voice range) with hearing off', earOff(c) && c?.hear === false, JSON.stringify(c));
   await shot(pg, '70-ear-near.png');
@@ -190,6 +218,9 @@ try {
   await sleep(350);
   k = await cardState(pg);
   check('card: open after the delay, for the person under the pointer', k.open && k.for === 'nearmute', JSON.stringify(k));
+  const muteRow = await pg.evaluate(() => document.querySelector('#platecard [data-k="hear"] svg')?.outerHTML ?? '');
+  check('…its hearing row wears crossed-out headphones (the HUD glyph + slash)', muteRow.includes('M4.5 14.25v-2.25')
+    && muteRow.includes('M5.25 3 18.75 21'), muteRow.slice(0, 200));
   check('…it says who, mic off, and can’t hear you (and not the default "present")', /nearmute/.test(k.text) && /mic off/.test(k.text)
     && /can’t hear you/.test(k.text) && !/present/.test(k.text), k.text);
   check('…beside the plate (right of it, clear of the ear), inside the viewport',
@@ -233,6 +264,9 @@ try {
   k = (await until(async () => { const c = await cardState(pg); return { ok: c.open && c.for === 'nearhear', ...c }; }, 3000));
   check('card on a hearing, busy peer: mic on, hearing voices, busy', k.open && k.for === 'nearhear' && /mic on/.test(k.text)
     && /hearing voices/.test(k.text) && /busy/.test(k.text), k.text);
+  const hearRow = { html: await pg.evaluate(() => document.querySelector('#platecard [data-k="hear"] svg')?.outerHTML ?? '') };
+  check('…its hearing row wears the HUD’s headphones (no slash while hearing)', hearRow.html.includes('M4.5 14.25v-2.25')
+    && !hearRow.html.includes('M5.25 3 18.75 21'), hearRow.html.slice(0, 200));
   await shot(pg, '73-hover-card-hearing-busy.png');
   await pg.mouse.move(k.l + 20, k.b - 12); await sleep(100);
   await pg.click('#platecard button[data-act="dm"]'); await sleep(400);

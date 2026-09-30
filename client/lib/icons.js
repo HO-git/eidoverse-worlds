@@ -43,10 +43,17 @@ const P = {
   pin: ["M12 17v5", "M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"],
   tent: ["M3.5 21 14 3", "M20.5 21 10 3", "M15.5 21 12 15l-3.5 6", "M2 21h20"],
   mic: ['M12 19v3', 'M19 10v2a7 7 0 0 1-14 0v-2'],
-  // lucide `ear-off` / `mic-off`: a peer who has turned voices off or has no live mic (nameplate ear, hover card)
-  earOff: ['M6 18.5a3.5 3.5 0 1 0 7 0c0-1.57.92-2.52 2.04-3.46', 'M6 8.5c0-.75.13-1.47.36-2.14',
-           'M8.8 3.15A6.5 6.5 0 0 1 19 8.5c0 1.63-.44 2.81-1.09 3.76', 'M12.5 6A2.5 2.5 0 0 1 15 8.5M10 13a2 2 0 0 0 1.82-1.18',
-           'm2 2 20 20'],
+  // THE HEADPHONES — the HUD's hear toggle (mictoggle.js draws these very strings), the nameplate mark and the hover
+  // card, one glyph so "can't hear you" looks the same everywhere. Ours, not lucide: band + two cups, and the HUD's
+  // own slash (its 32-grid line 7,4→25,28, here on the 24 grid) for off.
+  headphones: ['M4.5 14.25v-2.25a7.5 7.5 0 0 1 15 0v2.25',
+               'M3 15.75a2.25 2.25 0 0 1 4.5 0V18a2.25 2.25 0 0 1-4.5 0Z',
+               'M16.5 15.75a2.25 2.25 0 0 1 4.5 0V18a2.25 2.25 0 0 1-4.5 0Z'],
+  headphonesOff: ['M4.5 14.25v-2.25a7.5 7.5 0 0 1 15 0v2.25',
+                  'M3 15.75a2.25 2.25 0 0 1 4.5 0V18a2.25 2.25 0 0 1-4.5 0Z',
+                  'M16.5 15.75a2.25 2.25 0 0 1 4.5 0V18a2.25 2.25 0 0 1-4.5 0Z',
+                  'M5.25 3 18.75 21'],
+  // lucide `mic-off`: a peer with no live mic (hover card)
   micOff: ['M12 19v3', 'M15 9.34V5a3 3 0 0 0-5.68-1.33', 'M16.95 16.95A7 7 0 0 1 5 12v-2', 'M18.89 13.23A7 7 0 0 0 19 12v-2',
            'm2 2 20 20', 'M9 9v3a3 3 0 0 0 5.12 2.12'],
   messageSquare: ['M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z'],
@@ -79,6 +86,8 @@ function paths(name) {
 }
 
 export const has = (name) => !!P[name];
+/** The raw 24-grid path strings, for a surface that draws its own <svg> (mictoggle's HUD toggle). */
+export const pathData = (name) => P[name] ?? [];
 
 /** Stroke a Lucide icon centred on the current origin, sized to `size` px. */
 export function stroke(ctx, name, size = 26) {

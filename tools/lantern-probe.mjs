@@ -141,6 +141,25 @@ try {
     check('…and back on the left, the chip is first in the row', lf);
   }
 
+  // THE RAIL'S SEARCH ENTRY, right under the ∃: the house tooltip names it and its chord; a click opens the prompt
+  { const titles = await pg.evaluate(() => Object.fromEntries([...document.querySelectorAll('#dock button[data-toggles]')]
+      .map((b) => [b.dataset.toggles, b.getAttribute('title') ?? b._tip])));
+    check('every rail tooltip names its key where the registry knows one (real client: main.js merges them)',
+      titles.chat === 'Chat · Enter' && titles.debug === 'Debug · F3' && titles.world === 'World' && /^Edit · B/.test(titles.edit ?? ''), JSON.stringify(titles));
+    const first = await pg.evaluate(() => document.querySelector('#dock #hud')?.nextElementSibling?.dataset.toggles);
+    check('the search entry sits right under the ∃', first === 'search', String(first));
+    await pg.hover('#dock button[data-toggles="search"]'); await sleep(700);
+    const tipc = await pg.evaluate(() => { const t = document.getElementById('tipchip'); return { show: t.classList.contains('show'), text: t.textContent }; });
+    check('hovering it shows the house tooltip "Search & commands · Ctrl K"', tipc.show && tipc.text === 'Search & commands · Ctrl K', JSON.stringify(tipc));
+    await shot(pg, '14-dock-search-tooltip.png');
+    await pg.click('#dock button[data-toggles="search"]'); await sleep(250);
+    const lit = await pg.evaluate(() => document.querySelector('#dock button[data-toggles="search"]').classList.contains('on'));
+    check('clicking it opens the prompt, and the entry lights while it is open', (await lantern(pg)).open && lit);
+    await pg.keyboard.press('Escape'); await sleep(200);
+    check('…Esc closes it, and the entry goes dark', !(await lantern(pg)).open
+      && !(await pg.evaluate(() => document.querySelector('#dock button[data-toggles="search"]').classList.contains('on'))));
+  }
+
   // Ctrl+K opens
   await pg.keyboard.press('Control+k'); await sleep(250);
   let L = await lantern(pg);

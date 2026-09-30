@@ -165,7 +165,7 @@ console.log('PROFILE — presence dispatch reaches setPresence; the dock dot rep
   check('presence() is busy', presence.presence() === 'busy', presence.presence());
   check('presence:me was emitted', emits(e0, 'presence:me') === 1);
   check('the dock dot repaints (data-presence=busy)', dockBtn.dataset.presence === 'busy', String(dockBtn.dataset.presence));
-  check('the dock title names the state', dockBtn.title === 'profile · busy', dockBtn.title);
+  check('the dock title names the state', dockBtn.title === 'Profile · busy', dockBtn.title);
   check('the quad repaints', emits(e0, 'xr:repaint') >= 1);
   check('the quad lists busy as active', quad.fields().find((x: any) => x.label === 'presence').rows.find((r: any) => r.active).id === 'busy');
   // the desk: the portrait IS the presence control

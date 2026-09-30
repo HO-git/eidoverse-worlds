@@ -75,9 +75,25 @@ await tick();   // initPanels' dynamic imports land and repaint
 for (const id of ["chat", "world", "emotes", "debug"]) getFrame(id)!.hide();
 bus.emit("frames");
 check("∃ leads the rail", dock().firstElementChild?.id === "hud");
-check("profile leads the buttons; the wrench closes the list; the grip is last",
-  order()[0] === "profile" && order()[order().length - 1] === "edit" && dock().lastElementChild?.classList.contains("dock-grip"), order().join());
-check("dock order follows the entry list", order().join() === "profile,chat,world,nofrx,emotes,debug,edit", order().join());
+check("search leads the buttons (right under the ∃), then profile; the wrench closes the list; the grip is last",
+  order()[0] === "search" && order()[1] === "profile" && order()[order().length - 1] === "edit" && dock().lastElementChild?.classList.contains("dock-grip"), order().join());
+check("dock order follows the entry list", order().join() === "search,profile,chat,world,nofrx,emotes,debug,edit", order().join());
+{ // the search entry: the lantern prompt's way in, wearing the magnifying glass, its chord in the tooltip
+  const { get: getAction, register: registerAction } = await import("../client/lib/actions.js");
+  const s = btn("search")!;
+  check("the search entry wears the magnifying glass (line at rest + fill)", wears(s.innerHTML, "magnifying-glass") && s.querySelectorAll("svg").length === 2, s.innerHTML.slice(0, 80));
+  check("…its tooltip is 'Search & commands · Ctrl K' (⌘K on a Mac)", /^Search & commands · (Ctrl K|⌘K)$/.test(s.title), s.title);
+  check("…and it adds no lantern row (a row that opens the prompt you are typing in)", getAction("panel:search") === null);
+  // EVERY rail tooltip names its key where the registry knows one — merged in later, as main.js's key table does
+  registerAction({ id: "panel:debug", key: "F3" });
+  registerAction({ id: "panel:chat", key: "Enter" });
+  registerAction({ id: "panel:edit", key: "B" });
+  bus.emit("frames");
+  const titles = Object.fromEntries(["chat", "world", "debug", "emotes", "edit"].map((id) => [id, btn(id)?.title]));
+  check("rail tooltips read the key from the action registry: 'Chat · Enter', 'Debug · F3', 'World', 'Emotes'",
+    titles.chat === "Chat · Enter" && titles.debug === "Debug · F3" && titles.world === "World" && titles.emotes === "Emotes", JSON.stringify(titles));
+  check("…the gated wrench: 'Edit · B — needs build rights in this world'", titles.edit === "Edit · B — needs build rights in this world", String(titles.edit));
+}
 check("built-ins are pinned by default: chat's button shows while its frame is closed",
   !getFrame("chat")!.visible && btn("chat")!.hidden === false);
 check("an entry with no frame and no pin is hidden", btn("nofrx")!.hidden === true);
@@ -344,7 +360,7 @@ console.log("DOCK — late tenants");
 settingsFrame();
 check("settingsFrame() registers its own rail entry wearing gear-six", !!btn("settings") && wears(btn("settings")!.innerHTML, "gear-six"));
 paintPresence("away");
-check("paintPresence stamps the profile button", btn("profile")!.dataset.presence === "away" && btn("profile")!.title === "profile · away");
+check("paintPresence stamps the profile button", btn("profile")!.dataset.presence === "away" && btn("profile")!.title === "Profile · away");
 bus.emit("presence:me", "here");
 check("...and presence:me on the bus drives it", btn("profile")!.dataset.presence === "here");
 

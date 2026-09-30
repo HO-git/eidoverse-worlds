@@ -32,7 +32,8 @@ let loadingItems = () => [];
 export function setLoadingItems(fn) { loadingItems = fn; }
 import { makeFrame, getFrame, isLocked, setLocked, resetLayout } from './frames.js';
 import { defsRegistry } from './defs.js';
-import { register as registerAction } from './actions.js';
+import { register as registerAction, get as getAction } from './actions.js';
+import { openLantern, closeLantern, isLanternOpen, CHORD } from './lantern.js';
 
 const $ = (id) => document.getElementById(id);
 export const el = {
@@ -210,6 +211,12 @@ document.addEventListener('mouseover', (e) => {
     let x = Math.round(r.left + r.width / 2 - tw / 2);
     let y = Math.round(r.bottom + 7);
     if (y + th > innerHeight - 4) y = Math.round(r.top - th - 7);   // flip above
+    // a VERTICAL rail's buttons say it beside the rail, out over the world — under the button it covered the next one
+    const edge = host.closest?.('#dock')?.dataset.edge;
+    if (edge === 'left' || edge === 'right') {
+      y = Math.round(r.top + r.height / 2 - th / 2);
+      x = Math.round(edge === 'left' ? r.right + 10 : r.left - tw - 10);
+    }
     x = Math.max(4, Math.min(x, innerWidth - tw - 4));
     tip.style.left = `${x}px`; tip.style.top = `${y}px`;
   }, 450);
@@ -330,8 +337,10 @@ const PINS_LS = 'ew-dock-pins';
 const gateWas = new Map();
 let pins = new Set();
 // every panel starts pinned to the dock; unpinning is the personal choice, not pinning (live, 09-06 23:34)
-const DEFAULT_PINS = ['profile', 'world', 'chat', 'emotes', 'debug', 'settings', 'edit'];   // 'edit' too (live 09-07 10:55) — its ownership gate still decides visibility
+const DEFAULT_PINS = ['search', 'profile', 'world', 'chat', 'emotes', 'debug', 'settings', 'edit'];   // 'edit' too (live 09-07 10:55) — its ownership gate still decides visibility
 try { pins = new Set(JSON.parse(localStorage.getItem(PINS_LS) ?? JSON.stringify(DEFAULT_PINS))) } catch { pins = new Set(DEFAULT_PINS); }
+// the search entry arrived after people had saved their pins: pin it ONCE for them, then their unpin is theirs
+try { if (!localStorage.getItem('ew-dock-search-seen')) { localStorage.setItem('ew-dock-search-seen', '1'); pins.add('search'); } } catch {}
 const savePins = () => { try { localStorage.setItem(PINS_LS, JSON.stringify([...pins])) } catch {} };
 let dockEntries = [];
 
@@ -365,7 +374,7 @@ export function paintPresence(state) {
   const b = el.dock.querySelector('button[data-toggles="profile"]');
   if (!b) return;
   b.dataset.presence = state;
-  b.title = `profile · ${state}`;
+  b.title = `Profile · ${state}`;
 }
 
 // one resolver for the rail AND the VR ring: the ring read only entry.icon, so frames whose glyph comes from the
@@ -390,7 +399,7 @@ function addDockButton(entry) {
   // a color change, is what makes inactive read as inactive
   if (icon && hasFill(icon)) b.innerHTML = (hasLine(icon) ? rsvg(icon, 21) : '') + fsvg(icon, 21);   // +25% glyph, same 34px button
   else b.textContent = label ?? id;
-  b.title = action ? id : `toggle ${id}`;
+  b.title = dockTitle(entry);
   b.onclick = () => {
     if (action) { action(); paintDock(); return; }
     const f = getFrame(id);
@@ -400,7 +409,7 @@ function addDockButton(entry) {
   };
   b.dataset.toggles = id;   // NOT data-frame — that belongs to the window itself
   // the same act, findable by name in the lantern; a key table may merge its key in (main.js)
-  registerAction({
+  if (!entry.noAction) registerAction({
     id: `panel:${id}`, title: PANEL_TITLE[id] ?? id, group: 'panels', icon, detail: 'open / close the panel',
     keywords: [id, 'panel', ...(PANEL_WORDS[id] ?? [])],
     when: action && entry.gate ? entry.gate : undefined,
@@ -423,7 +432,21 @@ function initPanels() {
   Promise.all([import('./profile.js'), import('./stylepanel.js'), import('./videopanel.js'), import('./capnotice.js'), import('./dropdown.js')])
     .then(([p, st, v, c, d]) => { p.initProfile(); st.initStylePanel(); v.initVideoPanel(); c.initCapNotice(); d.initDropdowns(); paintDock(); })
     .catch((e) => report('ui panels', e));
-  return [{ id: 'profile', icon: 'user-circle' }];
+  return [SEARCH_ENTRY, { id: 'profile', icon: 'user-circle' }];
+}
+// Search & commands: the lantern prompt (Ctrl/Cmd+K), right under the ∃ — a way IN, like the ∃, so it leads the windows.
+// An action entry (not a frame): it lights while the prompt is open. It registers no lantern row — a row that opens
+// the prompt you are typing in would be noise.
+const SEARCH_ENTRY = { id: 'search', icon: 'magnifying-glass', label: 'Search & commands', noAction: true,
+  action: () => (isLanternOpen() ? closeLantern() : openLantern()), active: () => isLanternOpen() };
+addEventListener('lantern', () => paintDock());
+// every rail button's tooltip: its name, and its key where the action registry knows one ("Chat · Enter",
+// "Debug · F3") — read from actions.js at paint time, so a key table merged in later (main.js) shows up
+const DOCK_NAME = { search: 'Search & commands' };
+function dockTitle(entry, suffix = '') {
+  const name = DOCK_NAME[entry.id] ?? (entry.id.charAt(0).toUpperCase() + entry.id.slice(1));
+  const key = entry.id === 'search' ? CHORD : getAction(`panel:${entry.id}`)?.key;
+  return `${name}${key ? ` · ${key}` : ''}${suffix}`;
 }
 export function initDock(entries) {
   const lead = initPanels();
@@ -577,6 +600,9 @@ function snapDock(ev) {
   try { localStorage.setItem(DOCKPOS_LS, JSON.stringify(pos)) } catch {}
   applyDockEdge(pos);
 }
+// write a title only when it changes: the tooltip chip borrows the attribute while hovered, and a rewrite every 2 s
+// would re-arm the native one (the MutationObserver above routes a real change into the borrow)
+function setTitle(b, t) { if ((b._tip ?? b.getAttribute('title')) !== t) b.setAttribute('title', t); }
 function paintDock() {
   // the rail never hides — it carries the ∃, which is always visible
   for (const b of el.dock.querySelectorAll('button[data-toggles]')) {
@@ -591,7 +617,7 @@ function paintDock() {
       const open = entry.gate ? !!entry.gate() : true;
       b.classList.toggle('dead', !open);
       b.disabled = !open;
-      b.title = open ? id : `${id} — needs build rights in this world`;
+      setTitle(b, dockTitle(entry, open ? '' : ' — needs build rights in this world'));
       b.hidden = !entry.active?.() && !pins.has(id);
       // never `on` AND `dead`: .on's brand ink and edge-bar come later in the
       // sheet at equal specificity, so the pair rendered as "active but
@@ -600,6 +626,7 @@ function paintDock() {
       continue;
     }
     const open = !!getFrame(id)?.visible;
+    if (entry && id !== 'profile') setTitle(b, dockTitle(entry));   // profile's carries its presence (paintPresence)
     b.classList.toggle('on', open);
     b.hidden = !open && !pins.has(id) && !entry?.always;
   }

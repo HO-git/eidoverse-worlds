@@ -102,7 +102,21 @@ try {
     const side = await rect(pg, '.chat-frame .chat-side');
     const on = await pg.evaluate(() => document.querySelector('.chat-frame .chat-who')?.classList.contains('on'));
     check('clicking the chip opens today\'s people column, the chip marked active', side?.shown && on, JSON.stringify({ side, on }));
+    const place = () => pg.evaluate(() => { const c = document.querySelector('.chat-frame .chat-who'), bar = c?.parentElement;
+      return { text: c?.textContent?.trim() ?? null, first: bar?.firstElementChild === c, beforeGear: c?.nextElementSibling?.classList.contains('chat-gear') }; });
+    let pl = await place();
+    check('open, the chip drops its words: the column header already says who\'s here', pl.text === '', JSON.stringify(pl));
+    check('pane on the LEFT (the default): the chip is the first thing in the tab row', pl.first && !pl.beforeGear, JSON.stringify(pl));
     await shot(pg, '08-people-open-1280x720.png');
+    await pg.click('.chat-frame .chat-gear'); await sleep(200);
+    await pg.click('.chat-gearpop [data-side="right"]'); await sleep(250);
+    pl = await place();
+    check('Chat ▸ settings → right: the chip moves to the right end, beside the gear', !pl.first && pl.beforeGear, JSON.stringify(pl));
+    await shot(pg, '09-people-open-right-1280x720.png');
+    await pg.keyboard.press('Escape'); await sleep(150);
+    await pg.click('.chat-frame .chat-gear'); await sleep(200);
+    await pg.click('.chat-gearpop [data-side="left"]'); await sleep(250);
+    await pg.keyboard.press('Escape'); await sleep(150);
     await pg.click('.chat-frame .chat-who'); await sleep(250);
     check('…and clicking it again collapses the column', !(await rect(pg, '.chat-frame .chat-side'))?.shown);
   }

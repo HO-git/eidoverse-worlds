@@ -400,6 +400,8 @@ a:hover { color: var(--fg); text-decoration-color: var(--brand); }
   margin-left: 4px; padding: 2px 8px; background: none; border: 1px solid transparent; border-radius: 999px;
   color: var(--dim); font-size: var(--fs-xs); white-space: nowrap; cursor: pointer; }
 .chat-tabs .chat-who:hover { color: var(--fg); background: var(--hov); }
+.chat-tabs .chat-who.at-left { margin-left: 0; margin-right: 4px; }
+.chat-tabs .chat-who .who-n:empty { display: none; }
 .chat-tabs .chat-who.on { color: var(--fg); border-color: color-mix(in srgb, var(--brand) 35%, transparent); background: rgb(0 0 0 / .3); }
 .chat-who .who-dots { display: inline-flex; }
 .chat-who .who-dot { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 0 1.5px rgb(var(--panel-rgb)), 0 0 0 2.5px var(--ok); }

@@ -776,7 +776,14 @@ function paintWho() {
   const people = getPeople(), others = people.filter((p) => !p.me).length;
   const dots = [...people.filter((p) => !p.me), ...people.filter((p) => p.me)].slice(0, 3).map((p) =>
     `<span class="who-dot" data-presence="${esc(p.presence ?? 'present')}" style="background:${colorFor(p.id)}"></span>`).join('');
-  chip.innerHTML = `<span class="who-dots">${dots}</span><span class="who-n">${others === 0 ? 'just you' : `${people.length} here`}</span>`;
+  // open, the column's own header says who's here: the chip keeps only its dots (R, 09-29: "just you" twice on one line)
+  const n = sideSt.open ? '' : `<span class="who-n">${others === 0 ? 'just you' : `${people.length} here`}</span>`;
+  chip.innerHTML = `<span class="who-dots">${dots}</span>${n}`;
+  // on the side the column opens from (Chat ▸ settings): first in the row on the left, before the gear on the right
+  const bar = chip.parentElement, left = sideSt.pos === 'left';
+  if (left && bar.firstElementChild !== chip) bar.prepend(chip);
+  else if (!left) { const gear = bar.querySelector(':scope > .chat-gear'); if (chip.nextElementSibling !== gear) bar.insertBefore(chip, gear); }
+  chip.classList.toggle('at-left', left);
   chip.classList.toggle('on', !!sideSt.open);
   chip.setAttribute('aria-pressed', String(!!sideSt.open));
   chip.title = sideSt.open ? 'hide people here' : 'people here';

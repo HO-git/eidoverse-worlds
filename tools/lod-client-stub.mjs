@@ -13,6 +13,8 @@
 //   world.js     its maps only (entities, mounts, edit holds, findPart)
 //
 // Every side effect the test asserts on is a plain array or Map here.
+import { KTX2_KEY } from '../shared/ktx2.js';   // the stub publishes the REAL generation — a literal here went stale on the 3→4 bump
+import { LOD_RECIPE } from '../server/store-variants.ts';   // …and the REAL recipe: the literal here went stale when #205 derived it
 import * as THREE_ from '../client/node_modules/three/build/three.module.js';
 import { askFor, tierOf } from '../client/lib/lod_policy.js';
 
@@ -31,7 +33,7 @@ export const CONFIG = {};
 /** The pretend sequencer + browser: what /version published, whether this
  *  "browser" transcodes KTX2, and which libs have a baked variant. Mutable —
  *  a section flips them and spawns fresh placements. */
-export const server = { key: '3', recipe: 'lod1-r25e01-texel1024', capable: true, variants: new Set() };
+export const server = { key: KTX2_KEY, recipe: LOD_RECIPE, capable: true, variants: new Set() };
 /** Every loadGLB call, in order: { lib, tier (what crossed the wire), url }. */
 export const loads = [];
 /** Loads held open while `hold` is on: { lib, tier, url, release() }. */

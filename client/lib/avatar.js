@@ -32,6 +32,7 @@ import { DRIVEN_BONES } from './ragdoll.js';
 import { stroke as strokeIcon, strokeBold } from './icons.js';
 import { plateSize, plateClear, ownClearance, reachAbove, markBake, CLEAR_MIN } from './platesize.js';
 import { revealLevel } from './namereveal.js';
+import { crownEstimate, plateGap, plateAnchor, smoothY, DEAD as PLATE_DEAD } from './plateanchor.js';
 import { Fn, userData, positionView, cameraNear, cameraFar, min, viewZToPerspectiveDepth, viewZToReversedPerspectiveDepth,
   viewZToOrthographicDepth } from 'three/tsl';
 import { SEAT_CLIP_FILE } from './seatcore.js';
@@ -378,6 +379,11 @@ const makeEar = () => {
 const EAR_GAP = 0.03;    // metres between pill and ear, at the plate's base size
 const EAR_K = 1.3;       // the ear's side, in plate heights
 const _earDir = new THREE.Vector3(), _earQ = new THREE.Quaternion(), _earQ2 = new THREE.Quaternion();
+// what hangs over the plate, in the body's frame: lifts tuned when the plate sat at a fixed 1.95 (bubble 2.3, pill 2.12,
+// pill over a bubble 2.72) — now they ride wherever the plate hangs (plateanchor.js), sitting and lying included
+const BUBBLE_LIFT = 0.35, TYPING_LIFT = 0.17, TYPING_OVER_BUBBLE = 0.77;
+const _pHips = new THREE.Vector3(), _pHead = new THREE.Vector3(), _pFoot = new THREE.Vector3(), _pScale = new THREE.Vector3();
+const _pRoot = new THREE.Vector3();
 
 function wrap(text, n) {
   const words = String(text).split(/\s+/);
@@ -642,8 +648,10 @@ export class Avatar {
     this._typingUntil = 0;         // typing signals repeat ~2.5s and expire ~4s
     this._typingDrawAt = 0;
     this.label = makeLabel(id);
-    this.label.position.y = 1.95;
+    this.label.position.y = 1.95;   // until the first frame hangs it from the body (_placePlate)
     this.root.add(this.label);
+    this._plateRest = this._measurePlateRest();   // the crown, once, while the body is still at rest
+    this._plateOff = null;                        // smoothed plate height above the root (world m) — see _placePlate
     liveAvatars.add(this);
 
     // ---- gaze: VRM ships a lookAt rig and nothing was ever pointing it, so
@@ -1901,16 +1909,87 @@ export class Avatar {
     this._labelName = name;
     this.repaintLabel();
   }
+  /** The crown, measured ONCE while the body is at rest (constructor: a fresh or pooled VRM is in its rest pose, no
+   *  clip applied yet) — plateanchor.js crownEstimate over the raw head/hips/eye bones and the SKINNED mesh top (vertex
+   *  positions through the posed bones, ≤4000 a mesh). All in the VRM scene's own frame: model units, so a live
+   *  resize (root scale, the XR puppet scale) multiplies in per frame instead of going stale. null = nothing to measure. */
+  _measurePlateRest() {
+    try {
+      const sc = this.vrm?.scene, h = this.vrm?.humanoid;
+      if (!sc) return null;
+      this.root.updateMatrixWorld(true);
+      const inv = new THREE.Matrix4().copy(sc.matrixWorld).invert(), m = new THREE.Matrix4(), v = new THREE.Vector3();
+      const yOf = (n) => { const b = h?.getRawBoneNode?.(n) ?? h?.getNormalizedBoneNode?.(n);
+        return b ? b.getWorldPosition(v).applyMatrix4(inv).y : null; };
+      const hips = yOf('hips'), head = yOf('head'), le = yOf('leftEye'), re = yOf('rightEye');
+      const eye = le != null && re != null ? (le + re) / 2 : (le ?? re);
+      const lf = yOf('leftFoot'), rf = yOf('rightFoot');
+      const feet = lf != null || rf != null ? Math.min(lf ?? Infinity, rf ?? Infinity) : 0;
+      let top = -Infinity;
+      sc.traverse((o) => {
+        const pos = o.isMesh && o.visible !== false ? o.geometry?.attributes?.position : null;
+        if (!pos) return;
+        m.multiplyMatrices(inv, o.matrixWorld);
+        const step = Math.max(1, Math.floor(pos.count / 4000));
+        for (let i = 0; i < pos.count; i += step) {
+          o.getVertexPosition(i, v);   // skinned + morphed, in the mesh's own space
+          v.applyMatrix4(m);
+          if (v.y > top) top = v.y;
+        }
+      });
+      const boundsTop = Number.isFinite(top) ? top : null;
+      const c = crownEstimate({ hips, head, eye, boundsTop });
+      const crown = c?.crown ?? boundsTop;
+      return { ...(c ?? {}), boundsTop, eye, feet, restHeadAboveFeet: head != null ? head - feet : null,
+        height: crown != null ? crown - feet : null };
+    } catch { return null; }
+  }
+
+  /** Hang the plate from the body, this frame (plateanchor.js says why). X/Z over the live hips (over the head, when
+   *  lying); Y from the rest crown, chased smoothly. The chase is on the plate's height ABOVE THE ROOT, so moving the
+   *  whole body (walking up stairs, a jump's root arc, a lift) never makes it trail — only posture changes ease.
+   *  Worked in WORLD (up is up even if the root tilts), then written into the root's frame, which is where the plate,
+   *  the deaf mark, the typing pill and the bubble all live. A body with no hips/head hangs it over its rest mesh top;
+   *  with nothing at all, at the old fixed 1.95. */
+  _placePlate(dt) {
+    const r = this._plateRest, sc = this.vrm?.scene, h = this.vrm?.humanoid;
+    if (!sc || !r || (r.hipsToCrown == null && r.boundsTop == null)) { this.label.position.set(0, 1.95, 0); return; }
+    this.root.updateWorldMatrix(true, false);
+    const s = sc.getWorldScale(_pScale).y || 1;   // model units → world (root scale × puppet scale)
+    const gap = plateGap((r.height ?? 1.7) * s);
+    const rootY = this.root.getWorldPosition(_pRoot).y;
+    const bone = (n) => h?.getRawBoneNode?.(n) ?? h?.getNormalizedBoneNode?.(n) ?? null;
+    const hipsN = r.hipsToCrown != null ? bone('hips') : null, headN = hipsN ? bone('head') : null;
+    let x, y, z;
+    if (hipsN && headN) {
+      hipsN.getWorldPosition(_pHips); headN.getWorldPosition(_pHead);
+      let feetY = Infinity;
+      for (const n of ['leftFoot', 'rightFoot']) { const f = bone(n); if (f) feetY = Math.min(feetY, f.getWorldPosition(_pFoot).y); }
+      if (!Number.isFinite(feetY)) feetY = rootY;
+      const { p, lie } = plateAnchor({ hips: [_pHips.x, _pHips.y, _pHips.z], head: [_pHead.x, _pHead.y, _pHead.z],
+        feetY, rest: r, s, gap });
+      [x, y, z] = p;
+      this._plateLie = lie;
+    } else {
+      _pHips.set(0, r.boundsTop, 0); sc.localToWorld(_pHips);
+      x = _pHips.x; y = _pHips.y + gap; z = _pHips.z;
+      this._plateLie = 0;
+    }
+    this._plateOff = smoothY(this._plateOff, y - rootY, dt, { dead: PLATE_DEAD });
+    this.label.position.copy(this.root.worldToLocal(_pHips.set(x, rootY + this._plateOff, z)));
+  }
+
   /** How far this body reaches from its plate's anchor, as the clearance its body-attached sprites write
    *  (platesize.js ownClearance/reachAbove). Measured once, on the body as it stands (skinned positions, sampled to
-   *  ≤4000 vertices a mesh). A body with nothing measurable clears a head (CLEAR_MIN). */
+   *  ≤4000 vertices a mesh), from where the plate hangs THAT frame (_placePlate runs first). A body with nothing
+   *  measurable clears a head (CLEAR_MIN). */
   _measureOwnClear() {
     try {
       const sceneRoot = this.vrm?.scene;
       if (!sceneRoot) return ownClearance(0);
       this.root.updateMatrixWorld(true);
       const inv = new THREE.Matrix4().copy(this.root.matrixWorld).invert(), m = new THREE.Matrix4(), v = new THREE.Vector3();
-      const pts = [];
+      const pts = [], ax = this.label.position.x, az = this.label.position.z;
       sceneRoot.traverse((o) => {
         const pos = o.isMesh && o.visible !== false ? o.geometry?.attributes?.position : null;
         if (!pos) return;
@@ -1919,7 +1998,7 @@ export class Avatar {
         for (let i = 0; i < pos.count; i += step) {
           o.getVertexPosition(i, v);   // skinned + morphed, in the mesh's own space
           v.applyMatrix4(m);
-          pts.push(v.x, v.y, v.z);
+          pts.push(v.x - ax, v.y, v.z - az);   // relative to the plate's own column (it hangs over the hips, not the root)
         }
       });
       return ownClearance(reachAbove(pts, this.label.position.y));
@@ -1933,10 +2012,11 @@ export class Avatar {
   repaintLabel() {
     const name = this._labelName ?? this.id ?? '';
     if (this.ear) { this.root.remove(this.ear); disposeSprite(this.ear); this.ear = null; }   // re-baked from the new tokens on its next frame
+    const at = this.label.position.clone();   // where the body hangs it (_placePlate); the new sprite takes the same spot
     this.root.remove(this.label);
     disposeSprite(this.label);
     this.label = makeLabel(this._seatApprox ? `${name} ≈` : name);
-    this.label.position.y = 1.95;
+    this.label.position.copy(at);
     this.root.add(this.label);
   }
 
@@ -1990,7 +2070,7 @@ export class Avatar {
     if (this._typingState !== 'mic') this._typingUntil = 0;
     if (this.bubble) { this.root.remove(this.bubble); disposeSprite(this.bubble); }
     this.bubble = makeBubble(text);
-    this.bubble.position.y = 2.3;
+    this.bubble.position.copy(this.label.position).y += BUBBLE_LIFT;   // it rides the plate (update keeps it there)
     this.root.add(this.bubble);
     // Long speech deserves a longer read — roughly reading speed, clamped.
     const ms = THREE.MathUtils.clamp(2500 + text.length * 45, 5000, 22000);
@@ -2323,6 +2403,7 @@ export class Avatar {
     const d = this.root.position.distanceTo(camera.getWorldPosition(_plateEye));   // WORLD: in XR camera.position is rig-local (review 10a M4)
     const rk = revealLevel();
     const { lw, vis } = plateSize(d, rk);
+    this._placePlate(dt);   // hang it from the body first: the clearance below is measured from where it hangs
     if (this._ownClear == null) this._ownClear = this._measureOwnClear();
     this.label.userData.plateClear = plateClear(this._ownClear, d, rk);
     this.label.material.opacity = vis;
@@ -2353,6 +2434,7 @@ export class Avatar {
       if (now > this.bubbleUntil) {
         this.root.remove(this.bubble); disposeSprite(this.bubble); this.bubble = null;
       } else {
+        this.bubble.position.copy(this.label.position).y += BUBBLE_LIFT;   // follows the plate down when they sit or lie
         this.bubble.material.opacity = THREE.MathUtils.clamp(1 - (d - 26) / 12, 0, 1);
       }
     }
@@ -2364,7 +2446,7 @@ export class Avatar {
     const micLive = this._typingState === 'mic';
     const typingNow = now < this._typingUntil && (micLive || !this.bubble);
     if (typingNow && !this.typing) { this.typing = makeTypingSprite(); this.root.add(this.typing); }
-    if (this.typing) this.typing.position.y = (micLive && this.bubble) ? 2.72 : 2.12;
+    if (this.typing) this.typing.position.copy(this.label.position).y += (micLive && this.bubble) ? TYPING_OVER_BUBBLE : TYPING_LIFT;
     // the pill sits above the plate's anchor: its own reach is the plate's plus the lift (triangle inequality); not revealed
     if (this.typing) this.typing.userData.plateClear = this._ownClear + Math.abs(this.typing.position.y - this.label.position.y);
     if (this.typing) {

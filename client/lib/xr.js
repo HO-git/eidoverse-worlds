@@ -1379,7 +1379,7 @@ export const xrDebug = () => {
 
 
 // The veil, both ways (owner, 09-07 18:20: 'loading in/out indicator, hard hangs'; 09-19: 'style compliant'): the
-// splash's own furniture — its ∃ (cloned from #splash so there is ONE drawing of the mark), the eidoverse /
+// splash's own furniture — its mark (cloned from #splash so there is ONE drawing of the mark), the eidoverse /
 // worlds marks, the brand phase line with a breathing ellipsis — over the world from the visor click until
 // the session's first frame, and from the leave click until desktop frames are flowing again (a timer-hide
 // left the owner a black world with a dead loop, 09-07). The rays worker stays the splash's; the veil is still.
@@ -1387,7 +1387,7 @@ function xrVeilShow(on, phase = 'leaving VR') {
   if (!exitVeil) {
     exitVeil = document.createElement('div'); exitVeil.className = 'xr-veil'; exitVeil.setAttribute('aria-live', 'polite');
     const logo = document.querySelector('#splash .sp-logo-wrap');
-    if (logo) exitVeil.appendChild(logo.cloneNode(true));
+    if (logo) { const c = logo.cloneNode(true); c.querySelectorAll('[id]').forEach((n) => n.removeAttribute('id')); exitVeil.appendChild(c); }   // the mark at rest; its travel clip's id stays the splash's alone
     for (const [cls, txt] of [['sp-mark', 'eidoverse'], ['sp-mark-sub', 'worlds'], ['sp-phase xr-veil-phase', phase]]) {
       const d = document.createElement('div'); d.className = cls; d.textContent = txt; exitVeil.appendChild(d); }
     document.body.appendChild(exitVeil);

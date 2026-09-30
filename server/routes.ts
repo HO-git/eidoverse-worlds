@@ -1157,10 +1157,13 @@ const ROUTES: Route[] = [
       // answered 500, so every page load logged a server error for a file
       // nobody asked us to have.
       new Response(
+        // the mark's hand-set 32 px master — the same drawing as index.html's <link rel="icon">, for pages
+        // (captions.html, AGENTS.md in a tab) that don't carry one
         `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-           <rect width="32" height="32" rx="7" fill="#0c1720"/>
-           <circle cx="16" cy="16" r="6" fill="#8fe8c8"/>
-           <circle cx="16" cy="16" r="10.5" fill="none" stroke="#8fe8c8" stroke-opacity=".45" stroke-width="1.5"/>
+           <style>path{fill:#8fe8c8}@media (prefers-color-scheme:light){path{fill:#1d7a5f}}</style>
+           <path d="M6.361 4 L25 4 L25 12 L21 12 L21 8 L2.407 8 A14.5 14.5 0 0 1 6.361 4 Z"/>
+           <path d="M2.407 24 L21 24 L21 20 L25 20 L25 28 L6.361 28 A14.5 14.5 0 0 1 2.407 24 Z"/>
+           <path d="M9.335 14 L28.861 14 A14.5 14.5 0 0 1 28.861 18 L9.335 18 A5.539 5.539 0 0 1 9.335 14 Z"/>
          </svg>`,
         { headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" } },
       ),

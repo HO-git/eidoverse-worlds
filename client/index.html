@@ -3,6 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- the favicon: the hand-set 32 and 16 px masters (notes: logo small/mark-{32,16}.svg; 16 has no room for
+     the peg's head, so its peg is a bar), inline so it costs no request. Brand mint on a dark tab strip, a
+     deeper mint on a light one (mint on white all but vanishes). /favicon.ico (server/routes.ts) is the 32. -->
+<link rel="icon" type="image/svg+xml" sizes="32x32" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><style>path{fill:%238fe8c8}%40media (prefers-color-scheme:light){path{fill:%231d7a5f}}</style><path d="M6.361 4 L25 4 L25 12 L21 12 L21 8 L2.407 8 A14.5 14.5 0 0 1 6.361 4 Z"/><path d="M2.407 24 L21 24 L21 20 L25 20 L25 28 L6.361 28 A14.5 14.5 0 0 1 2.407 24 Z"/><path d="M9.335 14 L28.861 14 A14.5 14.5 0 0 1 28.861 18 L9.335 18 A5.539 5.539 0 0 1 9.335 14 Z"/></svg>'>
+<link rel="icon" type="image/svg+xml" sizes="16x16" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><style>path{fill:%238fe8c8}%40media (prefers-color-scheme:light){path{fill:%231d7a5f}}</style><path d="M3.894 2 L13 2 L13 14 L3.894 14 A7 7 0 0 1 1.755 12 L11 12 L11 4 L1.755 4 A7 7 0 0 1 3.894 2 Z"/><path d="M3.275 7 L13 7 L13 9 L3.275 9 Z"/></svg>'>
 <title>eidoverse-worlds</title>
 <style>
 /* ===========================================================================
@@ -220,17 +225,23 @@ a:hover { color: var(--fg); text-decoration-color: var(--brand); }
 #splash.gone { opacity: 0; visibility: hidden; pointer-events: none; }
 .sp-rays { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: block; z-index: 0; }
 #splash > :not(.sp-rays) { position: relative; z-index: 1; }
-/* THE MARK IS STILL, BY DESIGN (live, 09-05 17:41: "I keep feeling unsure about
-   it and that's usually a sign I'm trying too hard"). Two motions were
-   removed here — the ∃'s three strokes assembling with load progress, and a
-   compositor-side opacity breath — plus the finish glow. The splash's one
-   moving thing is the ground light (.sp-rays, worker-driven): it means
-   "alive"; the mark means "us", and holds. */
+/* THE MARK HOLDS (live, 09-05 17:41: "I keep feeling unsure about it and that's
+   usually a sign I'm trying too hard"). Two motions were removed here — the old
+   ∃'s three strokes assembling with load progress, and a compositor-side opacity
+   breath — plus the finish glow. ONE motion came back with the new mark (owner,
+   09-29 23:53): the PEG enters from the sphere's left skin, through the doorway,
+   and comes to rest at 100% — it IS the progress (boot.js paint(), eased exactly
+   as the logo notes' splash/doorway.html). Nothing else moves: the frame stands
+   at full strength from the first paint, and once loaded the mark is the still
+   mark (no transform, no clip). The other moving thing is the ground light
+   (.sp-rays, worker-driven): it means "alive"; the mark means "us". */
 .sp-logo {
   width: 200px; height: 210px; transform: translateY(10px) scale(.4); transform-origin: center;   /* drawn 2x, shown at 0.8x (live 09-07 23:05: 'a bit too big'), nudged down onto the mark */
   margin: -52px 0 -64px; color: var(--brand); overflow: visible;
 }
 .sp-logo-wrap { position: relative; display: grid; place-items: center; }
+.sp-peg { transition: transform .3s ease; }   /* the bar's own .3s: a jump in real progress is entered, not snapped */
+@media (prefers-reduced-motion: reduce) { .sp-peg { transition: none; } }
 .sp-mark {
   font-size: 26px; letter-spacing: .34em; color: var(--brand); opacity: .9;
   text-transform: lowercase; font-weight: 500; margin-left: .34em; /* recenter over tracking */
@@ -260,7 +271,7 @@ a:hover { color: var(--fg); text-decoration-color: var(--brand); }
 .sp-items { width: var(--sp-w); min-height: 1.4em; display: flex; flex-direction: column; gap: 4px; margin-top: -8px; font-size: var(--fs-sm); color: var(--dim); font-variant-numeric: tabular-nums; }   /* two rows reserved always, so the column never jumps when names appear */
 /* the VR veil (xr.js xrVeilShow): the splash's furniture over the world while a session starts or ends.
    Class-based on purpose — .sp-logo/.sp-mark/.sp-phase are global, so the veil IS the splash's look. The
-   ellipsis breathes here (and only here): the splash's mark is still by design; a veil is a wait. */
+   ellipsis breathes here (and only here): the veil clones the mark at rest (the peg home); a veil is a wait. */
 .xr-veil {
   position: fixed; inset: 0; z-index: 99999; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 22px; padding: 28px; box-sizing: border-box; background: var(--bg); font: var(--fs)/1.6 var(--font); color: var(--fg);
@@ -1863,10 +1874,17 @@ html.lite .frame.panel { max-width: 100%; }
 <!-- Static so it paints before any module loads. boot.js only fills it in. -->
 <div id="splash">
   <canvas class="sp-rays" aria-hidden="true"></canvas>
-  <div class="sp-logo-wrap"><svg class="sp-logo" viewBox="-70 -40 1372 1372" aria-hidden="true" fill="currentColor">
-    <path class="pc-top" d="M 92 82 Q 616 140 1072 78 Q 1024 290 1012 511 L 852 511 L 852 228 Q 440 218 68 232 Q 88 155 92 82 Z"/>
-    <path class="pc-arm" d="M 420 522 C 490 562 565 585 700 588 L 1140 586 Q 1168 583 1178 576 Q 1186 572 1185 582 Q 1180 653 1185 724 Q 1186 734 1178 730 Q 1168 723 1140 720 L 700 718 C 565 721 490 744 420 784 Q 436 653 420 522 Z"/>
-    <path class="pc-bot" d="M 120 1212 Q 616 1152 1080 1216 Q 1024 1002 1012 796 L 852 796 L 852 1064 Q 440 1074 62 1062 Q 88 1137 120 1212 Z"/>
+  <div class="sp-logo-wrap"><svg class="sp-logo" viewBox="0.8 0 100 100" aria-hidden="true" fill="currentColor">
+    <!-- the mark (notes: logo r6-E3-concentric, R 09-29): a sphere r40 at (48,50); two hooks cut by its
+         skin make the frame, and the peg — R/φ² entry arc, R exit arc — passes through the doorway. The
+         viewBox's 0.8 x-offset is the master's translate(-0.8 0). Plain paths, no clip on the frame, so
+         the XR curtain (render.js) can fill them as Path2D and the veil can clone them. -->
+    <path class="sp-frame" d="M23.347 18.5 L74 18.5 L74 38.5 L63 38.5 L63 29.5 L13.652 29.5 A40 40 0 0 1 23.347 18.5 Z"/>
+    <path class="sp-frame" d="M13.652 70.5 L63 70.5 L63 61.5 L74 61.5 L74 81.5 L23.347 81.5 A40 40 0 0 1 13.652 70.5 Z"/>
+    <clipPath id="sp-sphere"><circle cx="48" cy="50" r="40"/></clipPath>
+    <!-- the peg exists only inside the sphere while it travels; boot.js drops the clip (and the
+         transform) once it rests, so the loaded mark is exactly the still one -->
+    <g class="sp-travel" clip-path="url(#sp-sphere)"><path class="sp-peg" style="transform: translateX(-79.24px)" d="M33.746 44.5 L87.620 44.5 A40 40 0 0 1 87.620 55.5 L33.746 55.5 A15.279 15.279 0 0 1 33.746 44.5 Z"/></g>
   </svg></div>
   <div class="sp-mark">eidoverse</div>
   <div class="sp-mark-sub">worlds</div>
@@ -1882,14 +1900,15 @@ html.lite .frame.panel { max-width: 100%; }
      panel's backdrop-filter (blur + saturate) re-processes the rail beneath
      it — a subtly brighter square that read as a mistake -->
 <button id="hud" class="emark" title="eidoverse — menu">
-  <!-- ∃ drawn as geometry, not typed as a glyph: no font can vary it, and it
-       scales like a mark, not like text. Rounded caps, mid-arm a hair short. -->
-  <!-- the serifed mark (art/eido-logo/emark.svg): three cut pieces, the arm
-       passing through the parted spine. Filled geometry, still no font. -->
-  <svg viewBox="-60 -30 1352 1352" width="24" height="24" aria-hidden="true" fill="currentColor">
-    <path d="M 92 82 Q 616 140 1072 78 Q 1024 290 1012 511 L 852 511 L 852 228 Q 440 218 68 232 Q 88 155 92 82 Z"/>
-    <path d="M 420 522 C 490 562 565 585 700 588 L 1140 586 Q 1168 583 1178 576 Q 1186 572 1185 582 Q 1180 653 1185 724 Q 1186 734 1178 730 Q 1168 723 1140 720 L 700 718 C 565 721 490 744 420 784 Q 436 653 420 522 Z"/>
-    <path d="M 120 1212 Q 616 1152 1080 1216 Q 1024 1002 1012 796 L 852 796 L 852 1064 Q 440 1074 62 1062 Q 88 1137 120 1212 Z"/>
+  <!-- the mark drawn as geometry, not typed as a glyph: no font can vary it. This is the HAND-SET 24 px
+       master (notes: logo small/mark-24.svg — 3 px arms and peg on whole pixels, wider doorways than the
+       splash's master scaled down), its sphere clip baked into the two hook outlines so the drawing
+       carries no ids (the lantern copies this svg, lantern.js EMARK). The splash's #splash .sp-logo is
+       the large master; the favicon (<head>) is the 32/16 px masters. -->
+  <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="currentColor">
+    <path d="M4.675 3 L19 3 L19 9 L16 9 L16 6 L1.780 6 A11 11 0 0 1 4.675 3 Z"/>
+    <path d="M1.780 18 L16 18 L16 15 L19 15 L19 21 L4.675 21 A11 11 0 0 1 1.780 18 Z"/>
+    <path d="M6.919 11 L21.954 11 A11 11 0 0 1 21.954 13 L6.919 13 A4.202 4.202 0 0 1 6.919 11 Z"/>
   </svg>
 </button>
 <div id="dock" class="panel"></div>

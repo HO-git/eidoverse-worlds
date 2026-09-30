@@ -67,15 +67,17 @@ export function setXRCurtain(on) {
     const shell = new THREE.Mesh(new THREE.SphereGeometry(4, 24, 16), new THREE.MeshBasicNodeMaterial({ color: 0x0b0f12, side: THREE.BackSide, depthTest: false, depthWrite: false }));
     shell.frustumCulled = false; shell.renderOrder = 0; curtain.add(shell); curtain.userData.shell = shell;
     // THE SPLASH, head-locked 1.6 m out (owner, 09-19: 'still just plain white Entering VR with no logo or name'):
-    // the ∃ (its three paths read from #splash so there is one drawing of the mark), eidoverse / worlds, and
+    // the mark (its paths read from #splash so there is one drawing of it), eidoverse / worlds, and
     // 'entering VR' with the dots breathing — repainted on the texture 3×/s while the curtain is up.
     const c = document.createElement('canvas'); c.width = 1024; c.height = 1024; const g = c.getContext('2d');
     const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-    const paths = [...document.querySelectorAll('#splash .sp-logo path')].map((el) => new Path2D(el.getAttribute('d')));
+    const logo = document.querySelector('#splash .sp-logo');
+    const paths = [...(logo?.querySelectorAll('path') ?? [])].map((el) => new Path2D(el.getAttribute('d')));   // frame + peg, at rest (boot is over by now)
+    const [vbx, vby, vbw] = (logo?.getAttribute('viewBox') ?? '0 0 100 100').split(/[\s,]+/).map(Number);
     const font = getComputedStyle(document.documentElement).getPropertyValue('--font').trim() || 'system-ui, sans-serif';
     const paint = (dots) => {
       g.clearRect(0, 0, 1024, 1024); g.fillStyle = '#8fe8c8';
-      g.save(); g.translate(512 - 0.2 * 1372 / 2 + 0.2 * 70, 150); g.scale(0.2, 0.2); for (const pth of paths) g.fill(pth); g.restore();   // viewBox -70 -40 1372 1372, at 0.2×
+      { const k = 274.4 / vbw; g.save(); g.translate(512 - k * (vbx + vbw / 2), 142 - k * vby); g.scale(k, k); for (const pth of paths) g.fill(pth); g.restore(); }   // the splash's viewBox as a 274 px square, centred, top at 142
       g.textAlign = 'center'; g.textBaseline = 'middle';
       g.font = `500 64px ${font}`; g.letterSpacing = '0.34em'; g.fillText('eidoverse', 512 + 11, 520);
       g.globalAlpha = 0.45; g.font = `400 30px ${font}`; g.letterSpacing = '0.58em'; g.fillText('worlds', 512 + 9, 575); g.globalAlpha = 1;

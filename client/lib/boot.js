@@ -84,10 +84,40 @@ function paintItems() {
 const prettyLabel = (l) => String(l).split('/').pop().replace(/\.(vrm|glb|gltf|png|jpg|ktx2|json|g|gl)(\?.*)?$/i, '').replace(/[_-]+/g, ' ');   // some labels arrive pre-truncated ('desk.g')
 const escapeHtml = (v) => String(v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// THE PEG IS THE PROGRESS (owner, 09-29 23:53): the new mark's peg enters from the sphere's left skin,
+// passes the doorway, and rests at 1 — the logo notes' splash/doorway.html render(p), verbatim in its
+// numbers. Its front (the R arc) starts exactly ON the left skin, fully outside the sphere clip:
+// right end x = 48 + √(40² − 5.5²) = 87.620, left skin x = 48 − 39.620 = 8.380 → D = 79.240 (user units).
+const PEG_D = 87.620 - 8.380;
+/** Mostly honest (linear in progress) with a gentle ease-out on the last stretch, so the peg ARRIVES
+ *  rather than stops. ease(0) = 0, ease(1) = 1 exactly, monotone. */
+export function pegEase(p) { const k = 0.35; return (1 - k) * p + k * (1 - Math.pow(1 - p, 3)); }
+/** The peg's x offset at progress p: −D at 0, exactly 0 at 1. */
+export const pegOffset = (p) => -PEG_D * (1 - pegEase(Math.min(1, Math.max(0, p))));
+/** Put the splash's peg where progress p says. At p ≥ 1 the transform and the sphere clip are
+ *  REMOVED, not zeroed — the loaded mark is exactly the still mark (the clip is a geometric no-op
+ *  there, but a second anti-aliasing pass on the skin edge is not). */
+export function paintPeg(p, root = document.getElementById('splash')) {
+  const peg = root?.querySelector('.sp-peg'); if (!peg) return;
+  const world = peg.parentNode;
+  if (p >= 1) {
+    peg.style.transform = '';
+    // the clip goes once the .3s glide has landed: a peg still gliding home, unclipped, would show
+    // outside the sphere for a moment
+    const drop = () => { if (peg.style.transform === '') world.removeAttribute?.('clip-path'); };
+    if (globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) drop(); else setTimeout(drop, 350);
+  } else {
+    world.setAttribute?.('clip-path', 'url(#sp-sphere)');
+    peg.style.transform = `translateX(${pegOffset(p).toFixed(3)}px)`;
+  }
+}
+
 function paint() {
   if (!el || done) return;
   paintItems();
-  const pct = Math.round(progress() * 100);
+  const p = progress();
+  paintPeg(p, el);
+  const pct = Math.round(p * 100);
   bar.style.width = `${pct}%`;
   phaseEl.textContent = currentLabel();
   const b = bootBytes();
@@ -193,6 +223,7 @@ export function finishBoot(reason = 'ready') {
   clearInterval(itemsTimer);
   if (itemsEl) itemsEl.innerHTML = '';
   bar.style.width = '100%';
+  paintPeg(1, el);   // skipped, timed out, or arrived: the mark comes to rest whatever the count said
   phaseEl.textContent = 'welcome';
   el.classList.add('gone');
   stopRays();

@@ -133,10 +133,12 @@ export const LOD_TEXELS_PER_PX = 1;
 // of the full tier's GPU texture memory (the KTX2 variant, same encoder: the ratio of texel areas). A wall gate that
 // keeps 85% of its vertices but drops 1024² maps to 128² is a LOD worth fetching.
 export const LOD_TEX_ONLY = 0.5;
-// under this, there is nothing worth reducing. Was 12,000; owner, 09-24: "we can totally build LODs even for simple
-// objects … I WANT to have worlds with thousands of objects" — a 7k-vert desk × 1,000 is 7M verts. Below ~1k a LOD
-// saves less than its own fetch; the "ineffective" gate still refuses what cannot reduce.
-export const LOD_MIN_VERTS = 1_000;
+// Under this many vertices, geometry is not simplified; textures still are (a texture-only LOD, above). 12,000, as #205
+// had it. Owner, 09-24, wanted 1,000 for worlds of thousands of objects; with texture-only LODs the two floors save
+// the same texture memory, and the geometry 1k–12k adds was ~5% of placed Commons vertices at LOD distance (09-29
+// census). Owner, 09-29: "12k is fine for now as long as we're optimizing textures" — the real geometry lever is a LOD
+// CHAIN (several levels by screen coverage, no 25% floor past the first), a follow-up, not this floor.
+export const LOD_MIN_VERTS = 12_000;
 
 /** The recipe string DERIVES from every parameter a variant or a verdict
  *  depends on — the reducer generation, ratio, the screen-space budget, the texel cap, and
@@ -170,7 +172,7 @@ export function lodRecipeFor({ gen = LOD_GEN, ratio = LOD_RATIO, px = LOD_PX, pp
   return `lod${gen}-r${frac(ratio, "ratio")}-px${dec(px, "px")}ppd${ppd}-tpp${dec(tpp, "tpp")}-tx${frac(texOnly, "texOnly")}`
     + `-d${dec(rBase, "rBase")}k${dec(diagK, "diagK")}f${frac(fraction, "fraction")}h${frac(hyst, "hyst")}-texel${texel}-min${minVerts}`;
 }
-export const LOD_RECIPE = lodRecipeFor();   // "lod3-r25-px2ppd25-tpp1-tx5-d80k4f45h25-texel1024-min1000"
+export const LOD_RECIPE = lodRecipeFor();   // "lod3-r25-px2ppd25-tpp1-tx5-d80k4f45h25-texel1024-min12000"
 
 // ---- standing verdicts -------------------------------------------------------
 // A flagged fetch that falls through is provisional — the doctrine that keeps

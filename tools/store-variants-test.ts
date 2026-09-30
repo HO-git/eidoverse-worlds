@@ -185,8 +185,8 @@ console.log("\nthe store's KTX2 shadow (store-variants.ts, shared/ktx2.js):\n");
   check("the legacy text grammar still reads gen 3's wording (a marker with no structured line: stand-in optimizers)",
     lodVerdictKind("[optimize] lod: already light (500 verts < 1000; textures 80% of the full tier)") === "light"
     && lodVerdictKind("[optimize] lod: reduction ineffective (9600 -> 6269 verts, permissive too; textures 100% of the full tier)") === "ineffective");
-  check("LOD_GEN 3, floor 1,000: attribute-aware simplification and the screen-space budget changed what a gen-2 name built",
-    LOD_GEN === 3 && LOD_MIN_VERTS === 1_000 && LOD_RECIPE.startsWith("lod3-") && LOD_RECIPE.endsWith("-min1000"), LOD_RECIPE);
+  check("LOD_GEN 3, floor 12,000: attribute-aware simplification and the screen-space budget changed what a gen-2 name built",
+    LOD_GEN === 3 && LOD_MIN_VERTS === 12_000 && LOD_RECIPE.startsWith("lod3-") && LOD_RECIPE.endsWith("-min12000"), LOD_RECIPE);
 
   // standing verdicts: which typed refusals make the original the FINAL answer under the running recipe
   {

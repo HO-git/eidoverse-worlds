@@ -13,7 +13,7 @@ import { join, relative } from "node:path";
 import { optimizeGlbLod, optimizeGlbKtx2 } from "../server/optimize.ts";
 import { glbPerf } from "../server/glbperf.ts";
 import { findKtx2Encoder } from "../server/tools-stamp.ts";
-import { LOD_RECIPE, LOD_RATIO } from "../server/store-variants.ts";
+import { LOD_RECIPE, LOD_RATIO, LOD_TEX_ONLY } from "../server/store-variants.ts";
 
 const [lib, outDir = "."] = process.argv.slice(2);
 if (!lib) { console.error("usage: bun tools/lod-census.ts <libDir> [outDir]"); process.exit(2); }
@@ -55,14 +55,24 @@ const sum = (xs: (number | null)[]) => xs.reduce<number>((a, x) => a + (x ?? 0),
 const fmt = (n: number) => n.toLocaleString("en-US");
 const lines: string[] = [];
 lines.push(`# LOD floor census`, ``, `Library: ${files.length} models. Reducer: \`${LOD_RECIPE}\` minus its floor (ratio ${LOD_RATIO}). ` +
-  `Each model ran once at floor ${MIN}; a floor's census is the models whose original has at least that many vertices. ` +
+  `Each model ran once at floor ${MIN}. At a higher floor, a model under it keeps its geometry but still gets a ` +
+  `texture-only LOD when its LOD textures come to at most ${LOD_TEX_ONLY} of the KTX2 tier's (the reducer's rule): ` +
+  `such rows are PROJECTED from the measured run (verts and tris unchanged, texture MB as measured, LOD bytes those of ` +
+  `the measured LOD, an approximation); the rest read as light. ` +
   `Texture MB is glbperf's GPU-size estimate: raw images at full size, KTX2 at its compressed size. The KTX2 variant ` +
   `is what a viewer is served up close, so it is the fair baseline for what a LOD saves on textures. ` +
   `Animated, skinned and morph-target models are refused before counting (structural) at every floor and aren't in the rows.`, ``);
 lines.push(`| Floor | Enter | Built | (permissive) | (texture-only) | Refused: light | ineffective | preservation | structural | gpu | size | other/error | Verts in → out | Tris in → out | Bytes in → out | Tex MB: raw / KTX2 variant → LOD |`);
 lines.push(`|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|`);
+// a model under floor F: geometry untouched; a texture-only LOD if its measured LOD textures qualify, else light
+const atFloor = (r: any, F: number) => {
+  if (r.before >= F || r.kind === "error" || r.kind === "structural") return r;
+  if (r.kind === "built" && r.ktx2TexMB > 0 && r.lodTexMB / r.ktx2TexMB <= LOD_TEX_ONLY)
+    return { ...r, texOnly: true, permissive: false, after: r.before, lodTris: r.tris };
+  return { ...r, kind: "light" };
+};
 for (const F of FLOORS) {
-  const enter = rows.filter((r) => r.kind !== "error" && r.before >= F);
+  const enter = rows.filter((r) => r.kind !== "error").map((r) => atFloor(r, F));
   const built = enter.filter((r) => r.kind === "built");
   const k = (x: string) => enter.filter((r) => r.kind === x).length;
   lines.push(`| ${fmt(F)} | ${enter.length} | ${built.length} | ${built.filter((r) => r.permissive).length} | ${built.filter((r) => r.texOnly).length} | ${k("light")} | ${k("ineffective")} | ${k("preservation")} | ${k("structural")} | ${k("gpu")} | ${k("size")} | ${enter.length - built.length - ["light", "ineffective", "preservation", "structural", "gpu", "size"].reduce((a, x) => a + k(x), 0)} | ` +

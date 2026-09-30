@@ -606,7 +606,7 @@ export const lodMatsSig = (d: Document): string => JSON.stringify(d.getRoot().li
  *  deleting either guard turns a named test red instead of leaving the
  *  suite green. Production callers (the CLI) never pass it. */
 export async function optimizeGlbLod(bytes: Uint8Array, encoder: string | null, mutate?: (doc: Document) => void,
-  { minVerts = LOD_MIN_VERTS }: { minVerts?: number } = {}): Promise<LodResult & Ktx2Tally> {   // minVerts: tools/lod-census.ts only; the recipe names the real floor
+  { minVerts = LOD_MIN_VERTS }: { minVerts?: number } = {}): Promise<LodResult & Ktx2Tally> {   // minVerts: the census and the reducer-mechanics tests only; the recipe names the real floor
   const none = { eligible: 0, converted: 0, failed: [] as string[] };
   const rawJson = parseGlb(bytes).json;
   const excluded = lodExclusion(rawJson);

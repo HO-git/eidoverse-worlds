@@ -18,6 +18,9 @@ import { Document } from "@gltf-transform/core";
 import { KHRTextureTransform, KHRMaterialsSpecular } from "@gltf-transform/extensions";
 import { NodeIO } from "@gltf-transform/core";
 import { lodBudget, lodTexelCaps, optimizeGlbLod, findKtx2Encoder, meshWorldScale, minTexelDensity } from "../server/optimize.ts";
+// these tests exercise the REDUCER's mechanics on fixtures sized around a 1,000-vertex floor; the production floor
+// (LOD_MIN_VERTS, a policy) is pinned in store-variants-test
+const lodAtTestFloor = (b: Uint8Array, e: string | null, m?: (d: any) => void) => optimizeGlbLod(b, e, m, { minVerts: 1_000 });
 import { getBounds } from "@gltf-transform/core";
 import draco3d from "draco3dgltf";
 import { ALL_EXTENSIONS } from "@gltf-transform/extensions";
@@ -197,25 +200,25 @@ async function sphereGlb(unit: number, { seg = 48, ring = 32, png = null as Uint
       pos.getElement(best, e); e[ax] += d; pos.setElement(best, e);
     }
   };
-  const inBudget = await optimizeGlbLod(src, null, push(0.025));
+  const inBudget = await lodAtTestFloor(src, null, push(0.025));
   check("a 2.5 cm silhouette shift on a 0.5 m prop — over the old 1 cm gate, under the ~3.9 cm budget — is served", !!inBudget.out, { kind: inBudget.kind, verdict: inBudget.verdict });
-  const spike = await optimizeGlbLod(src, null, push(0.08));
+  const spike = await lodAtTestFloor(src, null, push(0.08));
   check("an 8 cm shift, twice the budget, is still refused as a preservation failure", !spike.out && spike.kind === "preservation", { kind: spike.kind, verdict: spike.verdict });
   // the gate is WORLD space: the same sphere authored in centimetres under a 0.01 node, pushed 2.5 local units (2.5 cm)
   // — a raw-POSITION box reads 2.5 units against its 2% floor of 1 unit and refuses it
   const cm = await sphereGlb(100);
-  const cmIn = await optimizeGlbLod(cm, null, push(2.5));
+  const cmIn = await lodAtTestFloor(cm, null, push(2.5));
   check("…and it is judged in WORLD space: the same 2.5 cm push on a model authored in cm under a 0.01 node is served", !!cmIn.out, { kind: cmIn.kind, verdict: cmIn.verdict });
-  const cmOut = await optimizeGlbLod(cm, null, push(8));
+  const cmOut = await lodAtTestFloor(cm, null, push(8));
   check("…as is its 8 cm refusal", !cmOut.out && cmOut.kind === "preservation", { kind: cmOut.kind });
   check("…on EVERY axis: an 8 cm push along Y and along Z is refused too",
-    (await Promise.all([1, 2].map((ax) => optimizeGlbLod(src, null, push(0.08, ax))))).every((r) => !r.out && r.kind === "preservation"));
+    (await Promise.all([1, 2].map((ax) => lodAtTestFloor(src, null, push(0.08, ax))))).every((r) => !r.out && r.kind === "preservation"));
   // the budget is WORLD metres divided by the node's scale ONCE: a 10 m sphere (its facets near the ~6 cm budget, so
   // the ERROR binds, not meshopt's 25% ratio floor) authored in cm reduces like the one authored in metres
-  const bigM = await optimizeGlbLod(await sphereGlb(1, { radius: 10 }), null), bigCm = await optimizeGlbLod(await sphereGlb(100, { radius: 10 }), null);
+  const bigM = await lodAtTestFloor(await sphereGlb(1, { radius: 10 }), null), bigCm = await lodAtTestFloor(await sphereGlb(100, { radius: 10 }), null);
   check("a model authored in cm under a 0.01 node reduces like the same model in metres (within 5%), where the error budget binds",
     !!bigM.out && !!bigCm.out && bigM.after > 0.3 * bigM.before && Math.abs(bigM.after - bigCm.after) <= 0.05 * bigM.after, [bigM.before, bigM.after, bigCm.after]);
-  const mSph = await optimizeGlbLod(src, null);
+  const mSph = await lodAtTestFloor(src, null);
   check("a smooth, seam-free sphere reduces on the REGULAR pass — the Permissive retry is only for when that can't reach the bar",
     !!mSph.out && mSph.permissive === false, mSph.permissive);
 }
@@ -268,7 +271,7 @@ async function sphereGlb(unit: number, { seg = 48, ring = 32, png = null as Uint
     return new NodeIO().writeBinary(doc);
   }
   if (enc) {
-    const big = await optimizeGlbLod(await field(1024), enc);
+    const big = await lodAtTestFloor(await field(1024), enc);
     check("a 1024²-textured field whose vertices stay over 0.6× is served as a TEXTURE-ONLY LOD", !!big.out && big.texOnly === true && big.after > big.before * 0.6 && (big.texRatio ?? 1) <= LOD_TEX_ONLY,
       { kind: big.kind, verdict: big.verdict, before: big.before, after: big.after, texRatio: big.texRatio });
     // the caps must reach the FILE, not only the returned ratio: the base-colour map inside the LOD is 256², read off
@@ -280,11 +283,11 @@ async function sphereGlb(unit: number, { seg = 48, ring = 32, png = null as Uint
     check(`…and the LOD FILE carries the capped map (${want}², what the field's density needs), not the 1024² the full tier has`,
       !!big.out && want! < 1024 && JSON.stringify(dims(big.out)) === JSON.stringify([want]), { file: big.out ? dims(big.out) : null, want });
     check("…on the REGULAR pass's geometry, not the Permissive retry's seam-crossing collapses", big.permissive === false, big.permissive);
-    const small = await optimizeGlbLod(await field(64), enc);
+    const small = await lodAtTestFloor(await field(64), enc);
     check("…and the same field at 64², with nothing to give, is refused as ineffective", !small.out && small.kind === "ineffective", { kind: small.kind, texRatio: small.texRatio });
     // a simplify that breaks a gate must not cost the texture saving: the regular pass is forced to move the bounds
     // (the mutation seam runs only when simplifying) — texture-only on the UNTOUCHED geometry
-    const pushed = await optimizeGlbLod(await field(1024), enc, (dd: Document) => {
+    const pushed = await lodAtTestFloor(await field(1024), enc, (dd: Document) => {
       const pos = dd.getRoot().listMeshes()[0].listPrimitives()[0].getAttribute("POSITION")!; const e = pos.getElement(0, [0, 0, 0]); e[1] += 2; pos.setElement(0, e); });
     check("a regular pass that breaks a gate still leaves a TEXTURE-ONLY LOD on the untouched geometry",
       !!pushed.out && pushed.texOnly === true && pushed.after === pushed.before, { kind: pushed.kind, verdict: pushed.verdict, after: pushed.after, before: pushed.before });
@@ -298,7 +301,7 @@ async function sphereGlb(unit: number, { seg = 48, ring = 32, png = null as Uint
     check("…and its maps are capped in the file", !!pushed.out && JSON.stringify(dims(pushed.out)) === JSON.stringify([want]), pushed.out ? dims(pushed.out) : null);
     // a regular pass that reduces PARTLY (not to the bar) and breaks nothing: texture-only rides ITS geometry — the
     // irreducible faceted field plus a smooth sphere that reduces, together over 0.6×
-    const mixed = await optimizeGlbLod(await field(1024, 6, true), enc);
+    const mixed = await lodAtTestFloor(await field(1024, 6, true), enc);
     check("a texture-only LOD on a regular pass that reduced part-way keeps that reduction (fewer vertices than the source)",
       !!mixed.out && mixed.texOnly === true && mixed.permissive === false && mixed.after < mixed.before && mixed.after > 0.6 * mixed.before,
       { kind: mixed.kind, verdict: mixed.verdict, before: mixed.before, after: mixed.after });
@@ -306,24 +309,24 @@ async function sphereGlb(unit: number, { seg = 48, ring = 32, png = null as Uint
     const extrasOf = (out: Uint8Array) => parseGlb(out).json?.asset?.extras ?? {};
     check("…stamped lodBasis 'textures', never 'permissive'", !!big.out && extrasOf(big.out).lodBasis === "textures" && extrasOf(big.out).simplify === undefined, big.out ? extrasOf(big.out) : null);
     // a 2 m field: the regular pass can't reach the bar, the Permissive retry can (09-29 scan: 9600 → ~1370)
-    const permTex = await optimizeGlbLod(await field(1024, 2), enc);
+    const permTex = await lodAtTestFloor(await field(1024, 2), enc);
     check("a Permissive geometry LOD carries CAPPED textures too (its own doc's caps reach the encoder)",
       !!permTex.out && permTex.permissive === true && dims(permTex.out)[0] < 1024, { permissive: permTex.permissive, dims: permTex.out ? dims(permTex.out) : null });
-    const permBroken = await optimizeGlbLod(await field(0, 2), null, (dd: Document) => { dd.getRoot().listNodes()[0].setName("renamed"); });
+    const permBroken = await lodAtTestFloor(await field(0, 2), null, (dd: Document) => { dd.getRoot().listNodes()[0].setName("renamed"); });
     check("a Permissive retry that breaks a gate is refused — every gate applies to the retry, not only the regular pass",
       !permBroken.out && permBroken.kind === "preservation", { kind: permBroken.kind, verdict: permBroken.verdict });
     // under the vertex floor: nothing is simplified, but a heavy map still earns a texture-only LOD
     const noise = async (n: number) => { let sd = 11; const rr = () => ((sd = (sd * 16807) % 2147483647) / 2147483647);
       return new Uint8Array(await sharp(new Uint8Array(n * n * 3).map(() => Math.floor(rr() * 256)), { raw: { width: n, height: n, channels: 3 } }).png().toBuffer()); };
-    const lightTex = await optimizeGlbLod(await new NodeIO().writeBinary(quad(2, 1024, { png: await noise(1024) }).doc), enc);
+    const lightTex = await lodAtTestFloor(await new NodeIO().writeBinary(quad(2, 1024, { png: await noise(1024) }).doc), enc);
     check("a 4-vertex quad with a 1024² map — under the vertex floor — gets a TEXTURE-ONLY LOD, geometry untouched",
       !!lightTex.out && lightTex.texOnly === true && lightTex.after === lightTex.before && JSON.stringify(dims(lightTex.out)) !== "[1024]",
       { kind: lightTex.kind, verdict: lightTex.verdict, after: lightTex.after, before: lightTex.before, dims: lightTex.out ? dims(lightTex.out) : null });
-    const lightPlain = await optimizeGlbLod(await new NodeIO().writeBinary(quad(2, 64, { png: await noise(64) }).doc), enc);
+    const lightPlain = await lodAtTestFloor(await new NodeIO().writeBinary(quad(2, 64, { png: await noise(64) }).doc), enc);
     check("…and the same quad with a 64² map is 'already light'", !lightPlain.out && lightPlain.kind === "light", { kind: lightPlain.kind, verdict: lightPlain.verdict });
     // under the floor nothing is SIMPLIFIED: an 841-vertex textured sphere (the 4-vertex quad can't show it — meshopt
     // can't reduce a quad) keeps every vertex in its texture-only LOD
-    const under = await optimizeGlbLod(await sphereGlb(1, { seg: 28, ring: 28, png: await noise(1024) }), enc);
+    const under = await lodAtTestFloor(await sphereGlb(1, { seg: 28, ring: 28, png: await noise(1024) }), enc);
     check("an 841-vertex textured sphere under the floor: texture-only, every vertex kept", !!under.out && under.texOnly === true && under.after === under.before && under.before === 841,
       { kind: under.kind, verdict: under.verdict, before: under.before, after: under.after });
   }

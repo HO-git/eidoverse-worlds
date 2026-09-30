@@ -14,6 +14,9 @@ import { Document, NodeIO } from "@gltf-transform/core";
 import { ALL_EXTENSIONS } from "@gltf-transform/extensions";
 import draco3d from "draco3dgltf";
 import { optimizeGlbLod } from "../server/optimize.ts";
+// these tests exercise the REDUCER's mechanics on fixtures sized around a 1,000-vertex floor; the production floor
+// (LOD_MIN_VERTS, a policy) is pinned in store-variants-test
+const lodAtTestFloor = (b: Uint8Array, e: string | null, m?: (d: any) => void) => optimizeGlbLod(b, e, m, { minVerts: 1_000 });
 
 let pass = 0, fail = 0;
 const check = (n: string, ok: boolean, d: unknown = "") => { ok ? pass++ : fail++; console.log(`  ${ok ? "\x1b[32m✓" : "\x1b[31m✗"}\x1b[0m ${n}${ok ? "" : `  ${JSON.stringify(d)}`}`); };
@@ -91,11 +94,11 @@ async function offShading(bytes: Uint8Array) {
 
 const facetedSrc = await glb(true), smoothSrc = await glb(false);
 check("(setup) the faceted source shades like its surface", (await offShading(facetedSrc)) < 0.01, await offShading(facetedSrc));
-const f = await optimizeGlbLod(facetedSrc, null);
+const f = await lodAtTestFloor(facetedSrc, null);
 const fOff = f.out ? await offShading(f.out) : 0;
 console.log(`  · faceted: ${f.out ? `LOD ${f.before}→${f.after}${f.permissive ? " (permissive)" : ""}, off-shaded ${(100 * fOff).toFixed(1)}%` : `refused ${f.kind}: ${f.verdict}`}`);
 check("faceted jagged field: a served LOD shades like its surface (≤ 5% of area > 60° off), or none is served", !f.out || fOff <= 0.05, { after: f.after, fOff });
-const s = await optimizeGlbLod(smoothSrc, null);
+const s = await lodAtTestFloor(smoothSrc, null);
 const sOff = s.out ? await offShading(s.out) : 1;
 console.log(`  · smooth:  ${s.out ? `LOD ${s.before}→${s.after}${s.permissive ? " (permissive)" : ""}, off-shaded ${(100 * sOff).toFixed(1)}%` : `refused ${s.kind}: ${s.verdict}`}`);
 check("smooth UV sphere: still reduced to ≤ 40% of its vertices", !!s.out && s.after <= s.before * 0.4, { before: s.before, after: s.after, kind: s.kind });

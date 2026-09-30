@@ -781,7 +781,7 @@ console.log("\n  the canary — a pulled recipe lands under a running sequencer:
 }
 
 { // the Permissive fallback: a UV-seam-locked mesh still gets its LOD, and the result says it was permissive
-  const r = await optimizeGlbLod(await seamedGridGlb(40), null);
+  const r = await optimizeGlbLod(await seamedGridGlb(40), null, undefined, { minVerts: 1_000 });   // a 6,400-vertex fixture: the mechanics, at a 1k floor
   check("a UV-seam-locked mesh reduces only via the Permissive retry (≤0.6×, flagged permissive)",
     r.out !== null && r.permissive === true && r.after <= r.before * 0.6, JSON.stringify({ before: r.before, after: r.after, permissive: r.permissive, verdict: r.verdict }));
   // the catalog reads the marker back from the file itself (store-variants.ts lodSimplifyOf: the GLB's JSON chunk only)

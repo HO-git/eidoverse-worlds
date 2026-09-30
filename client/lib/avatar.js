@@ -286,7 +286,9 @@ const tokv = (n, fb) => (getComputedStyle(document.documentElement).getPropertyV
 const liveAvatars = new Set();
 bus.on('style', () => { for (const a of liveAvatars) a.repaintLabel?.(); });
 
-const makeLabel = (name) => textSprite((ctx) => {
+const makeLabel = (name) => {
+  let pill = 0;
+  const s = textSprite((ctx) => {
   // humanist, not terminal (R, 08-30: "Matrix vibes, can we do better").
   // system-ui = Segoe on Windows: warm, rounded, no webfont race on a
   // canvas that draws the moment someone arrives.
@@ -294,11 +296,32 @@ const makeLabel = (name) => textSprite((ctx) => {
   try { ctx.letterSpacing = '1.5px'; } catch {}
   ctx.textAlign = 'center';
   const w = Math.min(500, ctx.measureText(name.slice(0, 24)).width + 40);
+  pill = w;
   ctx.fillStyle = tokv('--pill-bg', 'rgba(6,16,22,0.62)');
   ctx.beginPath(); ctx.roundRect((512 - w) / 2, 6, w, 52, 26); ctx.fill();   // pill (R, 15:12)
   ctx.fillStyle = tokv('--pill-name', '#8fe8c8');
   ctx.fillText(name.slice(0, 24), 256, 46);
-}, 512, 64, 0.9);
+  }, 512, 64, 0.9);
+  s.userData.pill = pill / 512;   // the pill's share of the sprite's width: the ear and the hover card sit beside IT
+  return s;
+};
+
+// THE NAMEPLATE EAR (owner, 09-30: "anyone muted near you can pop up a grayed out ear *next* to their name plate"):
+// a small separate sprite BESIDE the pill, never the plate restyled — a grey ear-off on the pill's own dark disc (a
+// bare grey stroke vanishes against a bright sky), a little taller than the pill so the glyph reads. Placed each frame
+// at the plate's anchor plus the camera's RIGHT (in the body's frame) — beside the plate from every view and in VR.
+// Not Sprite.center: the WebGPU sprite material drew it on the plate's middle (seen in the render, 09-30).
+const makeEar = () => textSprite((ctx) => {
+  ctx.fillStyle = tokv('--pill-bg', 'rgba(8,20,28,0.86)');
+  ctx.beginPath(); ctx.arc(32, 32, 26, 0, Math.PI * 2); ctx.fill();
+  // stroke() draws 2 canvas px at any size, a hair at 15 px on screen: draw it on a doubled grid so the line holds
+  ctx.translate(32, 32); ctx.scale(2, 2);
+  ctx.strokeStyle = tokv('--dim', '#97979b');
+  strokeIcon(ctx, 'earOff', 17);
+}, 64, 64, 0.9 * 64 / 512);
+const EAR_GAP = 0.03;    // metres between pill and ear, at the plate's base size
+const EAR_K = 1.3;       // the ear's side, in plate heights
+const _earDir = new THREE.Vector3(), _earQ = new THREE.Quaternion(), _earQ2 = new THREE.Quaternion();
 
 function wrap(text, n) {
   const words = String(text).split(/\s+/);
@@ -1821,9 +1844,13 @@ export class Avatar {
     this._labelName = name;
     this.repaintLabel();
   }
+  /** The nameplate ear: `on` = this person cannot hear you (hearing off, and near enough that it matters). The
+   *  caller decides; the plate only fades the mark in or out beside itself. */
+  setDeafMark(on) { this._earWant = on ? 1 : 0; }
   /** rebuild the nameplate sprite from the current tokens (rename, or a Style change) */
   repaintLabel() {
     const name = this._labelName ?? this.id ?? '';
+    if (this.ear) { this.root.remove(this.ear); disposeSprite(this.ear); this.ear = null; }   // re-baked from the new tokens on its next frame
     this.root.remove(this.label);
     disposeSprite(this.label);
     this.label = makeLabel(this._seatApprox ? `${name} ≈` : name);
@@ -2218,6 +2245,21 @@ export class Avatar {
     this.label.scale.setScalar(0); // reset then set (scale carries aspect)
     const lw = 0.9 * (1 + Math.max(0, d - 8) * 0.012); // gentle size hold at range
     this.label.scale.set(lw, lw * 64 / 512, 1);
+    // the ear beside it: fades toward setDeafMark's wish (the only motion it has), always at the plate's own fade
+    const earWant = (this._earWant ?? 0) * (this.label.visible ? 1 : 0);
+    this._earA = (this._earA ?? 0) + (earWant - (this._earA ?? 0)) * (1 - Math.exp(-dt / 0.12));
+    if (this._earA > 0.01 && !this.ear) { this.ear = makeEar(); this.root.add(this.ear); }
+    if (this.ear) {
+      const ew = lw * 64 / 512 * EAR_K;
+      // the camera's right, expressed in the body's frame (the body turns; the plate faces the camera)
+      _earDir.set(1, 0, 0).applyQuaternion(camera.getWorldQuaternion(_earQ))
+        .applyQuaternion(this.root.getWorldQuaternion(_earQ2).invert());
+      this.ear.position.copy(this.label.position)
+        .addScaledVector(_earDir, lw * (this.label.userData.pill ?? 0.5) / 2 + EAR_GAP * lw / 0.9 + ew / 2);
+      this.ear.scale.set(ew, ew, 1);
+      this.ear.material.opacity = this._earA * vis;
+      this.ear.visible = this._earA > 0.01;
+    }
 
     if (this.bubble) {
       if (now > this.bubbleUntil) {
@@ -2277,6 +2319,7 @@ export class Avatar {
     if (this.bubble) disposeSprite(this.bubble);
     if (this.typing) disposeSprite(this.typing);
     disposeSprite(this.label);
+    if (this.ear) disposeSprite(this.ear);
     // The pool resets humanoid rotations/positions, but knows nothing about
     // custom-bone transforms or scale. Return every raw channel we still own
     // before dropping the compose records and handing this VRM to a new wearer.

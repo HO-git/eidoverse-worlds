@@ -7,9 +7,9 @@
 // handle in mybody.js, my body's physics in localbody.js, consent in
 // consent.js, voice mouths in voicemouths.js, /commands in lib/commands/.
 
-import { THREE, scene, camera, renderer } from './lib/core.js';
+import { THREE, scene, camera, renderer, canvas } from './lib/core.js';
 import { releaseBodyGate, armBodyGate } from './lib/bodygate.js';
-import { CONFIG, bus, report, tee } from './lib/base.js';
+import { CONFIG, bus, report, tee, colorFor } from './lib/base.js';
 import { contributeThumbnail, makeAvatar, makeCapsuleAvatar, EMOTE_ORDER } from './lib/avatar.js';
 import { updateSky, updateAutoSystems, skyArgs, setCloudQuality } from './lib/sky.js';
 import { setSkyArgsSource, entities, buildsPending, avatarMounts, roleOf, worldHasOwner } from './lib/world.js';
@@ -49,7 +49,7 @@ import { updateBuild, toggleEditMode, isEditing } from './lib/build.js';
 import { initPalette } from './lib/palette.js';
 import { setRightsSink } from './lib/state.js';
 import { initConjure } from './lib/conjure.js';
-import './lib/mictoggle.js'; // mic + headphone toggles beside the HUD, both off by default
+import { micLive, earOn } from './lib/mictoggle.js'; // mic + headphone toggles beside the HUD, both off by default
 import { initAudioPanel } from './lib/audiopanel.js';
 import { initSceneGraph, sceneSelect } from './lib/scenegraph.js';
 import { initXR, updateXR, bindXRSelf, isPresenting } from './lib/xr.js';
@@ -73,7 +73,8 @@ fetch('/version').then((r) => r.json())
   .then(({ sha, commitTime, dirty, startedAt }) => console.log(`[eidoverse] server build ${sha}${dirty === true ? ' (DIRTY TREE)' : dirty === false ? '' : ' (dirty: unknown)'} (code from ${commitTime}), up since ${startedAt}`))
   .catch(() => console.log('[eidoverse] server build unknown (/version unavailable)'));
 import { dragSim, updateBodyDrag, dragState } from './lib/bodydrag.js';
-import { initChat, logChat, chatXRPanel } from './lib/chat.js';
+import { initChat, logChat, chatXRPanel, openConvo } from './lib/chat.js';
+import { initPlates, updatePlates } from './lib/platecard.js';
 import { bodyEngine, setBodyEngine, listBodyEngines } from './lib/bodysim.js';
 import { initPhysObj, tickPhysObj, leaseApi } from './lib/physobj.js';
 import { initMods, tickMods, modsApi } from './lib/mods.js';
@@ -367,6 +368,7 @@ wireNet({
   myAvatarPath: () => getMyAvatarPath(),   // a bare name: the server resolves
   myState,
   me: () => getMe(),
+  myVoice: () => ({ mic: micLive(), hear: earOn() }),   // rides presence: others' nameplate ear + hover card
   onRestore: (r) => {
     // a remembered pose can carry null (JSON has no NaN — tonight's NaN body
     // was stored as [null,0,null] and every rejoin put the owner back on it): only
@@ -567,6 +569,10 @@ registerSystem('physobj', (dt, t, now) => tickPhysObj(dt, now)); // entity lease
 registerSystem('mods', (dt, t, now) => tickMods(dt, now));       // 🧩 runtime scripts
 registerSystem('remotes', (dt, t, now) => updateRemotes(dt, now));
 registerSystem('gaze', (dt, t, now) => updateGaze(myState.pos, getMe(), CONFIG.name, now));
+// the nameplate ear (who cannot hear you, near) and the hover card beside a plate — after gaze, before render
+initPlates({ camera, canvas, remotes, myPos: () => (getMe() ? myState.pos : null), presenting: () => isPresenting(),
+  openConvo, colorFor });
+registerSystem('plates', (dt, t, now) => updatePlates(now));
 registerSystem('build', () => updateBuild());
 registerSystem('promote-tail', () => drainPromoteTail());        // §16.2.C: promote
                                  // boulders (colliders/lamps/casters/mount

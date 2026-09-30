@@ -1359,7 +1359,7 @@ kbd {
 /* photo mode hides every chrome layer but keeps the canvas */
 body.photo .frame, body.photo #hud, body.photo #trayzone,
 body.photo #hintbar, body.photo #dock, body.photo #lantern-pill,
-body.photo #hudstatus, body.photo #stpop { display: none !important; }
+body.photo #hudstatus, body.photo #stpop, body.photo #platecard { display: none !important; }
 
 /* THE STATUS STRIP (statuschips.js): small pills on the ∃'s status line, past the mic/ear glyphs — "WebGL 2 ⓘ",
    "reduced detail", "graphics reset". Amber = a caveat, red = a failure. statuschips.js writes left/top; the strip runs
@@ -1394,6 +1394,32 @@ body.photo #hudstatus, body.photo #stpop { display: none !important; }
 #stpop p { margin: 0; color: var(--dim); }
 #stpop .st-btns { display: flex; gap: 6px; margin-top: 4px; }
 #stpop .st-btns button { padding: 4px 10px; font-size: var(--fs-xs); }
+
+/* THE NAMEPLATE CARD (platecard.js): an in-world tooltip beside a person's nameplate — hover a plate 300 ms, or tap it
+   on a touch screen. The status-chip popover's recipe in the neutral edge instead of amber: nothing here is a caveat.
+   z 9: a thing in the world, so every panel (frames.js Z_LO 10 … 25) and all chrome sit over it as it follows. */
+#platecard {
+  position: fixed; z-index: 9; min-width: 150px; max-width: min(220px, calc(100vw - 16px)); box-sizing: border-box;
+  padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-sm); line-height: 1.35;
+  border-radius: 8px; border: 1px solid var(--edge-hi); background: rgb(var(--panel-rgb) / .94);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); pointer-events: auto;
+  animation: platecard-in .12s ease-out;
+}
+@keyframes platecard-in { from { opacity: 0; } }
+#platecard[hidden] { display: none; }
+#platecard .pc-head { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; min-width: 0; }
+#platecard .pc-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+#platecard .pc-name { font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+#platecard .pc-pres { font-size: var(--fs-xs); color: var(--dim); flex: none; }
+#platecard .pc-pres[data-presence="away"] { color: var(--attn); }
+#platecard .pc-pres[data-presence="busy"] { color: var(--err); }
+#platecard .pc-row { display: flex; align-items: center; gap: 6px; color: var(--dim); }
+#platecard .pc-row svg { flex: none; opacity: .8; }
+#platecard .pc-row[data-on="true"] { color: var(--fg); }
+#platecard .pc-row[data-on="true"] svg { color: var(--ok); opacity: 1; }
+#platecard .pc-where { margin-left: auto; padding-left: 8px; font-size: var(--fs-xs); color: var(--dim); flex: none; }
+#platecard .pc-btns { display: flex; gap: 6px; margin-top: 4px; }
+#platecard .pc-btns button { padding: 4px 10px; font-size: var(--fs-xs); }
 
 #touch { position: fixed; inset: 0; z-index: 3; display: none; pointer-events: none; }
 body.touch #touch { display: block; }

@@ -41,4 +41,5 @@ export function resetFingers() {}
 export const xrBodyDebug = () => null;
 // shared/presencewire.js — same: #197 wires presence through it; recovery never sends one.
 export function applyPresenceWire() {}
+export function applyVoiceWire() {}   // mic / hear ride the same packet (platecard.js); recovery never reads them
 export function presenceWire() { return null; }

@@ -15,7 +15,7 @@ import { applyRemoteReach, noteReachEvents } from './reachnet.js';
 import { syncClipPhase } from './poseclips.js';
 import { applyWingFoldPresence } from '../../shared/wingpresence.js';
 import { poseChannels } from '../../shared/humanoid.js';
-import { applyPresenceWire } from '../../shared/presencewire.js';
+import { applyPresenceWire, applyVoiceWire } from '../../shared/presencewire.js';
 import { applyRemoteXR, resetFingers } from './xrbody.js';
 
 export const remotes = new Map(); // id -> RemoteBody
@@ -312,6 +312,7 @@ function planPoseBlend(r, pa, pb) {
 function applyPresenceExtras(r, s) {
   applyWingFoldPresence(r.avatar, s);
   applyPresenceWire(r, s);            // present / away / busy, for the Who panel
+  applyVoiceWire(r, s);              // mic / hear, for the nameplate ear and hover card
   const clip = s.clip ?? 'idle';
   if (s.emote && s.emote !== r.lastEmote) {
     r.lastEmote = s.emote;
@@ -397,6 +398,7 @@ export function updateRemotes(dt, now = performance.now()) {
           // still visibly folded through the same rig-local renderer path.
           applyWingFoldPresence(r.avatar, s);
           applyPresenceWire(r, s);
+          applyVoiceWire(r, s);
           if (s.emote && s.emote !== r.lastEmote) {
             r.lastEmote = s.emote;
             r.avatar.playEmote(s.emote);

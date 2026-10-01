@@ -1,14 +1,14 @@
 // bodyscale — "this body" (Profile › Avatar, R 2026-09-30): a chosen SIZE and a NAMEPLATE LIFT per body, networked.
 // Drives the real functions: shared/presencewire.js (the wire), client/lib/bodyscale.js (the maths), plateanchor.js's
 // lift, avatar.js's setUserScale/setPuppetScale/setPlateY/_placePlate on a real THREE rig, remotes.js applyRemoteBody,
-// and the server's own pose fence (posecheck.ts sanePose) — the new fields must pass the relay untouched.
+// and the server's own pose fence (posecheck.ts sanePose) — in-range fields pass the relay untouched, the rest are clamped.
 //
 //   BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 bun tools/bodyscale-test.ts
 //
 // What must hold:
 //   the wire — nothing sent at default (absence = default both ways: an old sender reads as 1 / 0, and a new sender
 //     resetting stops sending); clamped on receipt (scale 0.5–2, plateY −0.3…+0.8 m); garbage reads as default; the
-//     older readers (presence / voice) are untouched by the new keys; the server relays them as-is;
+//     older readers (presence / voice) are untouched by the new keys; the server clamps them with the same clamps;
 //   the lift — added over the crown standing, sitting AND lying (follows posture exactly as auto); 0 is auto exactly;
 //   the VR composition — body = u/k on the puppet, rig = u: eyes at the HMD and hands on the controllers at any size,
 //     and the device fit k (your real height) never depends on the size you chose;
@@ -62,7 +62,9 @@ console.log('the wire:');
     && PW.applyPresenceWire(v, { scale: 2 }) === false && J(v) === '{}', J(v));
   const { sanePose } = await import('../server/posecheck.ts');
   const relayed: any = sanePose({ p: [1, 0, 1], yaw: 0, speed: 0, clip: 'idle', scale: 1.5, plateY: 0.3 });
-  check('the server fence relays them as sent (an older server relays the pose object whole, too)', relayed?.scale === 1.5 && relayed?.plateY === 0.3, J(relayed));
+  check('the server fence relays in-range values as sent (an older server relays the pose object whole, too)', relayed?.scale === 1.5 && relayed?.plateY === 0.3, J(relayed));
+  const fenced: any = sanePose({ p: [1, 0, 1], yaw: 0, scale: 7, plateY: 'x' });
+  check('...and clamps or drops the rest with the same clamps the receivers use (the server remembers lastPose)', fenced?.scale === 2 && !('plateY' in (fenced ?? {})), J(fenced));
 }
 
 const BS: any = await import('../client/lib/bodyscale.js').catch((e) => { console.log(`  (bodyscale.js did not load: ${e?.message})`); return {}; });

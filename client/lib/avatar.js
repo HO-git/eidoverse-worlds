@@ -32,7 +32,7 @@ import { DRIVEN_BONES } from './ragdoll.js';
 import { stroke as strokeIcon, strokeBold } from './icons.js';
 import { plateSize, plateClear, ownClearance, reachAbove, markBake, plateBox, CLEAR_MIN, PLATE_W } from './platesize.js';
 import { revealLevel } from './namereveal.js';
-import { crownEstimate, plateGap, plateAnchor, plateOffset, STAND_SLOTS, DEAD as PLATE_DEAD } from './plateanchor.js';
+import { crownEstimate, plateGap, plateAnchor, plateOffset, plateViewLift, STAND_SLOTS, DEAD as PLATE_DEAD } from './plateanchor.js';
 import { clampBodyScale, clampPlateY, plateLift, clipRate } from './bodyscale.js';
 import { Fn, userData, positionView, cameraNear, cameraFar, min, viewZToPerspectiveDepth, viewZToReversedPerspectiveDepth,
   viewZToOrthographicDepth } from 'three/tsl';
@@ -407,6 +407,8 @@ const _pSmooth = { dead: PLATE_DEAD };
 const _pRest = new THREE.Vector3(), _pTarget = { standing: false, standY: 0, liveY: 0 };
 const plateBone = (h, n) => h?.getRawBoneNode?.(n) ?? h?.getNormalizedBoneNode?.(n) ?? null;
 const _pRoot = new THREE.Vector3();
+const _lvP = new THREE.Vector3(), _lvE = new THREE.Vector3(), _lvU = new THREE.Vector3(), _lvF = new THREE.Vector3(), _lvQ = new THREE.Quaternion();
+const _lvArgs = { eye: [0, 0, 0], up: [0, 0, 0], fwd: [0, 0, 0], plate: [0, 0, 0], drop: 0, headR: 0, halfH: 0 };
 
 function wrap(text, n) {
   const words = String(text).split(/\s+/);
@@ -2015,11 +2017,13 @@ export class Avatar {
    *  with nothing at all, at the old fixed 1.95. */
   _placePlate(dt) {
     const r = this._plateRest, sc = this.vrm?.scene, h = this.vrm?.humanoid;
-    if (!sc || !r || (r.hipsToCrown == null && r.boundsTop == null)) { this.label.position.set(0, 1.95, 0); return; }
+    if (!sc || !r || (r.hipsToCrown == null && r.boundsTop == null)) { this.label.position.set(0, 1.95, 0); this._plateDrop = null; return; }
     this.root.updateWorldMatrix(true, false);
     const s = sc.getWorldScale(_pScale).y || 1;   // model units → world (root scale × puppet scale)
     const gap = plateGap((r.height ?? 1.7) * s);
     const lift = plateLift(this.plateY, s);   // the wearer's own lift over the crown (Profile › Avatar), grows with the body
+    this._plateDrop = gap + lift;   // plate → crown, and the head under it as a ball (_liftPlateForView)
+    this._plateHeadR = r.headSpan != null ? r.headSpan * s / 2 : 0.1;
     const rootY = this.root.getWorldPosition(_pRoot).y;
     const hipsN = r.hipsToCrown != null ? plateBone(h, 'hips') : null, headN = hipsN ? plateBone(h, 'head') : null;
     let x, y, z;
@@ -2053,6 +2057,23 @@ export class Avatar {
   /** Upright in ordinary motion (plateanchor.js STAND_SLOTS), with nothing else owning the body: a gesture, a held
    *  pose and a ragdoll fall can crouch, bow or tumble it, so they keep the live anchor. */
   _plateStanding() { return STAND_SLOTS.has(this.postureSlot) && !this.emote && !this._override && !this._limp; }
+
+  /** Slide the hung plate off the head for THIS viewer's camera (plateanchor.js plateViewLift): along the camera's up,
+   *  in world, so each client lifts every plate for its own eye and nothing rides the wire. Runs after _placePlate,
+   *  the own-clearance measure and this frame's size; the mark, the pill and the bubble copy the plate after it. */
+  _liftPlateForView(camera) {
+    if (this._plateDrop == null) return;
+    const lab = this.label, a = _lvArgs;
+    this.root.updateWorldMatrix(true, false);
+    this.root.localToWorld(_lvP.copy(lab.position));
+    camera.getWorldPosition(_lvE); camera.getWorldQuaternion(_lvQ);
+    _lvU.set(0, 1, 0).applyQuaternion(_lvQ); _lvF.set(0, 0, -1).applyQuaternion(_lvQ);
+    _lvE.toArray(a.eye); _lvU.toArray(a.up); _lvF.toArray(a.fwd); _lvP.toArray(a.plate);
+    a.drop = this._plateDrop; a.headR = this._plateHeadR ?? 0.1;
+    a.halfH = lab.scale.x * this.root.getWorldScale(_pScale).y * (lab.userData.pillH ?? 52 / 512) / 2;   // the pill as drawn, world m
+    const d = plateViewLift(a);
+    if (d > 0) lab.position.copy(this.root.worldToLocal(_lvP.addScaledVector(_lvU, d)));
+  }
 
   /** How far this body reaches from its plate's anchor, as the clearance its body-attached sprites write
    *  (platesize.js ownClearance/reachAbove), from where the plate hangs THAT frame (_placePlate runs first). The body is
@@ -2506,6 +2527,7 @@ export class Avatar {
     this.label.material.opacity = vis;
     this.label.visible = vis > 0.02 && !this.hideLabel;   // hideLabel: your own name is for OTHER eyes (set while presenting, xr.js selfFirstPerson)
     this.label.scale.set(lw, lw * (this.label.userData.aspect ?? 64 / 512), 1);   // scale carries the aspect: the text keeps its size whatever the canvas height
+    this._liftPlateForView(camera);   // after the size (the lift clears the pill as drawn), before what hangs off the plate
     // the headphones beside it: fades toward setDeafMark's wish (the only motion it has), always at the plate's own fade
     const earWant = (this._earWant ?? 0) * (this.label.visible ? 1 : 0);
     this._earA = (this._earA ?? 0) + (earWant - (this._earA ?? 0)) * (1 - Math.exp(-dt / 0.12));

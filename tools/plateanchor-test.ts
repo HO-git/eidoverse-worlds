@@ -149,6 +149,60 @@ console.log('smoothing:');
   check('a sit (−0.69 m) is within 5 cm in under half a second', frames / 90 < 0.5, `${(frames / 90).toFixed(3)} s`);
 }
 
+console.log('seen from above (owner, 10-01: "offsets away from the avatar when seen from above"):');
+{
+  // A pinhole camera at `eye` looking at the plate, no roll. Screen y of a point = (X − eye)·up / (X − eye)·fwd —
+  // the same projection the renderer makes, written out here so the test does not borrow the function's own algebra.
+  const sub = (a: number[], b: number[]) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const norm = (a: number[]) => { const l = Math.hypot(a[0], a[1], a[2]); return [a[0] / l, a[1] / l, a[2] / l]; };
+  const cross = (a: number[], b: number[]) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  // a 1.7 m body: plate 8.5 cm over the crown, head ~19 cm tall (radius 9.4), a world-size pill 0.134 m tall
+  const plate = [0.3, 1.773, -0.2], drop = 0.085, headR = 0.094, halfH = 0.067;
+  const view = (pitchDeg: number, yawDeg = 30, dist = 3) => {
+    const p = pitchDeg * Math.PI / 180, y = yawDeg * Math.PI / 180;
+    const eye = [plate[0] + dist * Math.cos(p) * Math.sin(y), plate[1] + dist * Math.sin(p), plate[2] + dist * Math.cos(p) * Math.cos(y)];
+    const fwd = norm(sub(plate, eye));
+    const right = norm(cross(fwd, [0, 1, 0])), up = cross(right, fwd);
+    return { eye, up, fwd };
+  };
+  const lift = (v: any, o: any = {}) => PA.plateViewLift?.({ ...v, plate, drop, headR, halfH, ...o });
+  // the clearance it promises, measured independently: the lifted plate's bottom edge vs the head's top on screen
+  const margin = (v: any, d: number, hh = halfH) => {
+    const P = [plate[0] + v.up[0] * d, plate[1] + v.up[1] * d, plate[2] + v.up[2] * d];
+    const H = [plate[0], plate[1] - drop - headR, plate[2]];   // the head, a ball under the crown
+    const rp = sub(P, v.eye), rh = sub(H, v.eye);
+    const accepted = Math.max(0, hh - drop);   // what the plate already covers of the crown at eye level (a grown plate)
+    return (dot(rp, v.up) - hh) / dot(rp, v.fwd) - (dot(rh, v.up) + headR - accepted) / dot(rh, v.fwd);
+  };
+  check('plateViewLift exists', typeof PA.plateViewLift === 'function');
+  check('eye level: no lift at all', lift(view(0)) === 0, String(lift(view(0))));
+  check('a grown plate (taller than the gap) at eye level: still no lift — eye level is left exactly as it was',
+    lift(view(0), { halfH: 0.2 }) === 0, String(lift(view(0), { halfH: 0.2 })));
+  check('looking UP at a plate: no lift', lift(view(-25)) === 0);
+  const l45 = lift(view(45)), l89 = lift(view(89));
+  check('45° down: lifted, and the bottom edge clears the head exactly (the least lift that does)',
+    l45 > 0.01 && Math.abs(margin(view(45), l45)) < 1e-9, `lift ${l45} margin ${margin(view(45), l45)}`);
+  check('near-vertical: lifted about a head-radius + half a plate (and clears it)',
+    l89 > 0.12 && l89 < headR + halfH + 0.01 && Math.abs(margin(view(89), l89)) < 1e-9, `lift ${l89}`);
+  check('...and without the lift the plate WOULD overlap the head there', margin(view(89), 0) < -0.05 && margin(view(45), 0) < 0);
+  let mono = true, worst = 0, prev = 0, okAll = true;
+  for (let i = 0; i <= 890; i++) {
+    const v = view(i / 10), d = lift(v);
+    if (d < prev - 1e-12) mono = false;
+    worst = Math.max(worst, Math.abs(d - prev)); prev = d;
+    if (margin(v, d) < -1e-9) okAll = false;
+  }
+  check('0° → 89°: grows only, in steps under 2 mm per 0.1° (no pop), clearing the head at every pitch', mono && worst < 0.002 && okAll,
+    `mono ${mono} worst ${worst} clears ${okAll}`);
+  let spread = 0; const ref = lift(view(60, 0));
+  for (let yd = 0; yd < 360; yd += 7) spread = Math.max(spread, Math.abs(lift(view(60, yd)) - ref));
+  check('orbiting around the body at a fixed pitch: the lift does not change (no jitter)', spread < 1e-9, String(spread));
+  check('a closer camera above (1.2 m) still clears', Math.abs(margin(view(70, 30, 1.2), lift(view(70, 30, 1.2)))) < 1e-9);
+  const behind = view(45); behind.fwd = behind.fwd.map((x: number) => -x);
+  check('plate behind the camera: no lift', lift(behind) === 0);
+}
+
 // ---- the real Avatar methods, on a real THREE rig -------------------------------------------------------------
 console.log('avatar.js:');
 {
@@ -213,6 +267,37 @@ console.log('avatar.js:');
   const clearRoot = (() => { self.label.position.set(0, 1.8 + g, 0); return self._measureOwnClear(); })();
   const clearOff = (() => { self.label.position.set(0.6, 1.8 + g, 0); return self._measureOwnClear(); })();
   check('own-body clearance is measured from the plate\'s own x/z (moved 0.6 m → the hair is farther)', clearOff > clearRoot + 0.2, `${clearRoot} → ${clearOff}`);
+
+  // SEEN FROM ABOVE, on the real rig: _liftPlateForView slides the placed plate along THIS camera's up, in world, and
+  // writes it back in the root's frame (turned and scaled here, so a local-vs-world slip shows)
+  {
+    const A = rig(); const a = A.self, rt = A.root;
+    rt.position.set(2, 0, -1); rt.rotation.y = 0.7; rt.scale.setScalar(1.2);
+    a.label.scale.set(0.9, 0.9 * 76 / 512, 1); a.label.userData.pillH = 64 / 512;
+    call(a, '_placePlate', 1 / 60);
+    const placed = a.label.position.clone();
+    const cam = new THREE.PerspectiveCamera(55, 16 / 9, 0.05, 500);
+    const plateW = () => rt.localToWorld(a.label.position.clone());
+    const aim = (pitchDeg: number, dist = 3) => {
+      const P = rt.localToWorld(placed.clone()), p = pitchDeg * Math.PI / 180;
+      cam.position.set(P.x + dist * Math.cos(p) * 0.6, P.y + dist * Math.sin(p), P.z + dist * Math.cos(p) * 0.8);
+      cam.lookAt(P); cam.updateMatrixWorld(true);
+    };
+    aim(0); a.label.position.copy(placed); call(a, '_liftPlateForView', cam);
+    check('eye level: the real plate does not move', a.label.position.distanceTo(placed) < 1e-9, J(a.label.position));
+    aim(80); a.label.position.copy(placed); const before = plateW(); call(a, '_liftPlateForView', cam);
+    const moved = plateW().sub(before), camUp = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
+    check('from 80° above: moved along the camera\'s up, in WORLD (root turned and ×1.2)', moved.length() > 0.1 && moved.clone().normalize().dot(camUp) > 1 - 1e-9,
+      `${J(moved)} · up ${J(camUp)}`);
+    // the screen check the probe makes: the pill's bottom edge projects above the head bone
+    const s = rt.getWorldScale(new THREE.Vector3()).y, hh = 0.9 * s * (64 / 512) / 2;
+    const bottom = plateW().addScaledVector(camUp, -hh).project(cam);
+    const headP = A.head.getWorldPosition(new THREE.Vector3()).project(cam);
+    const crownP = rt.localToWorld(new THREE.Vector3(0, a._plateRest.crown, 0)).project(cam);
+    check('...and its bottom edge is above the head on screen (the crown too)', bottom.y > headP.y && bottom.y > crownP.y - 1e-9,
+      `bottom ${bottom.y.toFixed(4)} head ${headP.y.toFixed(4)} crown ${crownP.y.toFixed(4)}`);
+    rt.position.set(0, 0, 0); rt.rotation.y = 0; rt.scale.setScalar(1);
+  }
 
   const none = rig({ hipsHead: false });
   call(none.self, '_placePlate', 1 / 60);

@@ -101,3 +101,28 @@ export function plateOffset(prev, { standing, standY, liveY }, dt, opts = {}) {
   return smoothY(prev, standY, dt, opts.tau == null ? RIGID : { tau: opts.tau, dead: 0 });   // per body, per frame: no garbage
 }
 const RIGID = { dead: 0 };
+
+// ---- seen from above (owner, 10-01: "make sure the label offsets away from the avatar when seen from above") ------
+// The plate hangs a gap over the crown in WORLD up. Looking down, that gap foreshortens (cos of the pitch) and the
+// head's own top rises on screen toward the plate, until from straight above the plate sits on the face. The plate is
+// a screen-aligned sprite, so the fix is in screen terms: slide it along the camera's up (perpendicular to the view,
+// so its stereo depth and its own-body depth clearance are untouched) by the least amount that puts its bottom edge
+// over the head's top. The head is a ball of `headR` under the crown, and everything is projected through the same
+// pinhole the renderer uses, so the answer is exact at any range. Eye level is left exactly as it was: whatever the
+// plate covers of the crown there (a plate grown for range is taller than the gap) is the overlap it is allowed
+// anywhere — so the lift is 0 level, grows smoothly with the pitch, and is about headR + halfH from straight above.
+// A pure function of the camera and the plate's own anchor (not the live head), so it is as steady as the plate.
+
+/** eye, up, fwd: the camera's world position and unit up / forward ([x,y,z]); plate: the plate's centre (world);
+ *  drop: plate centre → crown (the gap + the wearer's lift, m); headR: the head's radius (m); halfH: half the pill's
+ *  height as drawn (m). → the lift (m, ≥ 0) along `up`. */
+export function plateViewLift({ eye, up, fwd, plate, drop, headR, halfH }) {
+  const px = plate[0] - eye[0], py = plate[1] - eye[1], pz = plate[2] - eye[2];
+  const zP = px * fwd[0] + py * fwd[1] + pz * fwd[2];
+  const down = drop + headR;   // plate centre → the head ball's centre, straight down
+  const zH = zP - down * fwd[1];
+  if (!(zP > 1e-3) || !(zH > 1e-3)) return 0;   // behind the eye (or NaN): nothing to clear
+  const yP = px * up[0] + py * up[1] + pz * up[2], yH = yP - down * up[1];
+  const accepted = Math.max(0, halfH - drop);
+  return Math.max(0, zP * (yH + headR - accepted) / zH - yP + halfH);
+}

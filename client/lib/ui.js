@@ -500,11 +500,11 @@ function initPanels() {
   Promise.all([import('./profile.js'), import('./stylepanel.js'), import('./videopanel.js'), import('./capnotice.js'), import('./dropdown.js')])
     .then(([p, st, v, c, d]) => { p.initProfile(); st.initStylePanel(); v.initVideoPanel(); c.initCapNotice(); d.initDropdowns(); paintDock(); })
     .catch((e) => report('ui panels', e));
-  return [SEARCH_ENTRY, { id: 'profile', icon: 'user-circle' }];
+  return [{ id: 'profile', icon: 'user-circle' }];
 }
-// Search & commands: the lantern prompt (Ctrl/Cmd+K), right under the ∃ — a way IN, like the ∃, so it leads the windows.
-// An action entry (not a frame): it lights while the prompt is open. It registers no lantern row — a row that opens
-// the prompt you are typing in would be noise.
+// Search & commands: the lantern prompt (Ctrl/Cmd+K). Between emotes and debug (owner, 10-01: "Search almost feels like
+// a less-standard feature") — initDock places it. An action entry (not a frame): it lights while the prompt is open.
+// It registers no lantern row — a row that opens the prompt you are typing in would be noise.
 const SEARCH_ENTRY = { id: 'search', icon: 'magnifying-glass', label: 'Search & commands', noAction: true,
   action: () => (isLanternOpen() ? closeLantern() : openLantern()), active: () => isLanternOpen() };
 addEventListener('lantern', () => paintDock());
@@ -521,6 +521,11 @@ export function initDock(entries) {
   // built-ins lead; a mod registered before boot keeps its entry, once
   const seen = new Set();
   dockEntries = [...lead, ...entries, ...dockEntries].filter((e) => !seen.has(e.id) && seen.add(e.id));
+  // search goes in before debug, else after emotes, else ahead of the `last` entries (the sort below keeps those last)
+  if (!seen.has(SEARCH_ENTRY.id)) {
+    const at = dockEntries.findIndex((e) => e.id === 'debug'), after = dockEntries.findIndex((e) => e.id === 'emotes');
+    dockEntries.splice(at >= 0 ? at : after >= 0 ? after + 1 : dockEntries.length, 0, SEARCH_ENTRY);
+  }
   // `last: true` entries (the edit wrench) ALWAYS close the list: edit is a
   // MODE, not a window, and it reads as one only when it sits apart at the end
   // (live, 09-05). Mods registering later insert ahead of them (addDockButton).

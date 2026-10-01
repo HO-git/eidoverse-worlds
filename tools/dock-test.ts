@@ -75,9 +75,12 @@ await tick();   // initPanels' dynamic imports land and repaint
 for (const id of ["chat", "world", "emotes", "debug"]) getFrame(id)!.hide();
 bus.emit("frames");
 check("∃ leads the rail", dock().firstElementChild?.id === "hud");
-check("search leads the buttons (right under the ∃), then profile; the wrench closes the list; the grip is last",
-  order()[0] === "search" && order()[1] === "profile" && order()[order().length - 1] === "edit" && dock().lastElementChild?.classList.contains("dock-grip"), order().join());
-check("dock order follows the entry list", order().join() === "search,profile,chat,world,nofrx,emotes,debug,edit", order().join());
+check("profile leads the buttons (right under the ∃); the wrench closes the list; the grip is last",
+  order()[0] === "profile" && order()[order().length - 1] === "edit" && dock().lastElementChild?.classList.contains("dock-grip"), order().join());
+// search sits between emotes and debug (owner, 10-01: "Search almost feels like a less-standard feature, so maybe
+// should be docked by default between emotes and debug"), pinned by default
+check("dock order follows the entry list, search between emotes and debug", order().join() === "profile,chat,world,nofrx,emotes,search,debug,edit", order().join());
+check("…and search is pinned by default (shown while the lantern is closed)", btn("search")!.hidden === false && JSON.parse(localStorage.getItem("ew-dock-pins") ?? '["search"]').includes("search"));
 { // the search entry: the lantern prompt's way in, wearing the magnifying glass, its chord in the tooltip
   const { get: getAction, register: registerAction } = await import("../client/lib/actions.js");
   const s = btn("search")!;

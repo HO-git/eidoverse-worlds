@@ -1,8 +1,8 @@
-// vrmic — ask for the microphone BEFORE the headset goes on, so voice just works inside it (R, 09-30: "she'll feel it
-// the first time a friend joins her in VR").
+// vrmic — ask for the microphone BEFORE the headset goes on, so voice just works inside it (the owner, 09-30: the
+// first time a friend joins you in VR is when a missing mic is felt).
 //
-// A browser's permission prompt cannot be relied on to show during an immersive WebXR session — whether the Steam
-// Frame's browser can is unknown, so this is built for the case where it can't. Two halves:
+// A browser's permission prompt cannot be relied on to show during an immersive WebXR session — whether a given
+// headset's own browser can is unknown, so this is built for the case where it can't. Two halves:
 //
 //   1. PRE-VR. The visor press reads the permission WITHOUT prompting (navigator.permissions.query). Only when the
 //      answer is genuinely open ('prompt') and this browser has never chosen does a small 2D step ask "Voice in VR?" —

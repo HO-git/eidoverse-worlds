@@ -879,7 +879,15 @@ function resolveAnchor(v, size, extent) {
 }
 
 function readSaved(id) {
-  try { return JSON.parse(localStorage.getItem(LS(id)) ?? 'null'); } catch { return null; }
+  let s;
+  try { s = JSON.parse(localStorage.getItem(LS(id)) ?? 'null'); } catch { return null; }
+  if (!s || typeof s !== 'object') return null;
+  // each unusable number falls back on its own: vw:0 read as a zero-wide authoring viewport docks the frame
+  // bottom-right, and a string x paints nowhere
+  for (const k of ['x', 'y', 'w', 'h', 'vw', 'vh']) {
+    if (k in s && !(Number.isFinite(s[k]) && (k === 'x' || k === 'y' || s[k] > 0))) delete s[k];
+  }
+  return s;
 }
 
 /** Edge snapping, plus snapping to the other frames' edges — it's what makes a

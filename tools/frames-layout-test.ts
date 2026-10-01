@@ -748,5 +748,20 @@ console.log("FRAMES — an edge resize while squeezed, then grow");
   vp(1000, 700);
 }
 
+console.log("FRAMES — a stored value that is not a usable number falls back, field by field");
+{
+  // vw:0 read as a zero-wide authoring viewport: every frame looked docked right and bottom.
+  localStorage.setItem("ew-frame-bad-vw", JSON.stringify({ x: 100, y: 100, w: 300, h: 200, hidden: false, placed: true, vw: 0, vh: 0 }));
+  const z: any = measurable(makeFrame("bad-vw", { title: "z", x: 40, y: 40, w: 220, h: 150 }));
+  check("a save with vw:0 / vh:0 comes up where it was saved", [z.state.x, z.state.y, z.state.w, z.state.h].join(",") === "100,100,300,200",
+    JSON.stringify(z.state));
+  z.hide();
+  localStorage.setItem("ew-frame-bad-xy", JSON.stringify({ x: "abc", y: null, w: -5, h: 120, hidden: false, placed: true, vw: "x", vh: 700 }));
+  const g: any = measurable(makeFrame("bad-xy", { title: "g", x: 40, y: 50, w: 220, h: 150 }));
+  check("garbage x/y/w fall back to the declared layout; a good h is kept",
+    [g.state.x, g.state.y, g.state.w, g.state.h].join(",") === "40,50,220,120", JSON.stringify(g.state));
+  g.hide();
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

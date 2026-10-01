@@ -10,6 +10,8 @@
 //   2. Allow with a browser prompt nobody answers sat on "waiting for the browser…" with no way into VR
 //   3. leaving VR during the in-VR try: the after-exit ask never came, and the flat page was told "when you leave VR"
 //   4. every failed in-VR try added another permission 'change' listener, so one grant announced itself N times
+//   2 (cont.) an unanswered Allow was remembered as 'allow', so every later press went straight in and never asked again;
+//   2b. a browser answer after the bound left the card saying "hasn't answered"
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import { mock } from 'bun:test';
 import { checker } from './probe-harness.mjs';
@@ -58,6 +60,7 @@ mock.module(lib('micstate.js'), () => ({ micOn: () => mic.on, toggleMic: () => {
 mock.module(lib('voicesfu.js'), () => ({ sfuMicWanted: () => sfu.wanted, sfuMicOn: () => false, sfuMic: async (v) => { sfu.wanted = v; } }));
 
 const V = await import('../client/lib/vrmic.js');
+const { MIC_CHOICE_KEY } = await import('../client/lib/vrmic_policy.js');
 const { check, done } = checker();
 const scrims = () => document.querySelectorAll('#vrmic').length;
 const closeCard = () => { dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); };
@@ -92,10 +95,33 @@ console.log('\n— 2. Allow, and the browser never answers —');
   check('…with honest words: the browser has not answered, and VR is still open', /hasn.t answered/.test(card?.textContent ?? '') && /still enter/.test(card?.textContent ?? ''), card?.textContent.replace(/\s+/g, ' ').trim());
   go?.click();
   check('"Enter VR" enters (proceed ran once) and the card is gone', proceeds === 1 && scrims() === 0, JSON.stringify({ proceeds, scrims: scrims() }));
+  check('an ask nobody answered is not remembered as "allow"', localStorage.getItem(MIC_CHOICE_KEY) !== 'allow', String(localStorage.getItem(MIC_CHOICE_KEY)));
+  const again = V.vrMicPreflight(() => proceeds++);
+  await advance(500);
+  check('…so the next visor press, permission still open, asks again', (await again) === 'asked' && scrims() === 1, JSON.stringify({ scrims: scrims(), proceeds }));
+  closeCard();
   const s = fakeStream(); gum.held.splice(0).forEach((h) => h.res(s));   // the prompt is answered long after
   await advance(10);
   check('a late answer\'s tracks are stopped (the mic light goes out)', s.track.readyState === 'ended', s.track.readyState);
   check('exactly one getUserMedia for the Allow', gum.calls === 1, `${gum.calls}`);
+  if (scrims()) closeCard();
+}
+
+console.log('\n— 2b. the browser answers after the bound, with the card still up —');
+{
+  reset(); gum.held.length = 0;
+  void V.vrMicPreflight(() => {});
+  await advance(500);
+  document.querySelector('#vrmic [data-act=allow]').click();
+  await advance(V.TRY_MS + 100);
+  check('setup: the card says the browser has not answered', /hasn.t answered/.test(document.querySelector('#vrmic')?.textContent ?? ''));
+  gum.held.splice(0).forEach((h) => h.res(fakeStream()));
+  await advance(10);
+  const card = document.querySelector('#vrmic');
+  check('a late answer replaces "hasn\'t answered" with what the browser said',
+    !/hasn.t answered/.test(card?.textContent ?? '') && card?.querySelector('[data-result=allowed]') && !!card.querySelector('[data-act=enter]'),
+    card?.textContent.replace(/\s+/g, ' ').trim());
+  check('…and an answered ask is remembered', localStorage.getItem(MIC_CHOICE_KEY) === 'allow', String(localStorage.getItem(MIC_CHOICE_KEY)));
   if (scrims()) closeCard();
 }
 

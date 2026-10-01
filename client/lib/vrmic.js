@@ -182,24 +182,35 @@ function openCard({ mode, proceed = null }) {
     if (mode === 'enter') proceed?.();   // this click IS a fresh gesture: straight in
   };
   scrim.querySelector('[data-act=allow]').onclick = async (e) => {
-    ls.set(MIC_CHOICE_KEY, 'allow'); setPending(false);
+    setPending(false);
     const btn = e.currentTarget; btn.disabled = true; btn.textContent = 'waiting for the browser…';
+    // Remembered only once the browser answers: while its prompt is open the permission still reads 'prompt', and a
+    // stored 'allow' would send every later press straight in with nothing ever asking again.
+    const asked = askDevice().then((r) => { ls.set(MIC_CHOICE_KEY, 'allow'); return r; });
     // bounded: a browser prompt left unanswered must not hold the way into VR (a late answer's tracks are still stopped)
-    const got = await Promise.race([askDevice(), new Promise((r) => setTimeout(() => r({ ok: false, name: 'unanswered' }), TRY_MS))]);
+    const got = await Promise.race([asked, new Promise((r) => setTimeout(() => r({ ok: false, name: 'unanswered' }), TRY_MS))]);
     globalThis.__vrmic = { ...(globalThis.__vrmic ?? {}), lastAsk: got };
     if (!scrim.isConnected) return;
-    const say = got.ok
+    const result = (r) => (r.ok ? 'allowed' : r.name === 'unanswered' ? 'unanswered' : 'blocked');
+    const sayFor = (r) => (r.ok
       ? 'Microphone allowed. It stays off until you turn it on — press the mic when you want to talk.'
-      : got.name === 'NotFoundError'
+      : r.name === 'NotFoundError'
         ? 'No microphone was found. VR works fine without one — you just won\'t be heard.'
-        : got.name === 'unanswered'
+        : r.name === 'unanswered'
           ? `The browser hasn't answered${mode === 'enter' ? ' — you can still enter VR' : ''}. If its prompt shows, answer it there.`
-          : `The browser blocked the microphone, so VR will be without your voice. To change it later: ${DENIED_FIX}.`;
-    body.innerHTML = `<p class="vrmic-say" data-result="${got.ok ? 'allowed' : got.name === 'unanswered' ? 'unanswered' : 'blocked'}">${say}</p>
+          : `The browser blocked the microphone, so VR will be without your voice. To change it later: ${DENIED_FIX}.`);
+    body.innerHTML = `<p class="vrmic-say" data-result="${result(got)}">${sayFor(got)}</p>
       <div class="vrmic-btns"><button class="go" data-act="${mode === 'enter' ? 'enter' : 'done'}">${mode === 'enter' ? 'Enter VR' : 'Done'}</button></div>`;
     const go = body.querySelector('.go');
     go.onclick = () => { close(); if (mode === 'enter') proceed?.(); };   // the fresh gesture requestSession needs
     go.focus();
+    if (got.name === 'unanswered') {
+      void asked.then((late) => {
+        globalThis.__vrmic = { ...(globalThis.__vrmic ?? {}), lastAsk: late };
+        const p = scrim.isConnected && body.querySelector('.vrmic-say');
+        if (p) { p.dataset.result = result(late); p.textContent = sayFor(late); }
+      });
+    }
   };
   scrim.querySelector('[data-act=allow]').focus();
 }

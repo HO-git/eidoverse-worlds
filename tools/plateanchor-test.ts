@@ -86,6 +86,14 @@ console.log('standing / sitting:');
   check('scale 2: every rest length doubles', near(big.p[1], 1.9 + 2 * rest.hipsToCrown + plateGap(3.376)), J(big));
 }
 
+console.log('per frame, no allocation (review 09-30 N2):');
+{
+  const args = { hips: [0, 0.15, 0], head: [0.7, 0.18, 0.02], feetY: 0.1, rest, s: 1, gap, lift: 0.1 };
+  const want = plateAnchor(args), out = { p: [9, 9, 9], lie: 9 };
+  const got = (plateAnchor as any)(args, out);
+  check('an `out` is written and returned (the caller reuses one per body)', got === out && J(out) === J(want), `${J(got)} vs ${J(want)}`);
+}
+
 console.log('lying:');
 {
   // lying on the back along +x: head at x=0.7, 0.18 above the floor; hips at x=0, 0.15

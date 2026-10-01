@@ -64,16 +64,15 @@ export function lieAmount(headAboveFeet, restHeadAboveFeet, headOverHips = null,
  *  rest: crownEstimate()'s result plus restHeadAboveFeet (all model units); s: the live model→world scale; gap: m;
  *  lift: the wearer's own offset over the crown (Profile › Avatar, bodyscale.js plateLift — already world m), added to
  *  both the standing and the lying anchor, so it follows posture exactly as auto does. 0 = auto.
- *  → { p: [x,y,z], lie } */
-export function plateAnchor({ hips, head, feetY, rest, s = 1, gap, lift = 0 }) {
+ *  → { p: [x,y,z], lie }, written into `out` when given (avatar.js calls this per body, per frame) */
+export function plateAnchor({ hips, head, feetY, rest, s = 1, gap, lift = 0 }, out = { p: [0, 0, 0], lie: 0 }) {
   const up = gap + (fin(lift) ? lift : 0);
   const stand = Math.max(hips[1] + rest.hipsToCrown * s, head[1] + rest.headSpan * s) + up;
   const lie = lieAmount(head[1] - feetY, rest.restHeadAboveFeet * s, head[1] - hips[1], (rest.hipsToCrown - rest.headSpan) * s);
   const lieY = head[1] + rest.headSpan * s + up;
-  return {
-    p: [hips[0] + (head[0] - hips[0]) * lie, stand + (lieY - stand) * lie, hips[2] + (head[2] - hips[2]) * lie],
-    lie,
-  };
+  out.p[0] = hips[0] + (head[0] - hips[0]) * lie; out.p[1] = stand + (lieY - stand) * lie; out.p[2] = hips[2] + (head[2] - hips[2]) * lie;
+  out.lie = lie;
+  return out;
 }
 
 /** One frame of the Y chase: toward `target`, but only the part of the error outside the dead zone, at

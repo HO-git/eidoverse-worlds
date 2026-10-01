@@ -128,10 +128,15 @@ function plateRect(av, box) {
   if (av.head) {
     av.head.getWorldPosition(_v);
     _h.copy(_v).applyMatrix4(cam.matrixWorldInverse);
-    if (-_h.z > cam.near) { _v.project(cam); head = { x: box.left + (_v.x + 1) / 2 * W, y: box.top + (1 - _v.y) / 2 * H, r: HEAD_R * ppm }; }
+    if (-_h.z > cam.near) { _v.project(cam); head = _rectHead; head.x = box.left + (_v.x + 1) / 2 * W; head.y = box.top + (1 - _v.y) / 2 * H; head.r = HEAD_R * ppm; }
   }
-  return { l: cx - hw, r: cx + hw + Math.max(0, ear), t: cy - hh, b: cy + hh, cx, cy, depth, head };
+  const o = _rect;
+  o.l = cx - hw; o.r = cx + hw + Math.max(0, ear); o.t = cy - hh; o.b = cy + hh; o.cx = cx; o.cy = cy; o.depth = depth; o.head = head;
+  return o;
 }
+// plateRect's answer, reused: it runs per remote on every pointer move and every frame the card follows, and every
+// caller reads it before the next call
+const _rect = { l: 0, r: 0, t: 0, b: 0, cx: 0, cy: 0, depth: 0, head: null }, _rectHead = { x: 0, y: 0, r: 0 };
 
 function hitAt(x, y) {
   let best = null, bestDepth = Infinity;

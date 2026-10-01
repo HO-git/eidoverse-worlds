@@ -386,6 +386,10 @@ const _earDir = new THREE.Vector3(), _earQ = new THREE.Quaternion(), _earQ2 = ne
 const BUBBLE_LIFT = 0.35, TYPING_LIFT = 0.17, TYPING_OVER_BUBBLE = 0.77;
 const _pHips = new THREE.Vector3(), _pHead = new THREE.Vector3(), _pFoot = new THREE.Vector3(), _pScale = new THREE.Vector3();
 const _ownM = new THREE.Matrix4();
+const _pArgs = { hips: [0, 0, 0], head: [0, 0, 0], feetY: 0, rest: null, s: 1, gap: 0, lift: 0 }, _pOut = { p: [0, 0, 0], lie: 0 };
+const FEET = ['leftFoot', 'rightFoot'];
+const _pSmooth = { dead: PLATE_DEAD };
+const plateBone = (h, n) => h?.getRawBoneNode?.(n) ?? h?.getNormalizedBoneNode?.(n) ?? null;
 const _pRoot = new THREE.Vector3();
 
 function wrap(text, n) {
@@ -1999,24 +2003,24 @@ export class Avatar {
     const gap = plateGap((r.height ?? 1.7) * s);
     const lift = plateLift(this.plateY, s);   // the wearer's own lift over the crown (Profile › Avatar), grows with the body
     const rootY = this.root.getWorldPosition(_pRoot).y;
-    const bone = (n) => h?.getRawBoneNode?.(n) ?? h?.getNormalizedBoneNode?.(n) ?? null;
-    const hipsN = r.hipsToCrown != null ? bone('hips') : null, headN = hipsN ? bone('head') : null;
+    const hipsN = r.hipsToCrown != null ? plateBone(h, 'hips') : null, headN = hipsN ? plateBone(h, 'head') : null;
     let x, y, z;
     if (hipsN && headN) {
-      hipsN.getWorldPosition(_pHips); headN.getWorldPosition(_pHead);
+      // per body, per frame: the arguments and the answer are module scratch (review 09-30 N2)
+      const a = _pArgs;
+      hipsN.getWorldPosition(_pHips).toArray(a.hips); headN.getWorldPosition(_pHead).toArray(a.head);
       let feetY = Infinity;
-      for (const n of ['leftFoot', 'rightFoot']) { const f = bone(n); if (f) feetY = Math.min(feetY, f.getWorldPosition(_pFoot).y); }
-      if (!Number.isFinite(feetY)) feetY = rootY;
-      const { p, lie } = plateAnchor({ hips: [_pHips.x, _pHips.y, _pHips.z], head: [_pHead.x, _pHead.y, _pHead.z],
-        feetY, rest: r, s, gap, lift });
-      [x, y, z] = p;
+      for (let i = 0; i < 2; i++) { const f = plateBone(h, FEET[i]); if (f) feetY = Math.min(feetY, f.getWorldPosition(_pFoot).y); }
+      a.feetY = Number.isFinite(feetY) ? feetY : rootY; a.rest = r; a.s = s; a.gap = gap; a.lift = lift;
+      const { p, lie } = plateAnchor(a, _pOut);
+      x = p[0]; y = p[1]; z = p[2];
       this._plateLie = lie;
     } else {
       _pHips.set(0, r.boundsTop, 0); sc.localToWorld(_pHips);
       x = _pHips.x; y = _pHips.y + gap + lift; z = _pHips.z;
       this._plateLie = 0;
     }
-    this._plateOff = smoothY(this._plateOff, y - rootY, dt, { dead: PLATE_DEAD });
+    this._plateOff = smoothY(this._plateOff, y - rootY, dt, _pSmooth);
     this.label.position.copy(this.root.worldToLocal(_pHips.set(x, rootY + this._plateOff, z)));
   }
 

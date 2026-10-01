@@ -183,7 +183,7 @@ if (globalThis.__xrCtx) { const a = _xrGl?.getContextAttributes(); Object.assign
 // VR enter/exit: stereo renders keep their own render objects, so the switch never rebuilds either variant (xrpass.js).
 // Inert without a stereo camera, so every boot gets it — sessions can start from a non-XR boot too.
 globalThis.__xrPassSplit = separateXRPass(renderer);
-// An emulator's null eye framebuffer is the default framebuffer, not a WeakMap key (xr_nullfb.js). Pass-through on hardware.
+// An emulator's null eye framebuffer is the default framebuffer, not a WeakMap key (xr_nullfb.js). Installs only for a session whose layer has one — never on hardware.
 globalThis.__xrNullFb = tolerateNullXRFramebuffer(renderer);
 // No pipeline links on the render path: a missed warm pops in late instead of freezing the browser (syncgate.js). ?syncgate=0 = census only.
 globalThis.__syncGate = installSyncGate(renderer, { tee: (l, now) => (now ? teeNow(l) : tee(l)), gate: CONFIG.params.get('syncgate') !== '0' });

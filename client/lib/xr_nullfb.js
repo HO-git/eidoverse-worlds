@@ -11,19 +11,24 @@
 //
 // A real immersive runtime (her headset, Chromium) returns an opaque WebGLFramebuffer, never null (WebXR §
 // XRWebGLLayer: only an INLINE session's layer has a null framebuffer), so there this wrapper only ever passes through.
-// For null, the draw-buffer state the default framebuffer needs is [BACK] — exactly what three issues for a context
-// with no textures — so that is what it gets. The bind itself (gl.bindFramebuffer(…, null)) is already correct.
+// So nothing is patched at boot: the wrapper installs at sessionstart, and only when that session's base layer really
+// has a null framebuffer — the condition itself, not a guess at which emulator is present (the probes hide IWER).
+// On the headset it never installs. For null, the draw-buffer state the default framebuffer needs is [BACK] — exactly
+// what three issues for a context with no textures — so that is what it gets. gl.bindFramebuffer(…, null) is already right.
 // Revisit at every three bump: if drawBuffers stops keying a WeakMap on the framebuffer, delete this file.
 export function tolerateNullXRFramebuffer(renderer) {
   const state = renderer?.backend?.isWebGLBackend ? renderer.backend.state : null;
-  if (!state || typeof state.drawBuffers !== 'function' || state.drawBuffers.__nullFb) return false;
-  const drawBuffers = state.drawBuffers;
-  const wrapped = function (renderContext, framebuffer) {
-    if (framebuffer === null && renderContext?.textures != null) return drawBuffers.call(this, { textures: null }, null);
-    return drawBuffers.call(this, renderContext, framebuffer);
-  };
-  wrapped.__nullFb = true;
-  wrapped.unwrapped = drawBuffers;   // the probe's --control puts this back to watch the bug return
-  state.drawBuffers = wrapped;
-  return true;
+  const xr = renderer?.xr;
+  if (!state || !xr || typeof state.drawBuffers !== 'function') return null;
+  const handle = { armed: true, installed: false, disarm() { handle.armed = false; } };   // disarm: the probe's --control
+  xr.addEventListener('sessionstart', () => {
+    if (!handle.armed || handle.installed || xr._glBaseLayer?.framebuffer !== null) return;   // undefined = no base layer (projection layers)
+    const drawBuffers = state.drawBuffers;
+    state.drawBuffers = function (renderContext, framebuffer) {
+      if (framebuffer === null && renderContext?.textures != null) return drawBuffers.call(this, { textures: null, renderTarget: renderContext.renderTarget }, null);
+      return drawBuffers.call(this, renderContext, framebuffer);
+    };
+    handle.installed = true;
+  });
+  return handle;
 }

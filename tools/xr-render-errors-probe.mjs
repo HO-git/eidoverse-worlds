@@ -8,7 +8,8 @@
 //   errors  — zero `frame …` reports (report() rate-limits but ALWAYS prints the first, so zero is meaningful)
 //   state   — renderer.xr.enabled and autoClear are still on, and the session is presenting
 //   eyes    — the eye output really reaches the layer: every app frame in the session draws into the XR target
-// --control takes the fix back out (xr_nullfb's wrapper restores the original) — the checks above must go red.
+// --control disarms the fix before entry (xr_nullfb's handle) — the checks above must go red.
+//   gated   — the fix installed only because this session's layer framebuffer is null (on hardware it never does)
 // Real hardware returns an opaque WebGLFramebuffer here and never took this path; this is the emulator's (and the
 // Immersive Web Emulator extension's) path, which every headless VR probe rides.
 // Run it under the house guards: flock the headless lock, perf-guard; clouds are forced off before boot here.
@@ -71,14 +72,15 @@ try {
   const fix = await ev(async (control) => {
     const { renderer } = await import('./lib/core.js');
     const st = renderer.backend.state;
-    const had = !!st.drawBuffers.__nullFb;
-    if (control && had) st.drawBuffers = st.drawBuffers.unwrapped;
+    const had = !!globalThis.__xrNullFb && !globalThis.__xrNullFb.installed;   // armed, not yet installed before a session
+    if (control) globalThis.__xrNullFb?.disarm();
     const od = st.drawBuffers;
     window.__probe.xrDraws = 0;
     st.drawBuffers = function (rc, fb) { if (rc?.renderTarget?.isXRRenderTarget) window.__probe.xrDraws++; return od.call(this, rc, fb); };
     return { installed: had, control };
   }, CONTROL);
-  console.log(`  · fix ${fix.installed ? 'installed' : 'ABSENT'}${fix.control ? ' — CONTROL RUN: taken back out' : ''}`);
+  console.log(`  · fix ${fix.installed ? 'armed, not installed before entry' : 'ABSENT or pre-installed'}${fix.control ? ' — CONTROL RUN: disarmed' : ''}`);
+  check('gated: before any session the fix is armed but nothing is patched', fix.installed, JSON.stringify(fix));
   await ev(() => document.querySelector('#xrbtn').click());
   // a pre-entry voice ask (the mic-consent step in flight on this branch) may stand between the click and the session:
   // answer "Not now" if one shows, so this probe measures rendering and nothing about voice
@@ -93,7 +95,7 @@ try {
     const { renderer } = await import('./lib/core.js');
     const base = renderer.xr._glBaseLayer;
     return { appFrames: (globalThis.__perf?.frameNo ?? NaN) - window.__probe.frameAtGrant, grants: window.__probe.grants, frames: window.__probe.sessionFrames, presenting: renderer.xr.isPresenting, xrEnabled: renderer.xr.enabled,
-      autoClear: renderer.autoClear, xrDraws: window.__probe.xrDraws, baseFb: base ? String(base.framebuffer) : 'no base layer' };
+      autoClear: renderer.autoClear, fixInstalled: !!globalThis.__xrNullFb?.installed, xrDraws: window.__probe.xrDraws, baseFb: base ? String(base.framebuffer) : 'no base layer' };
   });
   console.log(`  · after ${st.frames} session frames: ${JSON.stringify(st)}`);
   // for the eye (not asserted): the session's screen after a 180° head turn — fixed, the eyes show the world behind;
@@ -104,6 +106,7 @@ try {
     const f = `${shotDir}/xr-render-${CONTROL ? 'control-' : ''}turned-180.png`; await pg.screenshot({ path: f }); console.log(`  · shot ${f}`);
   }
   check(`entered: one session granted, ${FRAMES} session frames ticked`, st.grants === 1 && st.frames >= FRAMES, `grants=${st.grants} frames=${st.frames}`);
+  if (!CONTROL) check('gated: the session\'s null layer framebuffer installed it', st.fixInstalled && st.baseFb === 'null', `installed=${st.fixInstalled} baseFb=${st.baseFb}`);
   check('errors: zero `frame …` render reports during the session', frameErrs.length - deskErrs === 0, frameErrs.slice(deskErrs, deskErrs + 2).join(' | '));
   check('state: the renderer is still presenting with XR on and autoClear restored', st.presenting && st.xrEnabled && st.autoClear, JSON.stringify({ presenting: st.presenting, xrEnabled: st.xrEnabled, autoClear: st.autoClear }));
   check('eyes: every app frame in the session draws into the XR target', st.appFrames > 0 && st.xrDraws >= st.appFrames, `${st.xrDraws} XR-target draws over ${st.appFrames} app frames (${st.frames} session callbacks)`);

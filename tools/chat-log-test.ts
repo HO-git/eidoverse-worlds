@@ -311,5 +311,28 @@ check("...and `all` shows the room again",
     // canary bytes on the wire.
   }
 
+// ============================================================ MODDING-UI §3: our own nodes by handle
+console.log("\nCHAT — a mod's markup carrying the public classes is never mistaken for ours");
+{
+  const { bus } = await import("./chat-core-stub.mjs");
+  // the side pane must be closed for the chip to show; paintTabs builds the real chip
+  if (!frameStub.body!.querySelector(".chat-side")!.classList.contains("closed")) (frameStub.body!.querySelector(".chat-side-tog") as HTMLElement).click();
+  const decoy = document.createElement("div");
+  decoy.className = "chat-cols";
+  decoy.innerHTML = '<div class="chat-main"><div class="chat-tabs"><button class="chat-who"></button></div></div>';
+  frameStub.body!.prepend(decoy);
+  const real = [...frameStub.body!.querySelectorAll(".chat-who")].find((c) => !decoy.contains(c)) as HTMLElement;
+  real.innerHTML = "";
+  bus.emit("roster");
+  const dChip = decoy.querySelector(".chat-who") as HTMLElement;
+  check("a roster repaint paints OUR people chip", /here|just you/.test(real.textContent ?? ""), real.textContent ?? "");
+  check("…and leaves a mod's prepended .chat-who alone", dChip.innerHTML === "" && !dChip.hasAttribute("aria-expanded"), dChip.outerHTML);
+  logWhisper({ from: "ostra", to: "me", text: "hi" });   // a new conversation repaints the tab row
+  check("a tab repaint builds into OUR tab row, not a mod's .chat-tabs", !decoy.querySelector(".tabscroll")
+    && [...[...frameStub.body!.querySelectorAll(".chat-tabs")].find((t) => !decoy.contains(t))!.querySelectorAll(".tabscroll button")].some((b) => b.textContent!.startsWith("@ostra")),
+    decoy.innerHTML.slice(0, 120));
+  decoy.remove();
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

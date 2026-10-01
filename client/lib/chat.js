@@ -779,8 +779,9 @@ function toggleSide() { sideSt.open = !sideSt.open; applySide(); saveSide(); }
 // presence) and the pane's toggle. Collapsed, the pane leaves NO strip in the chat body, so tabs, log and compose sit
 // centred in the panel (R, 09-29: "the Chat and typing surface being off-center in its own panel ... when it's
 // collapsed"). Painted in place on roster/presence; paintTabs rebuilds the row and calls this for its new chip.
+let whoChip = null;   // the chip paintTabs wrote — by handle, never by class (MODDING-UI §3)
 function paintWho() {
-  const chip = frame?.body?.querySelector(':scope > .chat-cols > .chat-main > .chat-tabs > .chat-who');
+  const chip = whoChip?.isConnected ? whoChip : null;
   if (!chip) return;
   const people = getPeople(), others = people.filter((p) => !p.me).length;
   const dots = [...people.filter((p) => !p.me), ...people.filter((p) => p.me)].slice(0, 3).map((p) =>
@@ -981,6 +982,7 @@ export function initChat({ send, whisper, typing, people }) {
   // markup is written at frame.body.innerHTML above, so #chatlog is queryable
   // here. (self-caught, agent review round 3)
   logEl = frame.body.querySelector('#chatlog');
+  tabsEl = frame.body.querySelector(':scope > .chat-cols > .chat-main > .chat-tabs');
   initSidePane();
   initChatGear();
 
@@ -1150,9 +1152,10 @@ function setFilter(f) {
 }
 
 let _arrowT = null;   // debounce for the resize-driven tab repaint
+let tabsEl = null;    // captured in initChat, like sideEls
 
 function paintTabs() {
-  const bar = frame.body.querySelector('.chat-tabs');
+  const bar = tabsEl;
   if (!bar) return;
   bar.innerHTML = '';
   // The strip carries `all · mentions · system` PLUS one tab per open DM, so
@@ -1252,6 +1255,7 @@ function paintTabs() {
   who.type = 'button'; who.className = 'chat-who';
   who.onclick = (e) => { e.stopPropagation(); toggleSide(); };
   bar.appendChild(who);
+  whoChip = who;
   paintWho();
   paintArrows();
   // KEEP THE ACTIVE TAB IN VIEW. Overflow was sacrificing the tab you are

@@ -72,13 +72,14 @@ function tier(q, text) {
   if (words.some((w) => w.startsWith(q))) return 700;
   const qw = q.split(/\s+/).filter(Boolean);
   if (qw.length > 1 && qw.every((p) => words.some((w) => w.startsWith(p)))) return 650;
+  if (q.length < 2) return 0;   // one stray letter is not a match: it must start the title or a word
   if (t.includes(q)) return 400;
   // subsequence: every query char in order; score by how tight the span is
   let i = 0, start = -1, end = -1;
   for (let j = 0; j < t.length && i < q.length; j++) {
     if (t[j] === q[i]) { if (start < 0) start = j; end = j; i++; }
   }
-  if (i < q.length || q.replace(/\s+/g, '').length < 2) return 0;   // one stray letter is not a match
+  if (i < q.length) return 0;
   const span = end - start + 1;
   return 100 + Math.round(99 * (q.length / span));
 }

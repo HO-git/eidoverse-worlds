@@ -46,7 +46,12 @@ check('a tighter subsequence scores higher than a looser one ("mcro" vs "mne" in
   (() => { const t = A.score('mcro', A.get('voice:mic')), l = A.score('mne', A.get('voice:mic')); return t > l && l >= 100 && t < 200; })(),
   `${A.score('mcro', A.get('voice:mic'))} vs ${A.score('mne', A.get('voice:mic'))}`);
 check('no match → 0 and not listed ("zzqx")', ids('zzqx').length === 0);
-check('one stray letter is not a subsequence match ("q" matches nothing here)', ids('q').length === 0, ids('q').join());
+check('one stray letter is not a match inside a word ("h" is in "screenshot", not at a word start)',
+  A.score('h', A.get('key:screenshot')) === 0, String(A.score('h', A.get('key:screenshot'))));
+check('…but one letter still finds a title or word that starts with it ("s" → screenshot)', A.score('s', A.get('key:screenshot')) >= 700);
+check('the prefix length penalty is real: "sk" scores sky above skydive (not just the shorter-title tie-break)',
+  A.score('sk', A.get('section:world:sky')) > A.score('sk', A.get('body:skydive')),
+  `${A.score('sk', A.get('section:world:sky'))} vs ${A.score('sk', A.get('body:skydive'))}`);
 
 console.log('keywords and keys');
 check('a keyword finds it: "mute" → voice:mic first', ids('mute')[0] === 'voice:mic', ids('mute').join());

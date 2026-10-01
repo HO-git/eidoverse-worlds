@@ -18,7 +18,7 @@ import { previewSky, skyArgs, skyImpl, WEATHERS, CLOUDS, SKY_WORLDS,
 import { GRASS_QUALITY, getGrassQuality, setGrassQuality,
   getGrassDensity, getGrassShed, getGrassApplied } from './terrain.js';
 import { MODEL_QUALITY } from './lod_policy.js';
-import { loggedSky, skyPreviewing, skyRendering, skyDegraded } from './sky.js';
+import { loggedSky, skyPreviewing, skyRendering, skyDegraded, getCloudQuality } from './sky.js';
 import { hoursAt } from '../../shared/forecast.js';
 import { stateLines } from './statelines.js';
 import { modelQuality, dialModelQuality } from './realize/models.js';
@@ -69,12 +69,15 @@ export function paintSky(body) {
       parts.push(`${String(Math.floor(h)).padStart(2, '0')}:${String(Math.floor((h % 1) * 60)).padStart(2, '0')}${a.rate ? ' (running)' : ''}`);
     }
     if (a.weather) parts.push(a.weather);
-    if (a.clouds) parts.push(`clouds ${a.clouds}`);
+    // the detailed sky builds cumulus for a log with no (or an unknown) clouds value (sky.js makeSky), so say that
+    const basic = a.system === 'skymesh';
+    const clouds = basic ? a.clouds : (CLOUDS.includes(a.clouds) ? a.clouds : 'cumulus');
+    if (clouds) parts.push(`clouds ${clouds}`);
     if (a.world && a.world !== 'earth') parts.push(a.world);
     const you = [];
     if (skyRendering()) you.push('loading…');
     if (skyPreviewing()) you.push('previewing (not logged)');
-    if (getCloudQuality() === 'off' && a.clouds && a.clouds !== 'clear') you.push('no clouds (your clouds⚙ is off)');
+    if (!basic && getCloudQuality() === 'off' && clouds !== 'clear') you.push('no clouds (your clouds⚙ is off)');
     if (skyDegraded() && a.system !== 'skymesh') you.push("the basic sky (this GPU can't run the full one)");
     lines.set(parts.join(' · '), you.join(' · '));
   };

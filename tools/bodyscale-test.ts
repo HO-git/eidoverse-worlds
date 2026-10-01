@@ -67,6 +67,20 @@ console.log('the wire:');
   check('...and clamps or drops the rest with the same clamps the receivers use (the server remembers lastPose)', fenced?.scale === 2 && !('plateY' in (fenced ?? {})), J(fenced));
 }
 
+console.log('voice on the wire (presencewire voiceWire / applyVoiceWire):');
+{
+  const voiceWire = fn(PW, 'voiceWire'), applyVoiceWire = fn(PW, 'applyVoiceWire');
+  check('booleans ride as sent, false included', J(voiceWire({ mic: true, hear: false })) === J({ mic: true, hear: false }), J(voiceWire({ mic: true, hear: false })));
+  check('...anything else is not sent (unknown, never coerced)', J(voiceWire({ mic: 1, hear: 'no' })) === '{}' && J(voiceWire(undefined)) === '{}', J(voiceWire({ mic: 1, hear: 'no' })));
+  const r: any = { mic: true, hear: true };
+  check('receipt: a non-boolean is dropped and leaves the known value alone', applyVoiceWire(r, { mic: 0, hear: 'false', p: [0, 0, 0] }) === false && r.mic === true && r.hear === true, J(r));
+  check('receipt: ABSENT leaves it untouched (an older sender is unknown, not "off")', applyVoiceWire(r, { p: [0, 0, 0] }) === false && r.mic === true && r.hear === true, J(r));
+  check('receipt: booleans land, false included', applyVoiceWire(r, { mic: false, hear: false }) === true && r.mic === false && r.hear === false, J(r));
+  const fresh: any = {};
+  applyVoiceWire(fresh, { mic: null });
+  check('receipt: null is not a reading either', !('mic' in fresh), J(fresh));
+}
+
 const BS: any = await import('../client/lib/bodyscale.js').catch((e) => { console.log(`  (bodyscale.js did not load: ${e?.message})`); return {}; });
 console.log('the maths:');
 {

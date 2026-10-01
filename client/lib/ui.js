@@ -30,7 +30,7 @@ const EMOJI_ICON = {
 // the real one.
 let loadingItems = () => [];
 export function setLoadingItems(fn) { loadingItems = fn; }
-import { makeFrame, getFrame, isLocked, setLocked, resetLayout } from './frames.js';
+import { makeFrame, getFrame, isLocked, setLocked, resetLayout, escapeHid } from './frames.js';
 import { defsRegistry } from './defs.js';
 import { register as registerAction, get as getAction } from './actions.js';
 import { openLantern, closeLantern, isLanternOpen, CHORD, pillPinned, setPillPinned, setPillQuiet } from './lantern.js';
@@ -113,8 +113,8 @@ export function setAmbientHint(html) {
 // …and the lantern's resting line goes away with them and comes back with them (lantern.js setPillQuiet)
 bus.on('esc-quiet', (did) => {
   setPillQuiet(did === 'closed');
-  if (did === 'closed') flashHint('<span>panels hidden · <kbd>Esc</kbd> to bring back</span>', 4000);   // one span: the bar is a flex row, which would eat the spaces around the key
-  else if (did === 'restored' && el.hint._t && /panels hidden/.test(el.hint.textContent)) endFlash();
+  if (did === 'closed') flashHint(`<span>${escapeHid() ? 'panels hidden' : 'hidden'} · <kbd>Esc</kbd> to bring back</span>`, 4000);   // one span: the bar is a flex row, which would eat the spaces around the key
+  else if (did === 'restored' && el.hint._t && /hidden · Esc to bring back/.test(el.hint.textContent)) endFlash();
 });
 export function flashHint(html, ms = 2600) {
   el.hint.innerHTML = html;

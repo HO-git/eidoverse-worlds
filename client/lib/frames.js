@@ -1005,15 +1005,20 @@ addEventListener('keydown', (e) => {
   if (escapeIsClaimed()) return;
   const did = escapeToggle();
   // said, not only done: ui.js flashes "panels hidden · Esc to bring back" on the hint bar (the lantern's resting line
-  // steps aside for it) — frames imports no ui, so the gesture goes out on the bus
-  if (did !== 'nothing') bus.emit('esc-quiet', did);
+  // steps aside for it) — frames imports no ui, so the gesture goes out on the bus (escapeHid says what went with it)
+  bus.emit('esc-quiet', did);
 });
+// With no panel open Esc still goes quiet (owner, 10-01: "Basically only the dock should be visible"): an empty stash
+// is a quiet with nothing to reopen, so 'closed' takes the lantern's resting line away and the next Esc brings it back.
 export function escapeToggle() {
   const open = [...frames.values()].filter((f) => f.visible);
   if (open.length) { escStash = open.map((f) => f.id); for (const f of open) f.hide(); return 'closed'; }
-  if (escStash?.length) { for (const id of escStash) frames.get(id)?.show(); escStash = null; return 'restored'; }
-  return 'nothing';
+  if (escStash) { for (const id of escStash) frames.get(id)?.show(); escStash = null; return 'restored'; }
+  escStash = [];
+  return 'closed';
 }
+/** How many panels the standing Esc-quiet put away (0 = only the resting line; also 0 when not quiet). */
+export const escapeHid = () => escStash?.length ?? 0;
 export function escapeIsClaimed() {
   for (const fn of escClaims) { const c = fn(); if (c) return c; }
   const a = document.activeElement;

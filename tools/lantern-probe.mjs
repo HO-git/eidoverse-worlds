@@ -18,7 +18,7 @@
 //   "/who" passes through to the command path; Esc closes; a mouse click on a row runs it;
 //   a typo + Tab does nothing (Tab never says); while open, the hint bar steps off the footer and a
 //   click on the footer keeps the lantern open;
-//   Esc quiet puts the resting line away WITH the panels (still away after the flash; Ctrl+K still opens the lantern,
+//   Esc quiet puts the resting line away WITH the panels, and with no panel open too (only the dock stays; still away after the flash; Ctrl+K still opens the lantern,
 //   whose Esc comes first) and brings it back with them; the ∃ menu's lantern row unpins the resting line (gone,
 //   saved) without taking Ctrl+K away, and pins it back.
 // --shots writes the after/ screenshots (1280x720 and 390x844) as it goes.
@@ -245,6 +245,20 @@ try {
     await pg.keyboard.press('Escape'); await sleep(300);
     const back = { frames: await shown(), hintGone: await pg.evaluate(() => document.getElementById('hintbar').classList.contains('gone')), pill: await rect(pg, '#lantern-pill') };
     check('Esc again brings back exactly those panels, and the hint gives the spot back at once', back.frames === before && back.hintGone && back.pill?.shown, JSON.stringify({ before, ...back }));
+    // NO PANEL OPEN (owner, 10-01: "Basically only the dock should be visible"): Esc still puts the resting line away
+    await pg.evaluate(async () => { const F = await import('/lib/frames.js'); for (const f of F.allFrames()) f.hide(); });
+    await sleep(200);
+    await pg.keyboard.press('Escape'); await sleep(300);
+    const bare = { frames: await shown(), pill: await rect(pg, '#lantern-pill'), dock: await rect(pg, '#dock'),
+      hintText: await pg.evaluate(() => document.getElementById('hintbar').textContent) };
+    check('no panel open: Esc puts the resting line away, the dock stays, the hint says "hidden · Esc to bring back"',
+      bare.frames === '' && !bare.pill?.shown && bare.dock?.shown && /^hidden · Esc to bring back$/.test(bare.hintText.trim()), JSON.stringify(bare));
+    await shot(pg, '15b-esc-only-the-dock.png');
+    await pg.keyboard.press('Escape'); await sleep(300);
+    const bareBack = { frames: await shown(), pill: await rect(pg, '#lantern-pill') };
+    check('…and the next Esc brings the resting line back, opening no panel', bareBack.frames === '' && bareBack.pill?.shown, JSON.stringify(bareBack));
+    await pg.evaluate(async (ids) => { const F = await import('/lib/frames.js'); for (const id of ids.split(',').filter(Boolean)) F.getFrame(id)?.show(); }, before);
+    await sleep(200);
   }
 
   // UNPIN (R, 10-01: "add it as a pin feature for the reverse-E menu (might need its own logo to differentiate)"): the

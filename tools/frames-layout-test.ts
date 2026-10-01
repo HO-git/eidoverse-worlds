@@ -503,6 +503,22 @@ check("…and says that too (the hint stops)", quiet.join() === "closed,restored
   check("releasing the claim hands Esc back to the frames", open().length === 0, open().join());
   check("escapeToggle() reports what it did", escapeToggle() === "restored" && escapeToggle() === "closed" && escapeToggle() === "restored");
 }
+{
+  // NO PANELS OPEN (owner, 10-01: "Basically only the dock should be visible"): Esc still goes quiet — the lantern's
+  // resting line goes away (ui.js relays 'closed') — and the next Esc brings it back, with nothing to reopen
+  for (const x of allFrames()) x.hide();
+  quiet.length = 0;
+  esc();
+  check("no panels open: Esc still goes quiet (says 'closed' on the bus, opens nothing)", quiet.join() === "closed" && open().length === 0, `${quiet.join()} | ${open().join()}`);
+  esc();
+  check("…and the next Esc says 'restored' (the pill comes back), still opening nothing", quiet.join() === "closed,restored" && open().length === 0, `${quiet.join()} | ${open().join()}`);
+  // quiet with nothing hidden, then a panel opened by hand: Esc hides it, and the next Esc brings back THAT
+  esc(); f.show(); esc();
+  check("quiet, then a panel opened by hand: Esc hides it (still quiet)", open().length === 0 && quiet.join() === "closed,restored,closed,closed", quiet.join());
+  esc();
+  check("…and the next Esc brings that panel back, and the pill", open().join() === "t" && quiet.at(-1) === "restored", `${open().join()} | ${quiet.join()}`);
+  f.hide();
+}
 
 console.log("CHROME COST — the declared anchor");
 {

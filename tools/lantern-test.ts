@@ -111,5 +111,35 @@ L.openLantern('');
 key('k', { code: 'KeyK', ctrlKey: true });
 check('Ctrl+K in the line closes it (the window\'s capture handler owns the chord)', !L.isLanternOpen());
 
+console.log('LANTERN — the resting line pins from the ∃ menu, and goes quiet with the panels (R, 10-01)');
+{ const pill = document.getElementById('lantern-pill')!;
+  // hidden = a class the sheet turns into display:none (index.html) — the pill's own `display:flex` beats [hidden]
+  const resting = () => !pill.classList.contains('unpinned') && !pill.classList.contains('quiet');
+  check('pinned by default: the pill rests', L.pillPinned() === true && resting(), pill.className);
+  L.setPillPinned(false);
+  check('unpinned: no resting pill', !L.pillPinned() && pill.classList.contains('unpinned'), pill.className);
+  check('…and the choice is remembered', localStorage.getItem('ew-lantern-pinned') === '0', String(localStorage.getItem('ew-lantern-pinned')));
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', ctrlKey: true, bubbles: true, cancelable: true }));
+  check('unpinned, Ctrl+K still opens the lantern (unpinning hides its resting place, not the command line)', L.isLanternOpen());
+  L.closeLantern();
+  L.openLantern('');
+  check('…and openLantern() (the rail\'s search entry) does too', L.isLanternOpen());
+  L.closeLantern();
+  L.setPillPinned(true);
+  check('pinned again: the pill rests again', resting() && localStorage.getItem('ew-lantern-pinned') === '1', pill.className);
+
+  L.setPillQuiet(true);
+  check('Esc put the panels away: the pill goes with them', L.pillQuiet() && pill.classList.contains('quiet'), pill.className);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', ctrlKey: true, bubbles: true, cancelable: true }));
+  check('quiet, Ctrl+K still opens the lantern', L.isLanternOpen());
+  key('Escape');
+  check('…and Esc in the line closes the lantern first (the panels stay put away)', !L.isLanternOpen() && L.pillQuiet());
+  L.setPillQuiet(false);
+  check('the panels come back: so does the pill', resting(), pill.className);
+  L.setPillPinned(false); L.setPillQuiet(true); L.setPillQuiet(false);
+  check('an unpinned pill stays away when the panels come back', pill.classList.contains('unpinned') && !pill.classList.contains('quiet'), pill.className);
+  L.setPillPinned(true);
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

@@ -1052,6 +1052,9 @@ body.lantern-open #hintbar { visibility: hidden; }   /* the open panel's footer 
 }
 #lantern-pill:hover { color: var(--fg); }
 #lantern-pill.open { visibility: hidden; }
+/* unpinned in the ∃ menu, or put away with the panels by Esc (lantern.js paintRest): no resting line. Ctrl/Cmd+K
+   still opens the lantern; the hint bar sits on --ln-x on its own, so "panels hidden" still shows in this spot */
+#lantern-pill.unpinned, #lantern-pill.quiet { display: none; }
 #lantern-pill .lp-glyph { display: flex; color: var(--brand); }
 #lantern-pill .lp-text q { color: var(--brand); quotes: '‘' '’'; }
 #lantern-pill .lp-text kbd { margin-right: 2px; }

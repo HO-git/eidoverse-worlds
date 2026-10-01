@@ -214,6 +214,29 @@ function place() {
 
 // ---------------------------------------------------------------- boot
 
+// THE RESTING LINE'S TWO SWITCHES (R, 10-01: "add it as a pin feature for the reverse-E menu … and have it obey
+// the 'esc to hide' feature"). PINNED (the default, so nobody who leaves it alone sees a change) = the pill rests
+// bottom-centre; unpinned = no resting pill, but Ctrl/Cmd+K and the rail's search entry still open the lantern —
+// unpinning puts away its resting place, not the command line. QUIET = Esc put the panels away (frames.js
+// escapeToggle, relayed by ui.js): the pill goes with them and comes back with them. Either hides it, as a class
+// (index.html: display:none — the pill's own display:flex would beat [hidden]); the hint bar keeps the spot either way.
+const PIN_LS = 'ew-lantern-pinned';
+let pinned = true;
+try { pinned = localStorage.getItem(PIN_LS) !== '0'; } catch { /* private mode */ }
+let quiet = false;
+export const pillPinned = () => pinned;
+export const pillQuiet = () => quiet;
+export function setPillPinned(v) {
+  pinned = !!v;
+  try { localStorage.setItem(PIN_LS, pinned ? '1' : '0'); } catch { /* private mode */ }
+  paintRest();
+}
+export function setPillQuiet(v) { quiet = !!v; paintRest(); }
+function paintRest() {
+  pill?.classList.toggle('unpinned', !pinned);
+  pill?.classList.toggle('quiet', quiet);
+}
+
 const EMARK = () => document.querySelector('#hud svg')?.outerHTML.replace(/width="\d+" height="\d+"/, 'width="20" height="20"') ?? '∃';
 
 function paintPill() {
@@ -246,6 +269,7 @@ export function initLantern({ submit, whisperTarget } = {}) {
   let fresh = true; try { fresh = localStorage.getItem(SEEN_LS) !== '1'; } catch { /* private mode */ }
   if (fresh) pill.classList.add('fresh');
   paintPill();
+  paintRest();
   pill.onclick = () => (isLanternOpen() ? closeLantern() : openLantern());
   document.body.appendChild(pill);
   root.querySelector('.ln-esc').addEventListener('pointerdown', (e) => { e.preventDefault(); closeLantern(); });

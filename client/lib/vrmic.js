@@ -54,12 +54,15 @@ const DENIED_FIX = 'open this site\'s settings (the icon at the left of the addr
 let deniedHinted = false;
 
 // ── 1. the visor press ──────────────────────────────────────────────────────────────────────────────────────────────
-let cardOpen = false;
+let cardOpen = false, preflighting = false;
 /** Called by xr.js's visor click with the rest of its entry flow. `proceed` runs at once (straight in) or from a later,
- *  fresh click on the step. Resolves to what happened: 'straight' | 'asked'. */
+ *  fresh click on the step. Resolves to what happened: 'straight' | 'asked' | 'busy' (a press while one is in hand). */
 export async function vrMicPreflight(proceed) {
   if (cardOpen) return 'asked';
-  const state = await micPermissionState();
+  if (preflighting) return 'busy';   // a second press inside the (≤400 ms) permission read would open a second step
+  preflighting = true;
+  let state;
+  try { state = await micPermissionState(); } finally { preflighting = false; }
   const d = preVrStep({ state, remembered: remembered(), pending: pending() });
   globalThis.__vrmic = { ...(globalThis.__vrmic ?? {}), lastPre: { state, ...d } };   // harness window
   if (d.step === 'straight') {
@@ -96,9 +99,11 @@ export async function xrMicPress() {
     // connection is only an INTENT (voicesfu wantMic), and the bridge replays it when the credential arrives — which
     // would be this same unanswerable request, made later, in the headset (probe 09-30: settled, wantMic still true).
     await retract();
-    if (v === 'blocked') { vrNote('Microphone is blocked for this site — allow it in the browser\'s site settings after you leave VR'); return false; }
+    if (v === 'blocked') { vrNote(`Microphone is blocked for this site — allow it in the browser's site settings${presenting ? ' after you leave VR' : ''}`); return false; }
     setPending(true);
-    vrNote('Microphone needs permission — you\'ll be asked when you leave VR');
+    // the session may have ended during the try: its exit read pending() before this set it, so the ask is ours to schedule
+    if (presenting) vrNote('Microphone needs permission — you\'ll be asked when you leave VR');
+    else setTimeout(() => { void askAfterExit(); }, EXIT_ASK_DELAY_MS);
     watchForGrant();
     return false;
   } finally {
@@ -118,17 +123,22 @@ async function retract() {
   } catch { /* no transport in this context */ }
 }
 
-/** The permission can still change while in VR (a prompt the headset showed late, answered after the timeout). */
+/** The permission can still change while in VR (a prompt the headset showed late, answered after the timeout).
+ *  One watcher however many tries failed: each query is a fresh PermissionStatus, so N listeners meant N announcements. */
+let watchingGrant = false;
 function watchForGrant() {
+  if (watchingGrant) return;
+  watchingGrant = true;
   navigator.permissions?.query?.({ name: 'microphone' }).then((st) => {
     const on = () => {
       if (st.state !== 'granted') return;
       st.removeEventListener?.('change', on);
+      watchingGrant = false;
       setPending(false);
       if (presenting) vrNote('Microphone allowed — press the mic to talk'); else flashHint('microphone allowed — press the mic to talk');
     };
     st.addEventListener?.('change', on);
-  }).catch(() => {});
+  }, () => { watchingGrant = false; });
 }
 
 // ── the first flat-page moment after VR ─────────────────────────────────────────────────────────────────────────────
@@ -173,15 +183,18 @@ function openCard({ mode, proceed = null }) {
   scrim.querySelector('[data-act=allow]').onclick = async (e) => {
     ls.set(MIC_CHOICE_KEY, 'allow'); setPending(false);
     const btn = e.currentTarget; btn.disabled = true; btn.textContent = 'waiting for the browser…';
-    const got = await askDevice();
+    // bounded: a browser prompt left unanswered must not hold the way into VR (a late answer's tracks are still stopped)
+    const got = await Promise.race([askDevice(), new Promise((r) => setTimeout(() => r({ ok: false, name: 'unanswered' }), TRY_MS))]);
     globalThis.__vrmic = { ...(globalThis.__vrmic ?? {}), lastAsk: got };
     if (!scrim.isConnected) return;
     const say = got.ok
       ? 'Microphone allowed. It stays off until you turn it on — press the mic when you want to talk.'
       : got.name === 'NotFoundError'
         ? 'No microphone was found. VR works fine without one — you just won\'t be heard.'
-        : `The browser blocked the microphone, so VR will be without your voice. To change it later: ${DENIED_FIX}.`;
-    body.innerHTML = `<p class="vrmic-say" data-result="${got.ok ? 'allowed' : 'blocked'}">${say}</p>
+        : got.name === 'unanswered'
+          ? `The browser hasn't answered${mode === 'enter' ? ' — you can still enter VR' : ''}. If its prompt shows, answer it there.`
+          : `The browser blocked the microphone, so VR will be without your voice. To change it later: ${DENIED_FIX}.`;
+    body.innerHTML = `<p class="vrmic-say" data-result="${got.ok ? 'allowed' : got.name === 'unanswered' ? 'unanswered' : 'blocked'}">${say}</p>
       <div class="vrmic-btns"><button class="go" data-act="${mode === 'enter' ? 'enter' : 'done'}">${mode === 'enter' ? 'Enter VR' : 'Done'}</button></div>`;
     const go = body.querySelector('.go');
     go.onclick = () => { close(); if (mode === 'enter') proceed?.(); };   // the fresh gesture requestSession needs

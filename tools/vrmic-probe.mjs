@@ -12,7 +12,7 @@
 //   late     — the hung request finally resolves after the retraction: the device is stopped, never published
 //   unanswered — Allow, and the browser never answers: after vrmic.TRY_MS the step still offers "Enter VR", which enters;
 //              the late answer's tracks are stopped
-// Run under the house guards (flock the headless lock, perf-guard); clouds are forced off before boot here.
+// Run one headless browser at a time; clouds are forced off before boot here.
 //   bun tools/vrmic-probe.mjs [--shots <dir>]      (SHOT_BASE=160 numbers the shots)
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';

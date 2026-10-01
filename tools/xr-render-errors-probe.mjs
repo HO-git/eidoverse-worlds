@@ -12,7 +12,7 @@
 //   gated   — the fix installed only because this session's layer framebuffer is null (on hardware it never does)
 // Real hardware returns an opaque WebGLFramebuffer here and never took this path; this is the emulator's (and the
 // Immersive Web Emulator extension's) path, which every headless VR probe rides.
-// Run it under the house guards: flock the headless lock, perf-guard; clouds are forced off before boot here.
+// Run one headless browser at a time; clouds are forced off before boot here.
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
 import { readFileSync, mkdirSync } from 'node:fs';
 

@@ -1,6 +1,6 @@
 // bun tools/sky-state-probe.mjs — World › sky says what the LOG has ("world: …") and, only while this client shows
 // something else, what and why ("you: previewing / loading… / no clouds (your clouds⚙ is off)"). Cloud quality is set
-// to off BEFORE load: a software-rendered cloud bake exhausts this machine (run it under perf-guard.sh).
+// to off BEFORE load: a software-rendered cloud bake can exhaust a machine. Run one headless browser at a time.
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
 const { check, done } = checker();
 const world = await ownedWorld({});

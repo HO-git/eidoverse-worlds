@@ -10,7 +10,7 @@
 //   vr-a    — Settings › Style › VR panel opacity: default 1 (opaque pass), lower → the quad's panel alpha, reset → 1
 // On Chromium the engine runs WebGPURenderer's WebGL 2 backend in the headset too (owner, 09-30), so this headless
 // path IS the user path for the output transform. What it can't show: the headset's own compositor/display.
-// Run it under the house guards: flock the headless lock, perf-guard; clouds are forced off before boot here.
+// Run one headless browser at a time; clouds are forced off before boot here.
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 

@@ -17,7 +17,10 @@
 //   resting line never show at once;
 //   "/who" passes through to the command path; Esc closes; a mouse click on a row runs it;
 //   a typo + Tab does nothing (Tab never says); while open, the hint bar steps off the footer and a
-//   click on the footer keeps the lantern open.
+//   click on the footer keeps the lantern open;
+//   Esc quiet puts the resting line away WITH the panels (still away after the flash; Ctrl+K still opens the lantern,
+//   whose Esc comes first) and brings it back with them; the ∃ menu's lantern row unpins the resting line (gone,
+//   saved) without taking Ctrl+K away, and pins it back.
 // --shots writes the after/ screenshots (1280x720 and 390x844) as it goes.
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
 import { mkdirSync } from 'node:fs';
@@ -225,9 +228,48 @@ try {
     check('…and the hint bar says "panels hidden · Esc to bring back" in the resting line’s place', hid.hint?.shown && /^panels hidden · Esc to bring back$/.test(hid.hintText.trim()) && !hid.pill?.shown,
       JSON.stringify(hid));
     await shot(pg, '15-esc-hidden.png');
+    // the resting line went WITH the panels (R, 10-01: "have it obey the 'esc to hide' feature") — so it stays away
+    // after the flash is done too, not only while the hint bar borrows its spot
+    await sleep(4300);
+    const later = { frames: await shown(), hintGone: await pg.evaluate(() => document.getElementById('hintbar').classList.contains('gone')),
+      pill: await rect(pg, '#lantern-pill'), cls: await pg.evaluate(() => document.getElementById('lantern-pill').className) };
+    check('…and once the flash is done the resting line stays away with the panels', later.frames === '' && !later.pill?.shown && /quiet/.test(later.cls),
+      JSON.stringify(later));
+    // Ctrl+K still opens the lantern while they are away; Esc then closes the LANTERN first (its line owns the key)
+    await pg.keyboard.press('Control+k'); await sleep(250);
+    const kOpen = (await lantern(pg)).open;
+    await pg.keyboard.press('Escape'); await sleep(300);
+    const kShut = { open: (await lantern(pg)).open, frames: await shown(), pill: await rect(pg, '#lantern-pill') };
+    check('panels hidden: Ctrl+K still opens the lantern, and Esc closes the lantern first (panels and pill stay away)',
+      kOpen && !kShut.open && kShut.frames === '' && !kShut.pill?.shown, JSON.stringify({ kOpen, ...kShut }));
     await pg.keyboard.press('Escape'); await sleep(300);
     const back = { frames: await shown(), hintGone: await pg.evaluate(() => document.getElementById('hintbar').classList.contains('gone')), pill: await rect(pg, '#lantern-pill') };
     check('Esc again brings back exactly those panels, and the hint gives the spot back at once', back.frames === before && back.hintGone && back.pill?.shown, JSON.stringify({ before, ...back }));
+  }
+
+  // UNPIN (R, 10-01: "add it as a pin feature for the reverse-E menu (might need its own logo to differentiate)"): the
+  // ∃ menu's lantern row, right under search, pins the resting line. Unpinned: no pill, but Ctrl+K still opens it.
+  { const menuRow = () => pg.evaluate(() => { const r = document.querySelector('#emenu .mrow[data-row="lantern"]');
+      return r && { prev: r.previousElementSibling?.dataset.row ?? null, on: r.querySelector('.mpin')?.classList.contains('on'), pinTitle: r.querySelector('.mpin')?.title }; });
+    await pg.click('#hud'); await sleep(250);
+    const r0 = await menuRow();
+    check('the ∃ menu lists the lantern right under search, pinned', r0?.prev === 'search' && r0?.on === true, JSON.stringify(r0));
+    await pg.click('#emenu .mpin[data-pin="lantern"]'); await sleep(200);
+    const r1 = await menuRow();
+    await shot(pg, '16-emenu-lantern-unpinned.png');
+    await pg.keyboard.press('Escape'); await sleep(250);   // the open menu takes this Esc; the panels stay
+    const un = { pill: await rect(pg, '#lantern-pill'), saved: await pg.evaluate(() => localStorage.getItem('ew-lantern-pinned')),
+      menu: await pg.evaluate(() => document.getElementById('emenu').hidden) };
+    check('unpinned: no resting line, and the choice is saved', r1?.on === false && !un.pill?.shown && un.saved === '0' && un.menu, JSON.stringify({ r1, ...un }));
+    await pg.keyboard.press('Control+k'); await sleep(250);
+    const kU = (await lantern(pg)).open;
+    await pg.keyboard.press('Escape'); await sleep(250);
+    check('…but Ctrl+K still opens the lantern, and Esc closes it', kU && !(await lantern(pg)).open);
+    // pin it back for the rest of the walk (localStorage lives on in this context)
+    await pg.click('#hud'); await sleep(250);
+    await pg.click('#emenu .mpin[data-pin="lantern"]'); await sleep(200);
+    await pg.keyboard.press('Escape'); await sleep(250);
+    check('pinned again: the resting line is back', (await rect(pg, '#lantern-pill'))?.shown);
   }
 
   // observe the acts the keys may or may not fire

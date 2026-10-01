@@ -258,7 +258,6 @@ export function initLantern({ submit, whisperTarget } = {}) {
     else if (e.key === 'Enter') { e.preventDefault(); onEnter(); }
     else if (e.key === 'Tab') { e.preventDefault(); if (!e.shiftKey && rows[sel]?.kind !== 'say') runRow(rows[sel]); }   // Tab never says
     else if (e.key === 'Escape') { e.preventDefault(); closeLantern(); }
-    else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyK') { e.preventDefault(); closeLantern(); }
   });
   // nothing in the panel takes focus from the line — rows, the gaps between them, the footer — or the
   // blur would close it 120 ms later (below). The line itself keeps its own caret placement.

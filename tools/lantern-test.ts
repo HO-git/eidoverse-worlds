@@ -106,5 +106,10 @@ btn.focus(); L.openLantern(''); key('Escape');
 check('a button that had focus (the pill, a rail entry) is not refocused: its Enter/Space would click it', document.activeElement !== btn,
   document.activeElement?.id || String(document.activeElement));
 
+console.log('LANTERN — Ctrl+K from inside the line');
+L.openLantern('');
+key('k', { code: 'KeyK', ctrlKey: true });
+check('Ctrl+K in the line closes it (the window\'s capture handler owns the chord)', !L.isLanternOpen());
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

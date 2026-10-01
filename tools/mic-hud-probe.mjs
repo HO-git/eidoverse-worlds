@@ -26,11 +26,13 @@ try {
     { waitUntil: 'domcontentloaded' });
   await pg.fill('#d-name', 'micprobe').catch(() => {});
   await pg.click('#d-go').catch(() => {});
-  await pg.waitForSelector('#mictoggle', { timeout: 30000 });
+  await pg.waitForSelector('#micbtn', { timeout: 30000 });
 
   const state = () => pg.evaluate(() => {
-    const el = document.getElementById('mictoggle');
-    return { title: el?.title ?? null, slashed: el?.innerHTML.includes('x2="25"') ?? null };
+    const el = document.getElementById('micbtn');
+    // ui.js's tooltip borrows title= into _tip while the pointer is over it (a click repaints the glyph under the
+    // pointer, which re-borrows): the text a person sees is whichever holds it
+    return { title: (el?.title || el?._tip) ?? null, slashed: el?.innerHTML.includes('x2="25"') ?? null };
   });
 
   const s0 = await state();
@@ -44,9 +46,9 @@ try {
     await pg.evaluate(() => typeof window.__sfuMic === 'function'));
 
   // ON — the click a person makes. Fake device satisfies getUserMedia.
-  await pg.click('#mictoggle');
+  await pg.click('#micbtn');
   await pg.waitForFunction(() =>
-    !document.getElementById('mictoggle')?.innerHTML.includes('x2="25"'),
+    !document.getElementById('micbtn')?.innerHTML.includes('x2="25"'),
     { timeout: 15000 }).catch(() => {});
   const s1 = await state();
   check('click ON reaches the SFU: slash gone, tooltip no longer "mic off"',
@@ -56,21 +58,21 @@ try {
   // on a slow negotiation — the forbidden state is publishing WITH a slash.)
   check('never "publishing but slashed" — the glyph cannot claim silence while live',
     await pg.evaluate(() => !(window.relayDiag?.()?.micPublished === true
-      && document.getElementById('mictoggle')?.innerHTML.includes('x2="25"'))));
+      && document.getElementById('micbtn')?.innerHTML.includes('x2="25"'))));
 
   // OFF
-  await pg.click('#mictoggle');
+  await pg.click('#micbtn');
   await pg.waitForFunction(() =>
-    document.getElementById('mictoggle')?.innerHTML.includes('x2="25"'),
+    document.getElementById('micbtn')?.innerHTML.includes('x2="25"'),
     { timeout: 15000 }).catch(() => {});
   const s2 = await state();
   check('click OFF follows: slash back, off tooltip back',
     s2.slashed === true && /mic off/i.test(s2.title ?? ''), JSON.stringify(s2));
 
   // ON again — completes the review's ON→OFF→ON discriminator.
-  await pg.click('#mictoggle');
+  await pg.click('#micbtn');
   await pg.waitForFunction(() =>
-    !document.getElementById('mictoggle')?.innerHTML.includes('x2="25"'),
+    !document.getElementById('micbtn')?.innerHTML.includes('x2="25"'),
     { timeout: 15000 }).catch(() => {});
   const s3 = await state();
   check('click ON again completes ON→OFF→ON with visible state following',

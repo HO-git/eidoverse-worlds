@@ -12,6 +12,7 @@
 //   4. every failed in-VR try added another permission 'change' listener, so one grant announced itself N times
 //   2 (cont.) an unanswered Allow was remembered as 'allow', so every later press went straight in and never asked again;
 //   2b. a browser answer after the bound left the card saying "hasn't answered"
+//   5. with no navigator.permissions.query the grant watcher set its flag and never cleared it
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import { mock } from 'bun:test';
 import { checker } from './probe-harness.mjs';
@@ -155,5 +156,26 @@ console.log('\n— 4. one grant, announced once —');
   check('a grant after two failed tries announces itself once', allowed.length === 1, JSON.stringify(allowed));
   await advance(5000);
   check('…and the after-exit ask then has nothing to ask', scrims() === 0, `${scrims()} scrims`);
+}
+
+console.log('\n— 5. a browser with no permissions.query —');
+{
+  reset(); mic.toggles = 0; hints.length = 0;
+  const query = navigator.permissions.query; delete navigator.permissions.query;
+  bus.emit('xr:state', true);
+  let err = null;
+  const press = V.xrMicPress().catch((e) => { err = e; });
+  await advance(V.TRY_MS + 100); await press;
+  check('the failed try settles without throwing', mic.toggles === 1 && err === null, String(err));
+  navigator.permissions.query = query;
+  const n = perm.statuses.length;
+  void V.xrMicPress(); await advance(V.TRY_MS + 100);
+  bus.emit('xr:state', false);
+  perm.state = 'granted';
+  for (const st of perm.statuses.slice(n)) st.dispatchEvent(new Event('change'));
+  // contrived (the API does not appear mid-page), but it is how the flag is seen: a stuck flag skips every later watch
+  check('…and the watcher is not left "watching": once the API answers, a grant announces itself', hints.filter((h) => /allowed/.test(h)).length === 1, JSON.stringify(hints));
+  await advance(5000);
+  if (scrims()) closeCard();
 }
 done();

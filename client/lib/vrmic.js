@@ -129,8 +129,10 @@ async function retract() {
 let watchingGrant = false;
 function watchForGrant() {
   if (watchingGrant) return;
+  const q = navigator.permissions?.query?.({ name: 'microphone' });
+  if (!q) return;                                 // no Permissions API: nothing to watch, so not 'watching'
   watchingGrant = true;
-  navigator.permissions?.query?.({ name: 'microphone' }).then((st) => {
+  q.then((st) => {
     const on = () => {
       if (st.state !== 'granted') return;
       st.removeEventListener?.('change', on);

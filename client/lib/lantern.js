@@ -22,7 +22,7 @@ export const CHORD = isMac ? '⌘K' : 'Ctrl K';   // the rail's search entry sho
 let root = null, input = null, listEl = null, pill = null;
 let rows = [];        // what is on screen, selectable, in display order
 let sel = 0;
-let best = 0;         // the default highlight for this query (the best action row)
+let best = -1;        // the default highlight for this query (the best action row); -1: nothing to do
 let moved = false;    // the person moved the highlight themselves: Enter runs it
 let deps = { submit: () => {}, whisperTarget: () => null };
 
@@ -130,8 +130,8 @@ function render() {
   if (q !== render.lastQ) {
     // a new query resets the highlight to the best ACTION (not the say row: Enter already says it)
     moved = false;
-    best = Math.max(0, rows.findIndex((r) => r.kind === 'action' || r.kind === 'raw'));
-    sel = best;
+    best = rows.findIndex((r) => r.kind === 'action' || r.kind === 'raw');
+    sel = Math.max(0, best);
   }
   sel = Math.min(sel, Math.max(0, rows.length - 1));
   render.lastQ = q;
@@ -245,7 +245,7 @@ export function initLantern({ submit, whisperTarget } = {}) {
     if (e.key === 'ArrowDown') { e.preventDefault(); select(sel + 1, true); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); select(sel - 1, true); }
     else if (e.key === 'Enter') { e.preventDefault(); onEnter(); }
-    else if (e.key === 'Tab') { e.preventDefault(); if (!e.shiftKey) runRow(rows[sel]); }
+    else if (e.key === 'Tab') { e.preventDefault(); if (!e.shiftKey && rows[sel]?.kind !== 'say') runRow(rows[sel]); }   // Tab never says
     else if (e.key === 'Escape') { e.preventDefault(); closeLantern(); }
     else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyK') { e.preventDefault(); closeLantern(); }
   });
@@ -256,7 +256,7 @@ export function initLantern({ submit, whisperTarget } = {}) {
     if (r && Number(r.dataset.i) !== sel) select(Number(r.dataset.i), true);
   });
   // the pointer leaving gives the highlight back to the best match (and Enter back to speech)
-  listEl.addEventListener('pointerleave', () => { if (moved) { moved = false; select(best, false); } });
+  listEl.addEventListener('pointerleave', () => { if (moved) { moved = false; select(Math.max(0, best), false); } });
   listEl.addEventListener('click', (e) => {
     const r = e.target.closest('.ln-row');
     if (r) runRow(rows[Number(r.dataset.i)]);

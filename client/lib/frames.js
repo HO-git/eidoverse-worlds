@@ -251,7 +251,7 @@ document.body.classList.toggle('ui-locked', locked);
 // The newcomer's layout is a hand-arranged one, not the panels' individual guesses: the tester's desktop
 // (a 1904×844 window, 09-06) exported from a live session and anchored to edges so it holds on
 // other screens. Chat and the emote bar are open; everything else is closed but pinned to the dock.
-// World starts CLOSED (hep/hud-bluesky quiet defaults): on arrival it is eight collapsed section names on
+// World starts CLOSED (the quiet defaults): on arrival it is eight collapsed section names on
 // a third of the screen of glass — nothing to show until you ask, and the rail button or the lantern
 // ("sky", "build") opens it. A frame's own saved state (its owner's moves) still wins; resetLayout returns HERE.
 const DEFAULT_LAYOUT = {

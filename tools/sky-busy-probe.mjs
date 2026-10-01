@@ -1,5 +1,5 @@
 // sky-busy-probe — the sky panel's 'you: loading…' line follows sky.js's busy signal (UI review 3, L1: 691e84e had no
-// committed probe). NEEDS PR 1 (vr-heavy: 'sky-busy', skyBusy()); run it on the merge. Off tier, cloudless: headless-safe.
+// committed probe). Off tier, cloudless: headless-safe.
 // Shows the stand-in gradient by hand: 'loading…' must appear at once (an arrival isn't debounced; a render is), and clear after.
 //   bun tools/sky-busy-probe.mjs
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';

@@ -2,9 +2,9 @@
 // client against an owned scratch world: the SAME avatar three times (idle / sitting on the ground / lying — the
 // 'sit' and 'lie' clip slots), shot BEFORE (the plate pinned at the old fixed 1.95 above the root) and AFTER (hung from
 // the body), plus the measured rest crown / gap / anchor for each. Clouds OFF before boot (a cloudy sky bakes on the
-// CPU in headless Chromium). Run it under the headless lock and perf-guard:
+// CPU in headless Chromium). On a small host, run it under a lock and a memory guard:
 //
-//   flock /home/claude/eido/.headless.lock perf-guard.sh -- bun tools/plateanchor-shot-probe.mjs --shots <dir> [--avatars claude,tigerbee]
+//   bun tools/plateanchor-shot-probe.mjs --shots <dir> [--avatars claude,tigerbee]
 //
 // "Before" is emulated in-page: each body's _placePlate is swapped for the old line (label at 0, 1.95, 0) for the
 // shot, then restored — everything else on the frame is today's code.

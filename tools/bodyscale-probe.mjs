@@ -3,8 +3,8 @@
 // peer `ref` stands beside it at 100% in the same body (claude.vrm) as the yardstick — and reads the relayed packets.
 // Clouds are forced OFF before boot (a cloudy sky bakes on the CPU in headless Chromium and has frozen the host).
 //
-//   flock -w 1500 /home/claude/eido/.headless.lock timeout 900 /mnt/c/Users/Claude/code/scripts/perf-guard.sh \
-//     bun tools/bodyscale-probe.mjs [--shots <dir>]      (SHOT_BASE=130 numbers the shots)
+//   bun tools/bodyscale-probe.mjs [--shots <dir>]      (SHOT_BASE=130 numbers the shots)
+//   (two browsers: on a small host, run it under a lock and a memory guard)
 //
 // What must hold:
 //   the Profile — Avatars shows the worn body's size and nameplate sliders; moving them (input/change, the DOM's own

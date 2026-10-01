@@ -11,8 +11,10 @@
 //   in-VR 'try' on granted                        → "granted in VR just toggles"
 //   inVrAfterTry ignores micOn                    → "a live mic after the try is ok whatever the state says"
 import { preVrStep, inVrMicPlan, inVrAfterTry, afterExitStep, MIC_CHOICE_KEY, MIC_PENDING_KEY } from '../client/lib/vrmic_policy.js';
-import { checker } from './probe-harness.mjs';
-const { check, done } = checker();
+// a local check(): probe-harness.mjs would pull in Playwright for a test that needs none
+let pass = 0, fail = 0;
+const check = (name, ok, extra = '') => { console.log(`  ${ok ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m'} ${name}${ok ? '' : '  ' + extra}`); ok ? pass++ : fail++; };
+const done = () => { console.log(`\n${fail ? '\x1b[31m' : '\x1b[32m'}${pass} passed, ${fail} failed\x1b[0m`); process.exit(fail ? 1 : 0); };
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // ── pre-VR: the full table ──

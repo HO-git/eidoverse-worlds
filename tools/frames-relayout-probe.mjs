@@ -7,12 +7,12 @@
 // window back and reloads. Every panel must come back to its rect: defaults to their
 // layout, the dragged one to where it was dropped. frames-layout-test binds the same
 // contract under happy-dom; this is the check that the real caller agrees.
-import { launchBrowser, ownedWorld } from './probe-harness.mjs';
+import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
 
 const KEY = process.env.JOIN_KEY || 'dev';
 const FULL = { width: 1280, height: 800 };
-let world, close = async () => {}, bad = 0;
-const say = (ok, msg) => { if (!ok) bad++; console.log(`${ok ? '  ✓' : '  ✗'} ${msg}`); };
+const { check, done } = checker();
+let world, close = async () => {};
 try {
   world = await ownedWorld({ key: KEY, env: { SKIP_OPT_SWEEP: '1' } });
   let page; ({ page, close } = await launchBrowser());
@@ -52,18 +52,18 @@ try {
   await settle();
   const before = await rects();
   console.log('layout at 1280x800:', JSON.stringify(before));
-  say(before.debug !== r.debug, `debug was really dragged (${r.debug} -> ${before.debug})`);
+  check(`debug was really dragged (${r.debug} -> ${before.debug})`, before.debug !== r.debug);
 
   for (const vp of [{ width: 1280, height: 300 }, { width: 480, height: 800 }]) {
     await pg.setViewportSize(vp); await settle();
     const squeezed = await rects();
-    say(diff(before, squeezed).length > 0, `${vp.width}x${vp.height} really squeezes: ${diff(before, squeezed).join(' · ') || 'nothing moved'}`);
+    check(`${vp.width}x${vp.height} really squeezes: ${diff(before, squeezed).join(' · ') || 'nothing moved'}`, diff(before, squeezed).length > 0);
     // an ordinary toggle while small, on a panel that is OPEN while squeezed (settings is auto-hidden
     // here, so clicking it would be a deliberate open-then-close, which rightly stays closed)
     await toggle('debug'); await settle(); await toggle('debug'); await settle();
     await pg.setViewportSize(FULL); await settle();
     const d = diff(before, await rects());
-    say(d.length === 0, `back to 1280x800 after ${vp.width}x${vp.height}: ${d.length ? d.join(' · ') : 'every panel where it was'}`);
+    check(`back to 1280x800 after ${vp.width}x${vp.height}: ${d.length ? d.join(' · ') : 'every panel where it was'}`, d.length === 0);
   }
   await pg.setViewportSize({ width: 1280, height: 300 }); await settle();
   await toggle('debug'); await settle(); await toggle('debug'); await settle();
@@ -71,9 +71,8 @@ try {
   // race (auto-hidden panels restore on that event), not the layout
   await pg.setViewportSize(FULL); await settle(); await boot();
   const d = diff(before, await rects());
-  say(d.length === 0, `a reload after a squeezed toggle: ${d.length ? d.join(' · ') : 'every panel where it was'}`);
-  say(errs.length === 0, `no page errors${errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''}`);
-} catch (e) { bad++; console.log(`  ✗ probe died: ${e.message}`); }
+  check(`a reload after a squeezed toggle: ${d.length ? d.join(' · ') : 'every panel where it was'}`, d.length === 0);
+  check(`no page errors${errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''}`, errs.length === 0);
+} catch (e) { check('probe ran', false, e.message); }
 finally { await close(); await world?.close?.(); }
-console.log(bad ? `\nFAIL (${bad})` : '\nPASS');
-process.exit(bad ? 1 : 0);
+done();

@@ -35,6 +35,7 @@ export function openLantern(text = '') {
   place();
   root.hidden = false;
   pill?.classList.add('open');
+  document.body.classList.add('lantern-open');   // the hint bar shares the bottom band (index.html)
   input.value = text;
   render.lastQ = null;
   render();
@@ -48,6 +49,7 @@ export function closeLantern() {
   if (!root || root.hidden) return;
   root.hidden = true;
   pill?.classList.remove('open');
+  document.body.classList.remove('lantern-open');
   if (document.activeElement === input) input.blur();
   dispatchEvent(new CustomEvent('lantern'));
 }

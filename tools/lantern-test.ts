@@ -67,5 +67,11 @@ reset(); L.openLantern('whisper'); key('Tab');
 check('a fill command on Tab fills the line and stays open', input.value === '/w ' && L.isLanternOpen() && said.length === 0, JSON.stringify({ v: input.value, said }));
 L.closeLantern();
 
+console.log('LANTERN — the hint bar steps aside while it is open');
+L.openLantern('');
+check('open: body.lantern-open (the hint bar would sit on the footer: both bottom 24px)', document.body.classList.contains('lantern-open'));
+L.closeLantern();
+check('closed: the class is gone, the hint bar is back', !document.body.classList.contains('lantern-open'));
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

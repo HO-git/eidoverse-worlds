@@ -15,14 +15,11 @@
 // display (sRGB-encoded) space, applied to the quads only — never the design tokens, never the desktop.
 // `gradeSRGB` (quadgrade.js) is the JS twin of the shader's grade; tools/quadcolour-test.mjs holds both to the same numbers.
 import * as THREE from 'three';
-import { GRADE_DEFAULT, GRADE_RANGE, LUMA, loadGrade, clampTo, storeGrade } from './quadgrade.js';
+import { GRADE_DEFAULT, GRADE_RANGE, LUMA, loadGrade, clampTo, storeGrade, ACES_IN_INV, ACES_OUT_INV, ACES_FIT } from './quadgrade.js';
 import { Fn, vec3, vec4, mat3, texture, uniform, toneMappingExposure, sRGBTransferOETF, sRGBTransferEOTF, dot, mix, clamp, sqrt, max } from 'three/tsl';
 
-// three r186 ToneMappingFunctions.js — the forward ACES Filmic, constants copied exactly. The inverse matrices are
-// listed in the same row order three lists the forward ones, so they invert whichever way mat3() reads its arguments.
-const IN_INV = [1.76474097, -0.67577768, -0.08896329, -0.14702785, 1.16025151, -0.01322366, -0.03633683, -0.16243644, 1.19877327];
-const OUT_INV = [0.64303825, 0.31118675, 0.04577546, 0.05926869, 0.93143649, 0.00929492, 0.0059619, 0.06392902, 0.93011838];
-const A = 0.0245786, B = 0.000090537, C = 0.983729, D = 0.4329510 * 0.983729, E = 0.238081;
+// the inverse's constants live in quadgrade.js beside their JS twin (acesFilmicInverseJS), which the unit test round-trips
+const { A, B, C, D, E } = ACES_FIT;
 
 const uSat = uniform(1), uCon = uniform(1);
 export function setGrade(g, persist = true) {
@@ -45,12 +42,12 @@ const rrtInv = (y) => {
 };
 /** Linear working colour whose ACES Filmic (at the live exposure) is `lin` — the output pass's exact undo. */
 export const acesFilmicInverse = Fn(([lin]) => {
-  const y = mat3(...OUT_INV).mul(clamp(lin, 0, 1));
+  const y = mat3(...ACES_OUT_INV).mul(clamp(lin, 0, 1));
   const v = vec3(rrtInv(y.x), rrtInv(y.y), rrtInv(y.z));
   // NOT clamped at 0: a saturated hue (--brand's red channel, a strong yellow) needs a NEGATIVE linear input for
   // ACES's channel-mixing input matrix to land it; the output pass reads a HalfFloat target (three's default
   // outputBufferType), which carries it. Clamped, #8fe8c8 came out #a0e8c8 (the probe, 09-30).
-  return mat3(...IN_INV).mul(v).mul(0.6).div(toneMappingExposure);
+  return mat3(...ACES_IN_INV).mul(v).mul(0.6).div(toneMappingExposure);
 });
 
 /** Swap an HTMLMesh's material for one whose output is the authored (graded) colour after the renderer's output pass. */

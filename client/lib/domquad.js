@@ -97,6 +97,8 @@ export const prepareQuadMaterial = (mesh) => quadMaterial(mesh, renderer);
 // Below 1 it must blend, so it joins the transparent pass: three sorts those back-to-front by distance after every
 // opaque thing, so the world shows through; depthWrite stays ON so a nearer panel still hides what is behind it and a
 // laser/particle drawn later can't paint through the text. alphaTest drops to 0.01: it still cuts the clear corners.
+// The ACES undo (quadcolour.js) is exact only where alpha is 1: the blend with the world happens BEFORE the output
+// pass tone-maps the mix, so a see-through panel's background lands near, not on, its authored colour.
 export const xrPanelAlpha = () => {
   const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--xr-panel-a'));
   return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1;

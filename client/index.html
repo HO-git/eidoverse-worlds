@@ -887,49 +887,55 @@ body.arranging #dock #hud.emark {
 .pf-tab.on svg { opacity: 1; color: var(--brand); }
 .pf-pane { flex: 1; min-height: 0; overflow: auto; }
 .pf-stub { color: var(--dim); font-size: var(--fs-sm); padding: 10px 2px; line-height: 1.5; }   /* empty BY DESIGN, and says so — the .who-empty idiom (R, 2026-09-11) */
-#emenu {
-  position: fixed; top: 54px; left: 10px; z-index: 40;
-  display: flex; flex-direction: column; min-width: 168px; padding: 6px;
-  cursor: grab;   /* the menu itself is a panel: drag its empty parts */
+/* the ∃ menu — a File-style dropdown hanging from the ∃ (ui.js anchorBeside), and its one flyout (Panels ▸ / About ▸).
+   z 50: OVER the mic/ear/visor glyphs and the status chips (45) it opens across; under notices (60) and the door. */
+#emenu, #emenu-sub {
+  position: fixed; top: 54px; left: 10px; z-index: 50;
+  display: flex; flex-direction: column; min-width: 184px; padding: 6px;
 }
-#emenu:active { cursor: grabbing; }
-#emenu .mrow, #emenu .mpin { cursor: pointer; }
-#emenu[hidden] { display: none; }
-/* the menu wears the frames' own arrange chrome — one grammar to maintain */
-#emenu { overflow: visible; }
-#emenu .fr-head {
-  display: flex; position: absolute; bottom: 100%; left: calc(var(--r) + 2px); right: calc(var(--r) + 2px);
-  justify-content: space-between; align-items: flex-end; pointer-events: none;
-  padding: 0; background: none; border: none;   /* the base .fr-head strip bleeds in otherwise */
-}
-#emenu .fr-head .fr-title { flex: 0 1 auto; }
-#emenu .fr-head .fr-title, #emenu .fr-head .fr-btns {
-  pointer-events: auto;
-  background: var(--chip); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-  border-radius: 7px 7px 0 0; padding: 3px 10px; font-size: var(--fs-sm); color: var(--dim);
-  margin-bottom: -1px;
-}
-#emenu .fr-head .fr-title { cursor: grab; }
-#emenu .fr-head .fr-btns { padding: 3px 5px; }
-#emenu .mrow.dead { opacity: .42; cursor: not-allowed; }   /* listed, not offered: no headset sensed */
-#emenu .mrow.dead .mpin { pointer-events: none; }
-#emenu .mrow {
-  display: flex; align-items: center; gap: 9px; padding: 7px 9px;
+#emenu-sub { min-width: 196px; max-height: calc(100vh - 8px); overflow-y: auto; }
+#emenu[hidden], #emenu-sub[hidden], #layoutbar[hidden] { display: none; }
+#emenu .mrow, #emenu-sub .mrow, #emenu .mpin, #emenu-sub .mpin { cursor: pointer; }
+#emenu .mrow.dead, #emenu-sub .mrow.dead { opacity: .42; cursor: not-allowed; }   /* listed, not offered */
+#emenu .mrow.dead.soft { cursor: help; }   /* …and a press says why (ui.js topRow) */
+#emenu-sub .mrow.dead .mpin { pointer-events: none; }
+#emenu .mrow, #emenu-sub .mrow {
+  display: flex; align-items: center; gap: 9px; padding: 7px 9px; min-height: 32px; box-sizing: border-box;
   background: none; border: none; border-radius: 6px; color: var(--dim);
   font-size: var(--fs-sm); text-align: left;
 }
-#emenu .mrow:hover { background: var(--hov); }
-#emenu .mrow > svg:first-child { flex: none; opacity: .8; color: var(--icon); }
-#emenu .mrow .mname { flex: 1; }
-#emenu .mrow.open { color: color-mix(in srgb, var(--brand) 35%, var(--fg)); }
-#emenu .mrow.open svg:first-child { opacity: 1; }
-#emenu .mpin {
-  flex: none; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; line-height: 0;
-  background: none; border: none; border-radius: 5px; color: var(--dim); opacity: .35;
+#emenu .mrow:hover, #emenu-sub .mrow:hover, #emenu .mrow.subopen { background: var(--hov); color: var(--fg); }
+#emenu .mrow.dead:hover { color: var(--dim); }
+#emenu .mrow > svg:first-child, #emenu-sub .mrow > svg:first-child { flex: none; opacity: .8; color: var(--icon); }
+#emenu .mrow .mname, #emenu-sub .mrow .mname { flex: 1; white-space: nowrap; }
+#emenu .mdetail { font-style: normal; color: var(--dim); opacity: .8; margin-left: 4px; }
+#emenu .mcaret { display: flex; opacity: .6; margin-right: -2px; }
+#emenu .mrow.subopen .mcaret { opacity: 1; color: var(--brand); }
+#emenu .mkey { font-size: var(--fs-xs); min-width: 18px; text-align: center; }
+#emenu .mtag { font-size: var(--fs-xs); color: var(--dim); }
+#emenu-sub .mrow.open { color: color-mix(in srgb, var(--brand) 35%, var(--fg)); }
+#emenu-sub .mrow.open svg:first-child { opacity: 1; }
+#emenu-sub .mrow[data-layout].open { background: color-mix(in srgb, var(--brand) 14%, transparent); }
+/* the pin is the whole right end of its row, not a 22px dot: a near miss used to land on the row and toggle the
+   window instead of pinning it */
+#emenu-sub .mpin {
+  flex: none; display: grid; place-items: center; width: 34px; height: 32px; margin: -7px -9px -7px 0; padding: 0; line-height: 0;
+  background: none; border: none; border-radius: 0 6px 6px 0; color: var(--dim); opacity: .35;
 }
-#emenu .mpin:hover { opacity: 1; background: var(--hov); }
-#emenu .mpin.on { opacity: 1; color: var(--brand); }
-#emenu .msep { height: 1px; background: var(--edge); margin: 5px 4px; }
+#emenu-sub .mpin:hover { opacity: 1; background: var(--hov); }
+#emenu-sub .mpin.on { opacity: 1; color: var(--brand); }
+#emenu .msep, #emenu-sub .msep { height: 1px; background: var(--edge); margin: 5px 4px; }
+#emenu-sub .minfo { padding: 5px 9px; font-size: var(--fs-sm); color: var(--fg); white-space: nowrap; }
+#emenu-sub .minfo.dim { color: var(--dim); }
+/* HUD layout mode's marker, beside the ∃ where the menu opens (the menu covers it while open) */
+#layoutbar {
+  position: fixed; z-index: 46; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 4px 0 10px;
+  font-size: var(--fs-sm); color: var(--fg); white-space: nowrap;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand) 45%, transparent);
+}
+#layoutbar > svg { color: var(--brand); flex: none; }
+#layoutbar kbd { font-size: var(--fs-xs); }
+#layoutbar .lb-done { height: 24px; padding: 0 10px; border-radius: 6px; }
 /* headers exist only while arranging (the ∃ menu is open) — and they FLOAT
    above the frame (below, when the frame hugs the top edge) so opening the
    menu never shifts a single window's geometry. */

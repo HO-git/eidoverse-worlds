@@ -1029,6 +1029,7 @@ export function escapeIsClaimed() {
   if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return 'field';
   if (document.querySelector('.pf-pop, .dd-pop, .chat-gearpop:not([hidden]), #emenu:not([hidden]), #stpop:not([hidden])')) return 'pop';   // #stpop: a status chip's popover (statuschips.js)   // the gear pop lives in the DOM hidden; only a SHOWN one claims Esc
   if (document.querySelector('.scrim.open')) return 'overlay';
+  if (document.body.classList.contains('arranging')) return 'layout';   // HUD layout mode: Esc ends the mode (ui.js), not the panels
   if (document.pointerLockElement) return 'pointer-lock';
   return null;
 }

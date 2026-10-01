@@ -36,6 +36,13 @@ async function boot(ctxOpts, name, init = () => {}) {
   await sleep(3000);
   return { ctx, pg, errs };
 }
+// where box `m` (the open ∃ menu) overlaps `sel`, the topmost element at the overlap's centre belongs to the menu
+const onTop = async (pg, m, sel) => pg.evaluate(([m, sel]) => {
+  const o = document.querySelector(sel)?.getBoundingClientRect(); if (!o || !o.width) return true;
+  const l = Math.max(m.l, o.left), r = Math.min(m.r, o.right), t = Math.max(m.t, o.top), b = Math.min(m.b, o.bottom);
+  if (l >= r || t >= b) return true;
+  return !!document.elementFromPoint((l + r) / 2, (t + b) / 2)?.closest('#emenu, #emenu-sub');
+}, [m, sel]);
 const shot = async (pg, file) => { if (shotDir) await pg.screenshot({ path: `${shotDir}/${file}` }); };
 const box = (pg, sel) => pg.evaluate((s) => { const e = document.querySelector(s); if (!e) return null; const r = e.getBoundingClientRect();
   const cs = getComputedStyle(e); if (!r.width || cs.display === 'none' || e.hidden) return null;
@@ -117,7 +124,9 @@ try {
   const menu = await pg.evaluate(() => { const m = document.getElementById('emenu'); const r = m.getBoundingClientRect(); const tab = m.querySelector(':scope > .fr-head')?.offsetHeight ?? 0;
     return { l: r.left, r: r.right, t: r.top - tab, b: r.bottom, hidden: m.hidden }; });
   console.log('  · menu', JSON.stringify(menu));
-  check('the ∃ menu opens clear of the chips (its tab too)', !menu.hidden && !meets(menu, await box(pg, '#hudstatus')), JSON.stringify({ menu, strip: await box(pg, '#hudstatus') }));
+  // the ∃ menu is a dropdown that opens OVER the ∃'s row (owner, 10-01: "over the mic/headphones/vr visor icons"): where
+  // it meets the chips it is the thing on top
+  check('the ∃ menu opens over the chips — on top wherever they meet', !menu.hidden && await onTop(pg, menu, '#hudstatus'), JSON.stringify({ menu, strip: await box(pg, '#hudstatus') }));
   await pg.click('#hud'); await sleep(200);
   await pg.keyboard.press('Escape'); await sleep(200);   // the panels come back
 
@@ -156,7 +165,7 @@ try {
   await top.pg.tap('#hud'); await sleep(300);
   const tm = await top.pg.evaluate(() => { const m = document.getElementById('emenu'); const r = m.getBoundingClientRect(); const tab = m.querySelector(':scope > .fr-head')?.offsetHeight ?? 0;
     return { l: r.left, r: r.right, t: r.top - tab, b: r.bottom, hidden: m.hidden }; });
-  check('top rail: the ∃ menu opens clear of the chips', !tm.hidden && !meets(tm, await box(top.pg, '#hudstatus')), JSON.stringify({ tm, ts }));
+  check('top rail: the ∃ menu opens over the chips — on top wherever they meet', !tm.hidden && await onTop(top.pg, tm, '#hudstatus'), JSON.stringify({ tm, ts }));
   await shot(top.pg, '16b-phone-top-rail-390x844.png');
   check('no page errors on the top-rail run', top.errs.length === 0, top.errs.slice(0, 3).join(' | '));
   await top.ctx.close();

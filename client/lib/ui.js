@@ -710,147 +710,297 @@ function paintDock() {
   paintEMenu();
 }
 
-// ---- the ∃ menu — window list, pins, layout lock; open = arranging --------
+// ---- the ∃ menu: a File-style waterfall (owner, 10-01) -------------------
+// "turning the E-menu into a traditional drop down waterfall menu, kind of like a traditional File menu, pop out to
+// the right of E/dock, over the mic/headphones/vr visor icons." Top level: Save world · Load world · Panels ▸ ·
+// Log in · Help · Keys · About ▸. Settings and Profile stay on the rail ("I don't want to bury it"). Panels ▸ holds
+// what the old menu was: HUD layout mode (the old click-∃ arranging, now a switch of its own), the pins, the lock
+// and reset layout. An item never dismisses the menu unless it takes you to another window (help, a login page);
+// the menu goes on mouse-away (desktop), a press outside it, and Esc — touch and VR have no hover.
 // Alt = the universal window-manager "grab anywhere" chord; show the hand
 // so the convention teaches itself.
 addEventListener('keydown', (e) => { if (e.key === 'Alt') document.body.classList.add('altgrab'); });
 addEventListener('keyup', (e) => { if (e.key === 'Alt') document.body.classList.remove('altgrab'); });
 addEventListener('blur', () => document.body.classList.remove('altgrab'));
 
-const EMENUPOS_LS = 'ew-emenu-pos';
+// What the menu needs to know that ui.js cannot import (net.js is above this rung): INJECTED by main.js, like the
+// load list. Defaults are the truth for a client with no server: no build rights, no sign-in.
+let menuSrc = { buildRights: () => false, loginUrl: () => null };
+export function setMenuSources(src) { menuSrc = { ...menuSrc, ...src }; if (!emenuEl()?.hidden) paintEMenu(); }
+
+// Save and load are honest stubs: the server has no save points to make or restore (grep, 10-01: a world IS its
+// append-only log, so every change is already kept; /fork copies a whole world under a new name, owner-only).
+const NEEDS_RIGHTS = 'needs build rights in this world';
+const SAVE_WHY = 'not yet — this world already keeps every change as it happens (its log); save points need server support. /fork <name> copies the whole world today (owner)';
+const LOAD_WHY = 'not yet — restoring a saved world needs server support; a copy made with /fork is its own world (?world=<name>)';
+const NO_LOGIN = 'this server has no sign-in — it admits by door key';
+const AWAY_MS = 450;   // mouse-away grace: crossing the gap to a flyout, or a wobble off the edge, does not shut the menu
+
+const emenuEl = () => document.getElementById('emenu');
+const subEl = () => document.getElementById('emenu-sub');
+let subFor = null;     // which top-level row the open flyout belongs to ('panels' | 'about'), null = none
+let subCloseT = null;
+let layoutBar = null;
+
+// ---- HUD layout mode: the old click-∃ behaviour, now its own switch. Frames show their title tabs and rims, the rail
+// its grip, the lantern's resting line goes grabbable (index.html body.arranging). It ends on Esc, on a press out in
+// the world, or on its own switch; never because the menu closed.
+export const isLayoutMode = () => document.body.classList.contains('arranging');
+export function setLayoutMode(on) {
+  document.body.classList.toggle('arranging', !!on);
+  paintLayoutBar();
+  paintEMenu();
+}
+function paintLayoutBar() {
+  if (!layoutBar) return;
+  layoutBar.hidden = !isLayoutMode();
+  if (!layoutBar.hidden) anchorBeside(layoutBar);
+}
+
 function initEMenu() {
   el.hud.onclick = () => toggleEMenu();
-  addEventListener('keydown', (e) => { if (e.key === 'Escape' && !emenuEl().hidden) toggleEMenu(false); });
-  // Arranging survives clicks on ANY chrome (panels, headers, rail, menu) —
-  // it ends only out in the world (canvas/body) or back on the ∃.
-  addEventListener('pointerdown', (e) => {
-    const m = emenuEl();
-    if (m.hidden) return;
-    const t = e.target;
-    if (el.hud.contains(t)) return;                       // ∃ itself toggles via click
-    const inChrome = (t instanceof Element &&
-      (m.contains(t) || t.closest('.frame, #dock, .panel, .hud-pop, #micbtn, #earbtn, #hudstatus'))) ||
-      resizeZoneAt(e.clientX, e.clientY);   // the grab band hangs 6px outside frames
-    if (!inChrome) toggleEMenu(false);
-  }, true);
   const m = emenuEl();
-  // a pin is bookkeeping: it never takes focus, so an open lantern keeps its line and stays open
-  m.addEventListener('mousedown', (e) => { if (e.target.closest?.('.mpin')) e.preventDefault(); });
-  // the menu is a panel like any other: drag it by its empty parts, kept
-  m.addEventListener('pointerdown', (e) => {
-    if (e.target !== m && e.target.className !== 'msep' && !e.target.closest?.('.fr-title')) return;
-    e.preventDefault();
-    const r = m.getBoundingClientRect();
-    const ox = e.clientX - r.left, oy = e.clientY - r.top;
-    let moved = false;
-    const move = (ev) => {
-      moved = true;
-      m.style.left = `${Math.max(4, Math.min(innerWidth - r.width - 4, ev.clientX - ox))}px`;
-      m.style.top = `${Math.max(34, Math.min(innerHeight - r.height - 4, ev.clientY - oy))}px`;
-      m.style.right = m.style.bottom = 'auto';
-    };
-    const up = () => {
-      removeEventListener('pointermove', move); removeEventListener('pointerup', up);
-      if (!moved) return;
-      try { localStorage.setItem(EMENUPOS_LS, JSON.stringify({ x: parseInt(m.style.left), y: parseInt(m.style.top) })) } catch {}
-    };
-    addEventListener('pointermove', move); addEventListener('pointerup', up);
+  let s = subEl();
+  if (!s) { s = document.createElement('div'); s.id = 'emenu-sub'; s.className = 'panel'; s.hidden = true; m.after(s); }
+  s.addEventListener('pointerenter', () => clearTimeout(subCloseT));
+  for (const box of [m, s]) {
+    box.setAttribute('role', 'menu');
+    // a pin is bookkeeping: it never takes focus, so an open lantern keeps its line and stays open
+    box.addEventListener('mousedown', (e) => { if (e.target.closest?.('.mpin')) e.preventDefault(); });
+  }
+  layoutBar = document.createElement('div');
+  layoutBar.id = 'layoutbar'; layoutBar.className = 'panel'; layoutBar.hidden = true;
+  layoutBar.innerHTML = `${fsvg('arrows-out-cardinal', 14)}<span>HUD layout — drag panels, the rail's grip, the resting line</span><kbd>Esc</kbd><button class="lb-done">done</button>`;
+  layoutBar.querySelector('.lb-done').onclick = () => setLayoutMode(false);
+  document.body.appendChild(layoutBar);
+  addEventListener('resize', () => { paintLayoutBar(); if (!m.hidden) { anchorBeside(m); placeSub(); } });
+  addEventListener('dockmoved', () => { paintLayoutBar(); if (!m.hidden) { anchorBeside(m); placeSub(); } });
+
+  // Esc: the deepest level first — the flyout, then the menu, then HUD layout mode (frames.js yields Esc to all
+  // three: escapeIsClaimed sees the open menu and body.arranging)
+  addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (!m.hidden) { if (subFor) closeSub(); else toggleEMenu(false); }
+    else if (isLayoutMode()) setLayoutMode(false);
   });
+  addEventListener('pointerdown', (e) => {
+    const t = e.target instanceof Element ? e.target : null;
+    // a press outside the menu (and outside the ∃, which toggles it by its own click) dismisses it — tap-outside
+    if (!m.hidden && !t?.closest('#emenu, #emenu-sub, #hud')) toggleEMenu(false);
+    // HUD layout mode survives presses on ANY chrome (panels, headers, the rail, the menu, the resting line) — it ends
+    // out in the world (canvas/body)
+    if (isLayoutMode() && !el.hud.contains(t)) {
+      const inChrome = (t && t.closest('#emenu, #emenu-sub, #layoutbar, .frame, #dock, .panel, .hud-pop, #micbtn, #earbtn, #xrbtn, #hudstatus'))
+        || resizeZoneAt(e.clientX, e.clientY);   // the grab band hangs 6px outside frames
+      if (!inChrome) setLayoutMode(false);
+    }
+  }, true);
+  // mouse-away (desktop only: a pen or a finger has no hover to leave with)
+  let away = null;
+  const arm = () => { if (!away) away = setTimeout(() => { away = null; toggleEMenu(false); }, AWAY_MS); };
+  const disarm = () => { clearTimeout(away); away = null; };
+  document.addEventListener('pointermove', (e) => {
+    if (m.hidden || e.pointerType !== 'mouse') return;
+    if (e.target instanceof Element && e.target.closest('#emenu, #emenu-sub, #hud')) disarm(); else arm();
+  }, true);
+  document.addEventListener('pointerout', (e) => { if (!m.hidden && e.pointerType === 'mouse' && !e.relatedTarget) arm(); }, true);   // left the window
+  m.addEventListener('pointerenter', disarm);
+
+  // the same acts, findable by name in the lantern ("save", "layout mode")
+  registerAction({ id: 'menu:save', title: 'save world', group: 'world', icon: 'floppy-disk', keywords: ['save', 'snapshot', 'world', 'file'],
+    detail: 'not yet — it tells you why', run: () => toast(menuSrc.buildRights() ? SAVE_WHY : `save world — ${NEEDS_RIGHTS}`, 'info', 9000) });
+  registerAction({ id: 'menu:load', title: 'load world', group: 'world', icon: 'folder-open', keywords: ['load', 'open', 'restore', 'world', 'file'],
+    detail: 'not yet — it tells you why', run: () => toast(menuSrc.buildRights() ? LOAD_WHY : `load world — ${NEEDS_RIGHTS}`, 'info', 9000) });
+  registerAction({ id: 'menu:layout', title: 'HUD layout mode', group: 'panels', icon: 'arrows-out-cardinal',
+    keywords: ['layout', 'arrange', 'move', 'hud', 'panels', 'drag'], detail: 'move panels, the rail and the resting line',
+    run: () => setLayoutMode(!isLayoutMode()) });
+  registerAction({ id: 'menu:reset-layout', title: 'reset layout', group: 'panels', icon: 'sparkle', keywords: ['layout', 'reset', 'default', 'panels'],
+    detail: 'every window back where it started', run: () => { resetHudLayout(); paintDock(); } });
+  registerAction({ id: 'menu:lock', title: 'lock / unlock the layout', group: 'panels', icon: 'lock', keywords: ['layout', 'lock', 'unlock', 'panels'],
+    run: () => { setLocked(!isLocked()); paintEMenu(); } });
+  registerAction({ id: 'menu:keys', title: 'keys', group: 'view', icon: 'keyboard', keywords: ['keys', 'controls', 'shortcuts', 'bindings'],
+    detail: 'the key table', run: () => openKeys() });
+  registerAction({ id: 'menu:about', title: 'about this build', group: 'view', icon: 'info', keywords: ['about', 'version', 'build', 'sha'],
+    run: () => buildInfo().then((v) => toast(`eidoverse-worlds · ${v.lines.join(' · ')}`, 'info', 9000)) });
+  registerAction({ id: 'menu:login', title: 'log in / log out', group: 'view', keywords: ['login', 'logout', 'sign in', 'sign out', 'account', 'discord'],
+    run: () => { const it = loginItem(); if (it.dead) toast(it.dead, 'info'); else it.run(); } });
 }
-const emenuEl = () => document.getElementById('emenu');
+
 export function toggleEMenu(force) {
   const m = emenuEl();
   const open = force ?? m.hidden;
-  m.hidden = !open;
-  document.body.classList.toggle('arranging', open);
-  if (open) {
-    let placed = false;
-    try {
-      const p = JSON.parse(localStorage.getItem(EMENUPOS_LS) || 'null');
-      if (p) p.y = Math.max(34, p.y);   // tab headroom on restore too
-      if (p && p.x >= 0) { m.style.left = `${p.x}px`; m.style.top = `${p.y}px`; m.style.right = m.style.bottom = 'auto'; placed = true; }
-    } catch {}
-    if (!placed) {
-      // pop out beside the rail, toward the roomier side of the mark
-      const r = el.dock.getBoundingClientRect();
-      const right = r.left > innerWidth / 2;
-      // folded mic/ear ride beside the ∃ — the menu must clear them too
-      let clearRight = r.right;
-      for (const id of ['micbtn', 'earbtn']) {
-        const g = document.getElementById(id)?.getBoundingClientRect();
-        if (g && g.left < r.right + 80 && g.top < r.bottom && g.bottom > r.top) clearRight = Math.max(clearRight, g.right);
-      }
-      // 'auto', never '' — the sheet's top:54px/left:10px resurrect on '' (the dock's lesson)
-      m.style.left = right ? 'auto' : `${Math.round(clearRight + 8)}px`;
-      m.style.right = right ? `${Math.round(innerWidth - r.left + 8)}px` : 'auto';
-      const h = el.hud.getBoundingClientRect();
-      const below = h.top < innerHeight / 2;
-      // ≥34px: the menu carries its tab ABOVE itself now — leave it headroom
-      m.style.top = below ? `${Math.max(34, Math.round(h.top))}px` : 'auto';
-      m.style.bottom = below ? 'auto' : `${Math.round(innerHeight - h.bottom)}px`;
-    }
-    paintEMenu();
-    clearStatusStrip(m);
-    dodgeEMenu(m);
+  if (!open) { closeSub(); m.hidden = true; return; }
+  m.hidden = false;
+  paintEMenu();
+  anchorBeside(m);
+}
+// Beside the ∃, on the side away from the rail's edge: to the right of a left rail (over the mic/ear/visor glyphs),
+// left of a right one, under a top rail, over a bottom one. Clamped to the viewport. Never remembered: a dropdown
+// hangs from what opened it.
+function anchorBeside(node) {
+  const h = el.hud.getBoundingClientRect();
+  const edge = el.dock.dataset.edge || 'left';
+  node.style.left = node.style.top = '0px'; node.style.right = node.style.bottom = 'auto';
+  const r = node.getBoundingClientRect();
+  let x = h.right + 6, y = h.top;
+  if (edge === 'right') x = h.left - 6 - r.width;
+  else if (edge === 'top') { x = h.left; y = h.bottom + 6; }
+  else if (edge === 'bottom') { x = h.left; y = h.top - 6 - r.height; }
+  node.style.left = `${Math.round(Math.max(4, Math.min(innerWidth - r.width - 4, x)))}px`;
+  node.style.top = `${Math.round(Math.max(4, Math.min(innerHeight - r.height - 4, y)))}px`;
+}
+
+// ---- the flyout: one at a time, beside its row
+function openSub(id) {
+  clearTimeout(subCloseT);
+  const s = subEl();
+  if (subFor !== id) {
+    subFor = id;
+    delete s.dataset.key;
+    s.innerHTML = '';
+    if (id === 'about') buildAbout(s); else buildPanels(s);
   }
+  s.hidden = false;
+  paintEMenu();
+  placeSub();
 }
-// The status chips (statuschips.js) sit on the ∃'s row at z 45, over the menu's 40: a menu opened into them would have
-// its tab and top rows covered. It opens BELOW them instead (on a horizontal rail, where the chips stack down the ∃'s
-// column, BESIDE them), its tab included — the tab hangs above the menu's box.
-function clearStatusStrip(m) {
-  const st = document.getElementById('hudstatus');
-  if (!st || st.hidden) return;
-  const s = st.getBoundingClientRect(), r = m.getBoundingClientRect();
-  if (!s.width || !r.width) return;
-  const tab = m.querySelector(':scope > .fr-head')?.offsetHeight ?? 0;
-  if (!(r.left < s.right + 6 && r.right > s.left - 6 && r.top - tab < s.bottom + 6 && r.bottom > s.top - 6)) return;
-  const horiz = el.dock.classList.contains('horizontal');
-  if (horiz) { m.style.left = `${Math.round(Math.min(innerWidth - r.width - 4, s.right + 8))}px`; m.style.right = 'auto'; }
-  else { m.style.top = `${Math.round(Math.min(innerHeight - r.height - 4, s.bottom + 6 + tab))}px`; m.style.bottom = 'auto'; }
+function closeSub() {
+  clearTimeout(subCloseT);
+  const s = subEl();
+  if (!s) return;
+  subFor = null; s.hidden = true; s.innerHTML = ''; delete s.dataset.key;
+  for (const r of emenuEl().querySelectorAll('.mrow.subopen')) r.classList.remove('subopen');
 }
-// The menu opens onto the nearest EMPTY spot (live 09-07 11:07: it opened over the profile panel). Its remembered
-// or default position is kept when clear; otherwise candidate positions spiral outward from it on a 40 px grid
-// and the closest one that overlaps no visible frame wins. Never persisted — a dodge is not a choice.
-function dodgeEMenu(m) {
-  const r = m.getBoundingClientRect(); if (!r.width) return;
-  const frames = [...document.querySelectorAll('.frame')].filter((f) => f.style.display !== 'none')   // frames are position:fixed — offsetParent is null for them, so don't test it
-    .map((f) => f.getBoundingClientRect()).filter((b) => b.width && b.height);
-  // …and the status chips, with the menu's tab headroom (it hangs above the box): a dodge must not land on them either
-  const st = document.getElementById('hudstatus');
-  if (st && !st.hidden) {
-    const s = st.getBoundingClientRect(), tab = m.querySelector(':scope > .fr-head')?.offsetHeight ?? 0;
-    if (s.width) frames.push({ left: s.left, right: s.right, top: s.top, bottom: s.bottom + tab });
+function placeSub() {
+  const s = subEl(), m = emenuEl();
+  if (!s || s.hidden || !subFor) return;
+  const row = m.querySelector(`.mrow[data-item="${subFor}"]`);
+  if (!row) return;
+  const mr = m.getBoundingClientRect(), rr = row.getBoundingClientRect();
+  s.style.left = s.style.top = '0px'; s.style.maxHeight = '';
+  const r = s.getBoundingClientRect();
+  // away from the rail: right of the menu, unless the rail is on the right; the other side when that one has no room
+  const right = mr.right + 2, left = mr.left - 2 - r.width;
+  const fitsR = right + r.width <= innerWidth - 4, fitsL = left >= 4;
+  let x, y;
+  if (fitsR || fitsL) {
+    x = (el.dock.dataset.edge === 'right' ? fitsL || !fitsR : !fitsR) ? left : right;
+    y = Math.max(4, Math.min(innerHeight - r.height - 4, rr.top - 6));   // its first row level with its parent row
+  } else {
+    // a phone: no room on either side — it drops BELOW its row, indented, so the row that opened it stays in view,
+    // and scrolls inside what is left of the screen rather than covering the row
+    x = Math.max(4, Math.min(innerWidth - r.width - 4, mr.left + 16));
+    y = rr.bottom + 2;
+    s.style.maxHeight = `${Math.max(120, innerHeight - y - 4)}px`;
   }
-  const hits = (x, y) => frames.some((b) => x < b.right + 6 && x + r.width > b.left - 6 && y < b.bottom + 6 && y + r.height > b.top - 6);
-  if (!hits(r.left, r.top)) return;
-  const W = innerWidth, H = innerHeight, step = 40;
-  let best = null;
-  for (let dy = 0; dy <= H; dy += step) for (const sy of dy ? [-1, 1] : [1]) {
-    const y = Math.round(r.top + sy * dy); if (y < 34 || y + r.height > H - 4) continue;
-    for (let dx = 0; dx <= W; dx += step) for (const sx of dx ? [-1, 1] : [1]) {
-      const x = Math.round(r.left + sx * dx); if (x < 4 || x + r.width > W - 4) continue;
-      const d = dx * dx + dy * dy; if (best && d >= best.d) continue;
-      if (!hits(x, y)) best = { x, y, d };
-    }
+  s.style.left = `${Math.round(x)}px`; s.style.top = `${Math.round(y)}px`;
+}
+
+// ---- rows
+const fsvgOr = (name, size, fallback = 'puzzle-piece') => fsvg(name, size) || fsvg(fallback, size);
+/** a top-level item: { id, icon, label, key?, detail?, sub?, dead?, away?, run? } */
+function topRow(it) {
+  const row = document.createElement('button');
+  row.className = `mrow${it.dead ? ' dead soft' : ''}${it.sub ? ' hassub' : ''}`;
+  row.dataset.item = it.id;
+  row.setAttribute('role', 'menuitem');
+  const tail = it.sub ? `<span class="mcaret">${fsvg('caret-right', 10)}</span>`
+    : it.key ? `<kbd class="mkey">${escapeHtml(it.key)}</kbd>` : it.tag ? `<span class="mtag">${escapeHtml(it.tag)}</span>` : '';
+  row.innerHTML = `${fsvgOr(it.icon, 15)}<span class="mname">${escapeHtml(it.label)}${it.detail ? ` <em class="mdetail">${escapeHtml(it.detail)}</em>` : ''}</span>${tail}`;
+  if (it.dead) {
+    // listed, not offered — and it SAYS why on a press too (a finger or a laser has no hover for the tooltip)
+    row.setAttribute('aria-disabled', 'true');
+    row.title = `${it.label} — ${it.dead}`;
+    row.onclick = () => { closeSub(); toast(`${it.label} — ${it.dead}`, 'info', 9000); };
+  } else if (it.sub) {
+    row.setAttribute('aria-haspopup', 'menu');
+    row.onclick = () => openSub(it.id);   // opens, never toggles shut: a hover may have opened it a moment ago
+    let t = null;
+    row.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') { clearTimeout(t); t = setTimeout(() => openSub(it.id), 110); } });
+    row.addEventListener('pointerleave', () => clearTimeout(t));
+  } else {
+    if (it.title) row.title = it.title;
+    row.onclick = () => { closeSub(); it.run(); if (it.away) toggleEMenu(false); else paintEMenu(); };
   }
-  if (!best) return;
-  m.style.left = `${best.x}px`; m.style.top = `${best.y}px`; m.style.right = m.style.bottom = 'auto';
+  // hovering a plain row shuts another row's flyout — after a beat, which the flyout cancels when the pointer reaches it
+  // (the way there can graze the row below)
+  if (!it.sub) row.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse' && subFor) { clearTimeout(subCloseT); subCloseT = setTimeout(closeSub, 250); } });
+  return row;
 }
-/** Every window back where it started, and the lantern's resting line too (it is not a frame, but it moves in
- *  HUD layout mode). The rail's own edge is NOT reset — where you put the rail is your decision (loadDockEdge). */
-export function resetHudLayout() { resetLayout(); resetPillPlace(); }
-function fsvgOrStroke(name, size) {
-  if (hasFill(name)) return fsvg(name, size);
-  try { return svg(name, size); } catch { return ''; }
+function loginItem() {
+  if (CONFIG.authed) return { id: 'login', icon: 'sign-out', label: 'Log out', detail: CONFIG.name, away: true, run: logOut };
+  const url = menuSrc.loginUrl?.();
+  if (url) return { id: 'login', icon: 'sign-in', label: 'Log in', detail: 'with Discord', away: true, run: () => { location.href = url; } };
+  return { id: 'login', icon: 'sign-in', label: 'Log in', dead: NO_LOGIN };
 }
+async function logOut() {
+  if (!confirm(`Log out of ${location.host}? You will leave "${CONFIG.world}".`)) return;
+  try { await fetch('/logout', { credentials: 'same-origin' }); } catch { /* the reload below still drops the session's page */ }
+  // net.js bounces a browser that USED to be signed in straight back through the login (silent while Discord still
+  // authorizes) — forget that, or logging out would log you back in
+  try { localStorage.removeItem('ew-authed'); } catch { /* private mode */ }
+  location.reload();
+}
+function topItems() {
+  const rights = !!menuSrc.buildRights?.();
+  return [
+    { id: 'save', icon: 'floppy-disk', label: 'Save world', dead: rights ? SAVE_WHY : NEEDS_RIGHTS, tag: rights ? 'not yet' : 'builders' },
+    { id: 'load', icon: 'folder-open', label: 'Load world', dead: rights ? LOAD_WHY : NEEDS_RIGHTS, tag: rights ? 'not yet' : 'builders' },
+    'sep',
+    { id: 'panels', icon: 'layout', label: 'Panels', sub: true },
+    'sep',
+    loginItem(),
+    { id: 'help', icon: 'question', label: 'Help', key: 'H', away: true, run: () => toggleHelp() },
+    { id: 'keys', icon: 'keyboard', label: 'Keys', away: true, run: () => openKeys() },
+    { id: 'about', icon: 'info', label: 'About', sub: true },
+  ];
+}
+const sep = () => { const s = document.createElement('div'); s.className = 'msep'; s.setAttribute('role', 'separator'); return s; };
+function buildTop(m) {
+  m.innerHTML = '';
+  for (const it of topItems()) m.appendChild(it === 'sep' ? sep() : topRow(it));
+}
+const topKey = () => `${!!menuSrc.buildRights?.()}|${CONFIG.authed ? 'out' : menuSrc.loginUrl?.() ? 'in' : 'none'}`;
+
+// Keys: the help sheet's key table (defs/ui/_help.json), opened at that table
+function openKeys() {
+  openOverlay(el.help);
+  const h = [...el.help.querySelectorAll('h2')].find((x) => /^keys$/i.test(x.textContent.trim()));
+  h?.scrollIntoView({ block: 'start' });
+}
+// About: what /version says this build is
+let versionAsk = null;
+function buildInfo() {
+  versionAsk ??= fetch('/version', { cache: 'no-store' }).then((r) => r.json()).then((v) => {
+    const sha = `${String(v.sha ?? '').slice(0, 7) || 'unknown'}${v.dirty === true ? ' +dirty' : ''}`;
+    const when = (t) => (t && t !== 'unknown' ? new Date(t).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'unknown');
+    return { sha, lines: [`build ${sha}`, `code from ${when(v.commitTime)}`, `server up since ${when(v.startedAt)}`] };
+  }).catch(() => { versionAsk = null; return { sha: 'unknown', lines: ['build unknown — /version did not answer'] }; });
+  return versionAsk;
+}
+function buildAbout(s) {
+  s.innerHTML = `<div class="minfo"><b>eidoverse-worlds</b></div><div class="minfo dim">asking the server…</div>`;
+  buildInfo().then((v) => {
+    if (subFor !== 'about') return;
+    s.innerHTML = `<div class="minfo"><b>eidoverse-worlds</b></div>${v.lines.map((l) => `<div class="minfo">${escapeHtml(l)}</div>`).join('')}`;
+    placeSub();
+  });
+}
+
 const emenuKey = () => dockEntries.filter((e) => !e.action || !e.gate || e.gate()).map((e) => e.id).join('|');
 function paintEMenu() {
   const m = emenuEl();
   if (!m || m.hidden) return;
+  if (m.dataset.key !== topKey()) { const keep = subFor; buildTop(m); m.dataset.key = topKey(); if (keep) m.querySelector(`.mrow[data-item="${keep}"]`)?.classList.add('subopen'); }
+  for (const r of m.querySelectorAll('.mrow[data-item]')) r.classList.toggle('subopen', r.dataset.item === subFor);
+  const s = subEl();
+  if (!s || s.hidden || subFor !== 'panels') return;
   // rows are built once per entry-set; the 2s sweep only moves their state
   const key = emenuKey();
-  if (m.dataset.key !== key) { buildEMenu(m); m.dataset.key = key; }
-  for (const row of m.querySelectorAll('.mrow[data-row]')) {
+  if (s.dataset.key !== key) { buildPanels(s); s.dataset.key = key; placeSub(); }
+  s.querySelector('.mrow[data-layout]')?.classList.toggle('open', isLayoutMode());
+  s.querySelector('.mrow[data-layout]')?.setAttribute('aria-checked', String(isLayoutMode()));
+  for (const row of s.querySelectorAll('.mrow[data-row]')) {
     const id = row.dataset.row;
     const entry = dockEntries.find((x) => x.id === id);
     const on = id === 'glyph:mic' ? micLive() : id === 'glyph:ear' ? earOn() : id === 'lantern' ? isLanternOpen()
@@ -864,44 +1014,61 @@ function paintEMenu() {
       if (g) g.outerHTML = glyph(16);
     }
   }
-  for (const pin of m.querySelectorAll('.mpin[data-pin]')) {
+  for (const pin of s.querySelectorAll('.mpin[data-pin]')) {
     const id = pin.dataset.pin;
     const on = id.startsWith('glyph:') ? glyphPinned(id.slice(6)) : id === 'lantern' ? pillPinned() : pins.has(id);
     pin.classList.toggle('on', on);
+    pin.setAttribute('aria-pressed', String(on));
+    if (pin.disabled) continue;
     pin.title = id === 'lantern'
       ? (on ? `hide the resting line — ${CHORD} and the rail's search still open the lantern` : 'rest the line bottom-centre again')
       : id.startsWith('glyph:')
       ? (on ? `detach ${pin.dataset.nm} from the rail` : `attach ${pin.dataset.nm} to the rail`)
       : (on ? 'unpin from rail' : 'pin to rail');
   }
-  const lock = m.querySelector('.mrow[data-lock]');
+  const lock = s.querySelector('.mrow[data-lock]');
   const lockHtml = `${fsvg(isLocked() ? 'lock' : 'lock-open', 15)}<span class="mname">${isLocked() ? 'layout locked' : 'layout unlocked'}</span>`;
   if (lock && lock.dataset.lock !== String(isLocked())) { lock.dataset.lock = String(isLocked()); lock.innerHTML = lockHtml; }
   lock?.classList.toggle('open', isLocked());
 }
+/** Every window back where it started, and the lantern's resting line too (it is not a frame, but it moves in
+ *  HUD layout mode). The rail's own edge is NOT reset — where you put the rail is your decision (loadDockEdge). */
+export function resetHudLayout() { resetLayout(); resetPillPlace(); }
 // THE LANTERN'S RESTING LINE (R, 10-01: "add it as a pin feature for the reverse-E menu (might need its own logo to
 // differentiate)"). A group of its own between the voice rows and the windows ("It's not *quite* a conventional panel
 // so it can't get docked"): the row opens the lantern, and its pin keeps the pill bottom-centre (lantern.js
 // setPillPinned — its own key, ew-lantern-pinned, like the glyphs'). Unpinned, the lantern is still one chord away.
 const LANTERN_GLYPH = 'lighthouse';   // the owner's pick (10-01); its own glyph, so it reads apart from the search glass
+function pinButton(id, onclick) {
+  const pin = document.createElement('button');
+  pin.className = 'mpin'; pin.dataset.pin = id;
+  pin.innerHTML = fsvg('push-pin', 13);
+  if (onclick) pin.onclick = (e) => { e.stopPropagation(); onclick(); paintDock(); paintEMenu(); };
+  return pin;
+}
 function lanternRow() {
   const row = document.createElement('button');
   row.className = 'mrow'; row.dataset.row = 'lantern'; row.dataset.lanternToggle = '';
   row.innerHTML = `${fsvg(LANTERN_GLYPH, 15)}<span class="mname">lantern</span>`;
   row.title = `the lantern — type or say anything (${CHORD}). Its pin keeps the resting line bottom-centre; unpinned, ${CHORD} and the rail's search still open it`;
   row.onclick = () => { isLanternOpen() ? closeLantern() : openLantern(); paintEMenu(); };
-  const pin = document.createElement('button');
-  pin.className = 'mpin'; pin.dataset.pin = 'lantern';
-  pin.innerHTML = fsvg('push-pin', 13);
-  pin.onclick = (e) => { e.stopPropagation(); setPillPinned(!pillPinned()); paintEMenu(); };
-  row.appendChild(pin);
+  row.appendChild(pinButton('lantern', () => setPillPinned(!pillPinned())));
   return row;
 }
-function buildEMenu(m) {
-  m.innerHTML = '<div class="fr-head"><span class="fr-title">menu</span><div class="fr-btns"><button class="fr-btn" title="close">\u2715</button></div></div>';
-  m.querySelector('.fr-btn').onclick = () => toggleEMenu(false);
-  // voice first: mic + ears lead the menu in their own section — they matter
-  // more than any window, and they wear the SAME glyphs as the floating pair
+// Panels ▸ — the old ∃ menu, whole: layout mode, the voice glyphs, the lantern, every window, the lock and the reset.
+// A row toggles its thing (a window opening beside the HUD is not "another window" — the menu stays); its pin is
+// whether that thing rides the rail.
+function buildPanels(s) {
+  s.innerHTML = '';
+  const lay = document.createElement('button');
+  lay.className = 'mrow'; lay.dataset.layout = ''; lay.setAttribute('role', 'menuitemcheckbox');
+  lay.innerHTML = `${fsvg('arrows-out-cardinal', 15)}<span class="mname">HUD layout mode</span>`;
+  lay.title = 'move panels, the rail (its grip) and the lantern\'s resting line — Esc or a click out in the world ends it';
+  lay.onclick = () => setLayoutMode(!isLayoutMode());
+  s.appendChild(lay);
+  s.appendChild(sep());
+  // voice first: mic + ears lead in their own section — they matter more than any window, and they wear the SAME
+  // glyphs as the floating pair
   const voiceRows = [['mic', 'mic', micGlyph, flipMic], ['ears', 'ear', earGlyph, flipEar], ['VR', 'xr', xrGlyph, flipXr]];
   for (const [nm, key, glyph, flip] of voiceRows) {
     // VR: the row is always LISTED, but greyed with an explainer when no headset
@@ -912,87 +1079,66 @@ function buildEMenu(m) {
     row.className = `mrow${dead ? ' dead' : ''}`; row.dataset.row = `glyph:${key}`;
     row.innerHTML = `${glyph(16)}<span class="mname">${nm}</span>`;
     if (dead) { row.disabled = true; row.title = 'no headset sensed — Chrome finds the OpenXR runtime only at browser start (chrome://restart after SteamVR is up)'; }
-    else row.onclick = async () => { await flip(); paintEMenu(); };
-    const pin = document.createElement('button');
-    pin.className = 'mpin'; pin.dataset.pin = `glyph:${key}`; pin.dataset.nm = nm;
-    pin.innerHTML = fsvg('push-pin', 13);
+    else row.onclick = async () => { if (key === 'xr') toggleEMenu(false); await flip(); paintEMenu(); };   // entering VR is another window
+    const pin = pinButton(`glyph:${key}`, dead ? null : () => setGlyphPinned(key, !glyphPinned(key)));
+    pin.dataset.nm = nm;
     if (dead) { pin.disabled = true; pin.title = 'nothing to pin until a headset is sensed'; }
-    else pin.onclick = (e) => { e.stopPropagation(); setGlyphPinned(key, !glyphPinned(key)); paintEMenu(); };
     row.appendChild(pin);
-    m.appendChild(row);
+    s.appendChild(row);
   }
-  { const s = document.createElement('div'); s.className = 'msep'; m.appendChild(s); }
-  m.appendChild(lanternRow());
-  { const s = document.createElement('div'); s.className = 'msep'; m.appendChild(s); }
+  s.appendChild(sep());
+  s.appendChild(lanternRow());
+  s.appendChild(sep());
   // ORDER AT PAINT TIME, not at registration. initDock sorts `last` to the end
-  // once, but registerPanel (ui.js:329) PUSHES later mods onto dockEntries after
-  // that sort has already run — so the rail stayed correct (addDockButton
-  // inserts before the first [data-last] button) while this menu drifted.
-  // Measured: dock [..., modx, mody, edit] vs menu [..., edit, modx, mody].
+  // once, but registerPanel PUSHES later mods onto dockEntries after that sort
+  // has already run — so the rail stayed correct (addDockButton inserts before
+  // the first [data-last] button) while this menu drifted.
   // R, 2026-09-11: "it should always be at the bottom of both until further notice."
   const ordered = [...dockEntries].sort((a, b) => (a.last ? 1 : 0) - (b.last ? 1 : 0));
+  const flipPin = (id) => () => { pins.has(id) ? pins.delete(id) : pins.add(id); savePins(); };
   for (const entry of ordered) {
     const { id, action, gate } = entry;
-    const icon = entry.icon ?? ID_ICON[id] ?? EMOJI_ICON[(entry.label ?? '').replace(/\uFE0F/g, '')];
+    const icon = iconOf(entry);
     if (action) {
       // ALWAYS a row, gated or not. R, 2026-09-11: "It SHOULD be in the
       // reverse-E menu regardless." A dead row is the menu's existing
-      // vocabulary for "listed, not offered" — the same treatment the VR row
-      // gets when no headset is sensed.
+      // vocabulary for "listed, not offered".
       const open = gate ? !!gate() : true;
       const row = document.createElement('button');
       row.className = `mrow${open ? '' : ' dead'}`; row.dataset.row = id;
       if (id === SEARCH_ENTRY.id) row.dataset.lanternToggle = '';
-      row.innerHTML = `${fsvg(icon, 15) || fsvg('puzzle-piece', 15)}<span class="mname">${id}</span>`;
+      row.innerHTML = `${fsvgOr(icon, 15)}<span class="mname">${id}</span>`;
       if (!open) { row.disabled = true; row.title = `${id} — needs build rights in this world`; }
       else row.onclick = () => { action(); paintDock(); paintEMenu(); };
-      // a pin, like any window: pinned = the wrench stays on the rail (live, 09-05)
-      const pin = document.createElement('button');
-      pin.className = 'mpin'; pin.dataset.pin = id;
-      pin.innerHTML = fsvg('push-pin', 13);
-      // Dead row, dead pin — the same two lines the VR row above uses. The
-      // CSS `pointer-events: none` only stops a hover; a programmatic or
-      // assistive activation still fired the handler and pinned a rail icon
-      // that is dead on arrival. (round 5)
-      if (!open) { pin.disabled = true; pin.title = `nothing to pin until you have build rights`; }
-      else pin.onclick = (e) => { e.stopPropagation(); pins.has(id) ? pins.delete(id) : pins.add(id); savePins(); paintDock(); paintEMenu(); };
+      // a pin, like any window: pinned = the wrench stays on the rail (live, 09-05). Dead row, dead pin: the CSS
+      // `pointer-events: none` only stops a hover; a programmatic or assistive activation still fired the handler
+      // and pinned a rail icon that is dead on arrival. (round 5)
+      const pin = pinButton(id, open ? flipPin(id) : null);
+      if (!open) { pin.disabled = true; pin.title = 'nothing to pin until you have build rights'; }
       row.appendChild(pin);
-      m.appendChild(row);
+      s.appendChild(row);
       continue;
     }
     if (!getFrame(id)) continue;   // an entry with no frame behind it (a caller's stale id) gets no row
     const row = document.createElement('button');
     row.className = 'mrow'; row.dataset.row = id;
-    row.innerHTML = `${fsvg(icon, 15) || fsvg('puzzle-piece', 15)}<span class="mname">${id}</span>`;
+    row.innerHTML = `${fsvgOr(icon, 15)}<span class="mname">${id}</span>`;
     // click = toggle; the row's brightness IS the open state
-    // (one less glyph to reason about)
-    row.onclick = () => {
-      const f = getFrame(id); if (!f) return;
-      f.toggle();
-      paintDock(); paintEMenu();
-    };
-    const pin = document.createElement('button');
-    pin.className = 'mpin'; pin.dataset.pin = id;
-    pin.innerHTML = fsvg('push-pin', 13);
-    pin.onclick = (e) => {
-      e.stopPropagation();
-      pins.has(id) ? pins.delete(id) : pins.add(id);
-      savePins(); paintDock(); paintEMenu();
-    };
-    row.appendChild(pin);
-    m.appendChild(row);
+    row.onclick = () => { const f = getFrame(id); if (!f) return; f.toggle(); paintDock(); paintEMenu(); };
+    row.appendChild(pinButton(id, flipPin(id)));
+    s.appendChild(row);
   }
-  const sep = document.createElement('div'); sep.className = 'msep'; m.appendChild(sep);
+  s.appendChild(sep());
   const lock = document.createElement('button');
   lock.className = 'mrow'; lock.dataset.lock = '';
   lock.onclick = () => { setLocked(!isLocked()); paintEMenu(); };
-  m.appendChild(lock);
+  s.appendChild(lock);
   const reset = document.createElement('button');
-  reset.className = 'mrow';
-  reset.innerHTML = `${fsvg('sparkle', 15)}<span class="mname">reset layout</span><span class="mdot"></span>`;
-  reset.title = 'put every window back where it started';
-  reset.onclick = () => { resetHudLayout(); paintDock(); };
-  m.appendChild(reset);
+  reset.className = 'mrow'; reset.dataset.reset = '';
+  reset.innerHTML = `${fsvg('sparkle', 15)}<span class="mname">reset layout</span>`;
+  reset.title = 'put every window back where it started, and the lantern\'s resting line';
+  reset.onclick = () => { resetHudLayout(); paintDock(); paintEMenu(); };
+  s.appendChild(reset);
 }
 
 // ============================================================ overlays

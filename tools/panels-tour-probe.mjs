@@ -132,6 +132,29 @@ async function tour(pg, tag, base) {
   // ---- chat
   await solo(pg, 'chat'); await sleep(500);
   await shot('chat');
+
+  // ---- the ∃ menu's Panels ▸ (the waterfall, owner 10-01): every window row opens its panel, on screen, and the
+  // menu stays open through all of them (a window opening beside the HUD is not "another window")
+  await pg.evaluate(async () => { const F = await import('/lib/frames.js'); for (const f of F.allFrames()) f.hide(); });
+  await pg.click('#hud'); await sleep(250);
+  await pg.click('#emenu .mrow[data-item="panels"]'); await sleep(300);
+  await shot('emenu-panels');
+  const rows = await pg.evaluate(async () => { const F = await import('/lib/frames.js');
+    return [...document.querySelectorAll('#emenu-sub .mrow[data-row]')].map((r) => r.dataset.row).filter((id) => F.getFrame(id)); });
+  check(`${tag} Panels ▸ lists a row for every panel (${rows.join(' · ')})`, ['profile', 'chat', 'world', 'emotes', 'debug', 'settings'].every((id) => rows.includes(id)), rows.join());
+  for (const id of rows) {
+    const sel = `#emenu-sub .mrow[data-row="${id}"]`;
+    await pg.click(sel, { position: { x: 30, y: 12 }, timeout: 3000 }).catch(() => pg.evaluate((s) => document.querySelector(s).click(), sel));
+    await sleep(400);
+    const st = await pg.evaluate((id) => { const fr = document.querySelector(`.frame[data-frame="${id}"]`); const r = fr?.getBoundingClientRect();
+      return { shown: !!fr && getComputedStyle(fr).display !== 'none', frame: r ? [r.left, r.top, r.right, r.bottom].map(Math.round) : null, vw: innerWidth, vh: innerHeight,
+        lit: document.querySelector(`#emenu-sub .mrow[data-row="${id}"]`)?.classList.contains('open'), menu: !document.getElementById('emenu').hidden && !document.getElementById('emenu-sub').hidden }; }, id);
+    check(`${tag} Panels ▸ ${id}: its row opens the panel on screen, lit, the menu still open`,
+      st.shown && st.lit && st.menu && st.frame[0] >= -1 && st.frame[1] >= -1 && st.frame[2] <= st.vw + 1 && st.frame[3] <= st.vh + 1, JSON.stringify(st));
+    await pg.click(sel, { position: { x: 30, y: 12 }, timeout: 3000 }).catch(() => pg.evaluate((s) => document.querySelector(s).click(), sel));
+    await sleep(250);
+  }
+  await pg.keyboard.press('Escape'); await sleep(150); await pg.keyboard.press('Escape'); await sleep(150);
   return n;
 }
 

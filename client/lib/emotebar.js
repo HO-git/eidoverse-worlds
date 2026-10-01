@@ -168,7 +168,7 @@ export function initEmoteBar() {
   // paint the bar beneath #micbtn/#earbtn/#dock. Frames cap at Z_HI=25 and that
   // chrome sits at 27 (#dock), 45 (#micbtn/#earbtn, mictoggle.js) and 60
   // (.capnotice) — the loop measures all four — so a bar left there can never win
-  // by stacking. (#emenu 40 and #trayzone 28 are not in the list at all.)
+  // by stacking. (#emenu 50 and #trayzone 28 are not in the list at all.)
   f.onShow(() => {
     // RE-DERIVE, DO NOT RATCHET. `Math.min(state.w, room)` can only ever shrink, and
     // state.w is restored from localStorage — so one bad width outlives the condition

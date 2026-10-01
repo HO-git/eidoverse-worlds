@@ -62,15 +62,23 @@ const rect = (pg, sel) => pg.evaluate((s) => { const e = document.querySelector(
   const r = e.getBoundingClientRect(); const cs = getComputedStyle(e);
   return { l: r.left, t: r.top, r: r.right, b: r.bottom, shown: cs.display !== 'none' && cs.visibility !== 'hidden' && +cs.opacity > 0 && r.width > 0 }; }, sel);
 const meets = (a, b) => a && b && a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
-// HUD layout mode (the old click-∃ behaviour) and the menu's reset layout — one place to say how they are reached
+// the ∃ menu is a dropdown (owner, 10-01): what the old menu held lives in its Panels ▸ flyout, HUD layout mode (the old
+// click-∃ arranging) included — one place to say how they are reached
+const menuOpen = (pg) => pg.evaluate(() => !document.getElementById('emenu').hidden);
+const openPanels = async (pg) => {
+  if (!(await menuOpen(pg))) { await pg.click('#hud'); await sleep(250); }
+  await pg.click('#emenu .mrow[data-item="panels"]'); await sleep(250);
+};
+const closeMenu = async (pg) => { for (let i = 0; i < 2 && (await menuOpen(pg)); i++) { await pg.keyboard.press('Escape'); await sleep(200); } };
 const layoutMode = async (pg, on) => {
   if ((await pg.evaluate(() => document.body.classList.contains('arranging'))) === on) return;
-  if (on) { await pg.click('#hud'); await sleep(250); } else { await pg.keyboard.press('Escape'); await sleep(250); }
+  if (on) { await openPanels(pg); await pg.click('#emenu-sub .mrow[data-layout]'); await sleep(200); await closeMenu(pg); }
+  else { await pg.keyboard.press('Escape'); await sleep(250); }
 };
 const resetLayoutViaMenu = async (pg) => {
-  await pg.click('#hud'); await sleep(250);
-  await pg.locator('#emenu .mrow', { hasText: 'reset layout' }).click(); await sleep(300);
-  await pg.keyboard.press('Escape'); await sleep(250);
+  await openPanels(pg);
+  await pg.click('#emenu-sub .mrow[data-reset]'); await sleep(300);
+  await closeMenu(pg);
 };
 const type = async (pg, text) => { await pg.keyboard.press('Control+k'); await sleep(150); await pg.keyboard.type(text, { delay: 15 }); await sleep(200); };
 
@@ -275,18 +283,18 @@ try {
   // UNPIN (R, 10-01: "add it as a pin feature for the reverse-E menu (might need its own logo to differentiate)"): the
   // ∃ menu's lantern row, in a group of its own after the voice rows, pins the resting line. Unpinned: no pill, but
   // Ctrl+K still opens it.
-  { const menuRow = () => pg.evaluate(() => { const r = document.querySelector('#emenu .mrow[data-row="lantern"]');
+  { const menuRow = () => pg.evaluate(() => { const r = document.querySelector('#emenu-sub .mrow[data-row="lantern"]');
       return r && { prev: r.previousElementSibling?.className ?? null, prevRow: r.previousElementSibling?.previousElementSibling?.dataset.row ?? null,
         next: r.nextElementSibling?.className ?? null, on: r.querySelector('.mpin')?.classList.contains('on'), pinTitle: r.querySelector('.mpin')?.title }; });
-    await pg.click('#hud'); await sleep(250);
+    await openPanels(pg);
     const r0 = await menuRow();
-    check('the ∃ menu lists the lantern in a group of its own after the voice rows, pinned', r0?.prev === 'msep' && r0?.next === 'msep'
+    check('the ∃ menu (Panels ▸) lists the lantern in a group of its own after the voice rows, pinned', r0?.prev === 'msep' && r0?.next === 'msep'
       && r0?.prevRow === 'glyph:xr' && r0?.on === true, JSON.stringify(r0));
     await shot(pg, '16a-emenu-lantern-group.png');
-    await pg.click('#emenu .mpin[data-pin="lantern"]'); await sleep(200);
+    await pg.click('#emenu-sub .mpin[data-pin="lantern"]'); await sleep(200);
     const r1 = await menuRow();
     await shot(pg, '16-emenu-lantern-unpinned.png');
-    await pg.keyboard.press('Escape'); await sleep(250);   // the open menu takes this Esc; the panels stay
+    await closeMenu(pg);   // the open menu takes these Escs (the flyout, then the menu); the panels stay
     const un = { pill: await rect(pg, '#lantern-pill'), saved: await pg.evaluate(() => localStorage.getItem('ew-lantern-pinned')),
       menu: await pg.evaluate(() => document.getElementById('emenu').hidden) };
     check('unpinned: no resting line, and the choice is saved', r1?.on === false && !un.pill?.shown && un.saved === '0' && un.menu, JSON.stringify({ r1, ...un }));
@@ -295,9 +303,9 @@ try {
     await pg.keyboard.press('Escape'); await sleep(250);
     check('…but Ctrl+K still opens the lantern, and Esc closes it', kU && !(await lantern(pg)).open);
     // pin it back for the rest of the walk (localStorage lives on in this context)
-    await pg.click('#hud'); await sleep(250);
-    await pg.click('#emenu .mpin[data-pin="lantern"]'); await sleep(200);
-    await pg.keyboard.press('Escape'); await sleep(250);
+    await openPanels(pg);
+    await pg.click('#emenu-sub .mpin[data-pin="lantern"]'); await sleep(200);
+    await closeMenu(pg);
     check('pinned again: the resting line is back', (await rect(pg, '#lantern-pill'))?.shown);
   }
 

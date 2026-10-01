@@ -67,7 +67,7 @@ function tier(q, text) {
   if (!text) return 0;
   const t = text.toLowerCase();
   if (t === q) return 1000;
-  if (t.startsWith(q)) return 900 - Math.min(50, t.length - q.length);   // "sky" beats "skyline" for "sk"
+  if (t.startsWith(q)) return 900 - Math.min(49, t.length - q.length);   // "sky" beats "skyline" for "sk"; never down to the key's 850
   const words = t.split(WORD_SPLIT).filter(Boolean);
   if (words.some((w) => w.startsWith(q))) return 700;
   const qw = q.split(/\s+/).filter(Boolean);

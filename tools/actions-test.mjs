@@ -52,6 +52,11 @@ check('…but one letter still finds a title or word that starts with it ("s" �
 check('the prefix length penalty is real: "sk" scores sky above skydive (not just the shorter-title tie-break)',
   A.score('sk', A.get('section:world:sky')) > A.score('sk', A.get('body:skydive')),
   `${A.score('sk', A.get('section:world:sky'))} vs ${A.score('sk', A.get('body:skydive'))}`);
+A.register({ id: 'tmp:long', title: 'volume of everything around you, every voice and every sound at once', group: 'voice', run: noop });
+check('a long title prefix still outranks a key ("v": the long title over the mic\'s V)',
+  A.score('v', A.get('tmp:long')) > A.score('v', A.get('voice:mic')),
+  `${A.score('v', A.get('tmp:long'))} vs ${A.score('v', A.get('voice:mic'))}`);
+A.unregister('tmp:long');
 
 console.log('keywords and keys');
 check('a keyword finds it: "mute" → voice:mic first', ids('mute')[0] === 'voice:mic', ids('mute').join());

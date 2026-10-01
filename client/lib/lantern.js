@@ -1,6 +1,6 @@
 // lantern — one line for everything: type to talk, `/` for commands, or a word
 // ("sky", "wave", "mute") for the matching ACTIONS, with their keys shown so the
-// keys teach themselves. Direction C of the HUD bluesky (hep/hud-bluesky).
+// keys teach themselves. Direction C of the HUD redesign mockups (the "lantern" direction).
 //
 // Additive: Ctrl/Cmd+K or the resting line bottom-centre opens it; Enter-to-chat is
 // untouched. It owns no knowledge of what can be done — that is lib/actions.js,

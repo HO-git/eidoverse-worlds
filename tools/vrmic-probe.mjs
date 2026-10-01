@@ -10,6 +10,8 @@
 //              retracted, a head-locked note says why, a flag is set; exactly one acquisition was attempted
 //   exit     — unaffected (the session ends and the page answers), the note is gone, the flat page then asks
 //   late     — the hung request finally resolves after the retraction: the device is stopped, never published
+//   unanswered — Allow, and the browser never answers: after vrmic.TRY_MS the step still offers "Enter VR", which enters;
+//              the late answer's tracks are stopped
 // Run under the house guards (flock the headless lock, perf-guard); clouds are forced off before boot here.
 //   bun tools/vrmic-probe.mjs [--shots <dir>]      (SHOT_BASE=160 numbers the shots)
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
@@ -178,6 +180,28 @@ try {
   await sleep(2500);
   { const m = await mic(); const tracks = await ev(() => { const s = window.__probe.streams.at(-1); return s ? s.getTracks().map((t) => t.readyState) : null; });
     check('late: the device that arrived after the retraction is stopped, never published', m.micOn === false && m.wanted === false && tracks?.every((s) => s === 'ended'), JSON.stringify({ m, tracks })); }
+
+  // ── unanswered: Allow, and the browser's prompt is never answered — the way in must not be held ──
+  await sleep(1700);
+  await ev(() => { window.__probe.perm = 'prompt'; window.__probe.hang = true; localStorage.removeItem('ew-vr-mic-choice'); });
+  await clickVisor();
+  await pg.waitForFunction(() => !!document.querySelector('#vrmic [data-act=allow]'), null, { timeout: 10000, polling: 100 }).catch(() => {});
+  const gumAt = (await P()).gum, tAllow = Date.now();
+  await ev(() => document.querySelector('#vrmic [data-act=allow]').click());
+  await pg.waitForFunction(() => !!document.querySelector('#vrmic [data-act=enter]'), null, { timeout: TRY_MS + 15000, polling: 250 }).catch(() => {});
+  { const p = await P(); const c = await card(); const res = await ev(() => document.querySelector('#vrmic [data-result]')?.dataset.result ?? null);
+    check(`unanswered: after the ${TRY_MS} ms bound the step offers "Enter VR" and says the browser hasn't answered`,
+      res === 'unanswered' && c?.btns.join('|') === 'Enter VR' && /hasn.t answered/.test(c?.text ?? '') && Date.now() - tAllow >= TRY_MS, JSON.stringify({ res, c, ms: Date.now() - tAllow }));
+    check('unanswered: one getUserMedia, still hanging', p.gum - gumAt === 1 && p.held === 1, JSON.stringify({ gum: p.gum - gumAt, held: p.held })); }
+  await shot('vrmic-step-unanswered-enter-vr');
+  await ev(() => document.querySelector('#vrmic [data-act=enter]').click());
+  await pg.waitForFunction(() => window.__probe.grants >= 4, null, { timeout: 30000, polling: 250 }).catch(() => {});
+  { const p = await P(); check('unanswered: "Enter VR" still enters — a session, and the step is gone', p.grants === 4 && !(await card()), JSON.stringify(p)); }
+  await ev(() => { window.__probe.hang = false; window.__probe.held.splice(0).forEach((h) => h.release()); });
+  await sleep(2500);
+  { const tracks = await ev(() => window.__probe.streams.at(-1)?.getTracks().map((t) => t.readyState) ?? null); const m = await mic();
+    check('unanswered: the prompt answered late, in VR — its tracks are stopped and the mic stays off', tracks?.length > 0 && tracks.every((s) => s === 'ended') && m.micOn === false, JSON.stringify({ tracks, m })); }
+  { const e = await endSession('unanswered'); check('unanswered: the exit completes', e.ok, `${e.s} s`); }
   check('no page errors', errs.length === 0, errs.slice(0, 3).join(' | '));
 } catch (e) { check('probe ran', false, `${e.stack || e.message}${errs.length ? ` — page errors: ${errs.slice(0, 3).join(' | ')}` : ''}`); }
 finally {

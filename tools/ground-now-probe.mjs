@@ -21,15 +21,15 @@ try {
   // still swaps its text node, and in VR the World panel re-rasterises on every mutation
   const quiet = await pg.evaluate(async () => {
     const el = document.querySelector('#sec-ground .ground-now'); let n = 0;
-    const mo = new MutationObserver((l) => { n += l.length; }); mo.observe(el, { childList: true, characterData: true, subtree: true });
+    const seen = []; const mo = new MutationObserver((l) => { n += l.length; for (const m of l) seen.push([m.type, m.target.nodeName, m.target.className ?? '', (m.target.textContent ?? '').slice(0, 80)]); }); mo.observe(el, { childList: true, characterData: true, subtree: true });
     const { sendVerb } = await import('./lib/net.js');
     sendVerb('light', { id: 'gnq1', pos: [3, 1, 3], color: 0xffd9a0, intensity: 4, range: 5 });
     await new Promise((r) => setTimeout(r, 1200));
     sendVerb('remove', { id: 'gnq1' });
     await new Promise((r) => setTimeout(r, 1200));
-    mo.disconnect(); return n;
+    mo.disconnect(); globalThis.__gnSeen = seen; return n;
   });
-  check('unrelated log entries leave the readout untouched (0 mutations)', quiet === 0, quiet);
+  check('unrelated log entries leave the readout untouched (0 mutations)', quiet === 0, JSON.stringify(await pg.evaluate(() => globalThis.__gnSeen)));
   // "you:" appears only while this client draws less than the world has, and names why
   const you = () => pg.evaluate(() => { const y = document.querySelector('#sec-ground .state-you'); return y && !y.hidden ? y.textContent : null; });
   const youFull = await you();

@@ -217,6 +217,17 @@ console.log('avatar.js:');
     check('...on clearances the clamps did not decide (the comparison has a subject)', inside(at15) && inside(atLift), `${at15} ${atLift}`);
     check('...which the size actually moved (the comparison has a subject)', !near(atScale[0], atScale[4], 1e-3), J(atScale));
   }
+  // the deaf mark's two bakes: its live map IS one of them, so each texture must be released exactly once (review 09-30 N6)
+  {
+    const A: any = await import('../client/lib/avatar.js');
+    const counts = new Map<any, number>();
+    const tex = () => { const t = new THREE.Texture(); t.addEventListener('dispose', () => counts.set(t, (counts.get(t) ?? 0) + 1)); return t; };
+    const small = tex(), large = tex();
+    const ear = new THREE.Sprite(new THREE.SpriteMaterial({ map: small })); ear.userData.maps = { small, large };
+    if (typeof A.disposeSprite === 'function') A.disposeSprite(ear);
+    check('disposeSprite releases each texture once, even when the live map is one of the bakes', counts.get(small) === 1 && counts.get(large) === 1,
+      `small ×${counts.get(small) ?? 0}, large ×${counts.get(large) ?? 0}`);
+  }
   // a pooled VRM that comes back still wearing its last owner's size is reset by the constructor
   const src = String(Avatar.prototype.constructor);
   check('the constructor writes a fresh size before measuring (a pooled VRM carries no stale scale)', /vrm\.scene\.scale\.setScalar\(1\)[\s\S]*_measurePlateRest\(\)/.test(src));

@@ -312,7 +312,8 @@ function textSprite(draw, w, h, scaleW, clear = false) {
   s.renderOrder = 99;
   return s;
 }
-const disposeSprite = (s) => { s.material.map?.dispose(); for (const t of Object.values(s.userData.maps ?? {})) t.dispose(); s.material.dispose(); };
+// the ear's live map is one of its bakes (userData.maps): a Set so each texture is released once
+export const disposeSprite = (s) => { for (const t of new Set([s.material.map, ...Object.values(s.userData.maps ?? {})])) t?.dispose(); s.material.dispose(); };
 // a token read at paint time — canvas sprites cannot use var(); a 'style' event repaints them
 const tokv = (n, fb) => (getComputedStyle(document.documentElement).getPropertyValue(n) || fb).trim();
 // every live Avatar, so a Style change can repaint the sprites it baked from

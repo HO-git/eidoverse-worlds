@@ -816,7 +816,11 @@ const ROUTES: Route[] = [
   {
     match: (u, req) => u.pathname === "/thumb" && req.method === "POST",
     handler: async ({ req, url }) => {
-      if (JOIN_TOKEN && url.searchParams.get("token") !== JOIN_TOKEN)
+      // The door key rides `Authorization: Bearer`, never the URL (access logs; see /clientlog). The old ?token= shape
+      // is refused outright so a stale client cannot keep leaking it.
+      if (url.searchParams.has("token")) return new Response("key belongs in the Authorization header", { status: 400 });
+      const auth = req.headers.get("authorization") ?? "";
+      if (JOIN_TOKEN && (auth.startsWith("Bearer ") ? auth.slice(7).trim() : "") !== JOIN_TOKEN)
         return new Response("token required", { status: 401 });
       const safe = (url.searchParams.get("name") ?? "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 48);
       if (!safe) return new Response("name required", { status: 400 });

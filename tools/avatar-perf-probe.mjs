@@ -11,10 +11,10 @@ const { browser, page } = await launchBrowser();
 try {
   const pg = await page();
   const errs = []; pg.on('pageerror', (e) => errs.push(String(e)));
-  const posts = [];
+  const posts = [], auths = [];
   await pg.route('**/thumb?**', async (route) => {
     if (route.request().method() !== 'POST') return route.continue();
-    posts.push(route.request().url());
+    posts.push(route.request().url()); auths.push(route.request().headers().authorization ?? null);
     // the current server's answer; OLD_SERVER=1 answers like a pre-stamp server (a portrait exists, perf ignored)
     await route.fulfill({ status: 200, contentType: 'application/json', body: process.env.OLD_SERVER ? '{"ok":true,"existed":true}' : '{"ok":true,"meta":true,"perf":true}' });
   });
@@ -52,7 +52,8 @@ try {
   check('wearing a body sends ONE perf stamp (POST /thumb, metadata only)', perfPosts.length === 1, perfPosts.length);
   check('…for the version it was loaded from (v = the path\'s ?v=)', !!q && q.get('v') === /[?&]v=(\d+)/.exec(live.path)?.[1] && q.get('name') === live.name, [q?.get('v'), live.path]);
   check('…its numbers are the loaded body\'s (statsOf on the live body), and real', !!sent && !!live.s && ['tris', 'draws', 'mats', 'alpha', 'bones', 'texMB'].every((k) => sent[k] === live.s[k]) && sent.tris > 1000 && sent.bones > 10, [sent, live.s]);
-  check('…with the page\'s token', q?.get('token') === world.key, q?.get('token'));
+  const auth = auths[posts.indexOf(perfPosts[0])];
+  check('…with the page\'s key as a Bearer header, never in the URL', auth === `Bearer ${world.key}` && !q?.has('token'), [auth, q?.get('token')]);
   // (2) wear ANOTHER body, then switch BACK — the switch-back really runs contributeThumbnail (mybody.js), so only the
   //     once-per-version flag can keep it from stamping twice (re-wearing the same body never calls it at all)
   const other = await pg.evaluate(async (wornName) => {

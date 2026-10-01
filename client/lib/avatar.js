@@ -2686,6 +2686,9 @@ export async function makeAvatar(id, libPath, { full = false, urgent = false } =
 // The body's loupe rank rides the same door (POST /thumb, metadata only — no picture): the numbers of the body as
 // LOADED (perfscope.statsOf, which bills MToon's outline groups a GLB parse can't see), once per body VERSION per
 // browser. The server recomputes the rank and shows it only while `v` is the current export (routes.ts avatarRoster).
+// the door key rides a header, never the URL (routes.ts /thumb refuses ?token=)
+const thumbAuth = (token) => (token ? { authorization: `Bearer ${token}` } : {});
+
 async function stampAvatarPerf(name, vrm, token, path) {
   const v = /[?&]v=(\d+)/.exec(path ?? '')?.[1];
   if (!v || !vrm?.scene) return;
@@ -2694,8 +2697,7 @@ async function stampAvatarPerf(name, vrm, token, path) {
   const { statsOf } = await import('./perfscope.js');
   const s = statsOf(vrm.scene, name);
   const q = new URLSearchParams({ name, v, perf: JSON.stringify({ tris: s.tris, draws: s.draws, mats: s.mats, alpha: s.alpha, bones: s.bones, texMB: s.texMB }) });
-  if (token) q.set('token', token);
-  const r = await fetch(`/thumb?${q}`, { method: 'POST' });
+  const r = await fetch(`/thumb?${q}`, { method: 'POST', headers: thumbAuth(token) });
   // only a server that SAYS it stored the stamp burns the once-per-version flag: an older server answers 200
   // {existed} for a body with a portrait and drops `perf` on the floor — the next wear must try again
   const j = r.ok ? await r.json().catch(() => null) : null;
@@ -2874,8 +2876,7 @@ export async function contributeThumbnail(name, vrm, token = '', { force = false
     if (!blob) return;
     const q = new URLSearchParams({ name, height: height.toFixed(2) });
     if (force) q.set('force', '1'); // a re-mint pass really does replace
-    if (token) q.set('token', token);
-    await fetch(`/thumb?${q}`, { method: 'POST', body: blob });
+    await fetch(`/thumb?${q}`, { method: 'POST', body: blob, headers: thumbAuth(token) });
     localStorage.setItem(`ew-thumb2-${name}`, '1');
   } catch (e) {
     console.warn('thumbnail contribution skipped', e);

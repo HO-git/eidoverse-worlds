@@ -15,7 +15,7 @@ const body = join(vdir, "bee.vrm"); writeFileSync(body, "not really a vrm");
 const t0 = new Date(1_700_000_000_000); utimesSync(body, t0, t0);
 const { route, avatarPerfParam, avatarRoster } = await import("../server/routes.ts");
 const vNow = () => String(Math.round(Bun.file(body).lastModified));
-const post = (q: Record<string, string>) => route(new Request(`http://x/thumb?${new URLSearchParams({ token: "t0k", name: "bee", ...q })}`, { method: "POST" }), {} as any);
+const post = (q: Record<string, string>) => route(new Request(`http://x/thumb?${new URLSearchParams({ name: "bee", ...q })}`, { method: "POST", headers: { authorization: "Bearer t0k" } }), {} as any);
 const meta = () => { try { return JSON.parse(readFileSync(join(root, "opt", "thumbs", "meta.json"), "utf8")); } catch { return {}; } };
 const good = { tris: 70_000, draws: 40, mats: 12, alpha: 2, bones: 120, texMB: 30.5 };
 
@@ -31,7 +31,12 @@ const lie = avatarPerfParam(JSON.stringify({ ...good, tris: 900_000, rank: 0, ra
 check("the rank is recomputed: 900k tris with a claimed 'excellent' ranks by its numbers", !!lie && lie.rank > 0 && lie.rankName !== "excellent" && lie.worst === "tris", lie);
 
 // 2. the route: token, perf-only POST (no picture), merge with height both ways
-check("no token → 401", (await route(new Request(`http://x/thumb?name=bee&perf=${encodeURIComponent(JSON.stringify(good))}&v=${vNow()}`, { method: "POST" }), {} as any)).status === 401);
+const perfQ = `name=bee&perf=${encodeURIComponent(JSON.stringify(good))}&v=${vNow()}`;
+check("no token → 401", (await route(new Request(`http://x/thumb?${perfQ}`, { method: "POST" }), {} as any)).status === 401);
+check("wrong Bearer → 401", (await route(new Request(`http://x/thumb?${perfQ}`, { method: "POST", headers: { authorization: "Bearer nope" } }), {} as any)).status === 401);
+// the door key never rides in a URL (access logs): the old ?token= shape is refused outright, even with the right key
+const rq = await route(new Request(`http://x/thumb?${perfQ}&token=t0k`, { method: "POST" }), {} as any);
+check("the key as ?token= → 400, nothing stored", rq.status === 400 && !meta().bee, [rq.status, meta()]);
 const r1 = await post({ height: "1.62" });
 check("a height-only POST still works as before (no picture → 415, height stored)", r1.status === 415 && meta().bee?.h === 1.62, [r1.status, meta()]);
 const r2 = await post({ perf: JSON.stringify(good), v: vNow() });

@@ -73,5 +73,18 @@ check('open: body.lantern-open (the hint bar would sit on the footer: both botto
 L.closeLantern();
 check('closed: the class is gone, the hint bar is back', !document.body.classList.contains('lantern-open'));
 
+console.log('LANTERN — a click inside it keeps it open');
+L.openLantern('');
+const pd = new Event('pointerdown', { bubbles: true, cancelable: true });
+root.querySelector('.ln-foot')!.dispatchEvent(pd);
+check('a pointerdown on the footer keeps the caret in the line (default prevented: no blur, no close 120 ms later)', pd.defaultPrevented);
+const ph = new Event('pointerdown', { bubbles: true, cancelable: true });
+root.querySelector('.ln-head')!.dispatchEvent(ph);
+check('…on the head around the line too', ph.defaultPrevented);
+const pi = new Event('pointerdown', { bubbles: true, cancelable: true });
+input.dispatchEvent(pi);
+check('…but not on the line itself (placing the caret is the line\'s own business)', !pi.defaultPrevented);
+L.closeLantern();
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

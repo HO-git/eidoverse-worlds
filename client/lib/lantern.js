@@ -251,8 +251,9 @@ export function initLantern({ submit, whisperTarget } = {}) {
     else if (e.key === 'Escape') { e.preventDefault(); closeLantern(); }
     else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyK') { e.preventDefault(); closeLantern(); }
   });
-  // rows are clicked, not focused: keep the caret in the line
-  listEl.addEventListener('pointerdown', (e) => { if (e.target.closest('.ln-row')) e.preventDefault(); });
+  // nothing in the panel takes focus from the line — rows, the gaps between them, the footer — or the
+  // blur would close it 120 ms later (below). The line itself keeps its own caret placement.
+  for (const t of ['pointerdown', 'mousedown']) root.addEventListener(t, (e) => { if (e.target !== input) e.preventDefault(); });
   listEl.addEventListener('pointermove', (e) => {
     const r = e.target.closest('.ln-row');
     if (r && Number(r.dataset.i) !== sel) select(Number(r.dataset.i), true);

@@ -240,6 +240,10 @@ check("the wrench has a row while gated open", !!row("edit"));
   check("…and the rail's search entry is untouched by it", btn("search")!.hidden === false);
   pin("lantern")!.click();
   check("clicking again pins it back", L.pillPinned() && pin("lantern")!.classList.contains("on"));
+  // every way in that also closes it is a TOGGLE to the lantern's blur (lantern.js): a held click on one of these used to
+  // close the lantern on blur and reopen it on release (measured in the browser, 10-01)
+  check("the rail's search entry and the menu's lantern and search rows are lantern toggles",
+    ["search"].every((id) => btn(id)!.hasAttribute("data-lantern-toggle")) && row("lantern")!.hasAttribute("data-lantern-toggle") && row("search")!.hasAttribute("data-lantern-toggle"));
   L.initLantern({});   // main.js boots it; nothing above needed it
   row("lantern")!.click();
   check("the row itself opens the lantern (like a window row opens its window)", L.isLanternOpen());

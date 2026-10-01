@@ -264,7 +264,7 @@ export function initLantern({ submit, whisperTarget } = {}) {
   document.body.appendChild(root);
 
   pill = document.createElement('button');
-  pill.id = 'lantern-pill'; pill.className = 'panel';
+  pill.id = 'lantern-pill'; pill.className = 'panel'; pill.dataset.lanternToggle = '';
   pill.title = `type or say anything (${CHORD})`;
   let fresh = true; try { fresh = localStorage.getItem(SEEN_LS) !== '1'; } catch { /* private mode */ }
   if (fresh) pill.classList.add('fresh');
@@ -296,9 +296,11 @@ export function initLantern({ submit, whisperTarget } = {}) {
     const r = e.target.closest('.ln-row');
     if (r) runRow(rows[Number(r.dataset.i)]);
   });
-  // a click anywhere else closes it (the pill toggles on its own)
+  // a click anywhere else closes it — except on a TOGGLE (the pill, the rail's search, the ∃ menu's rows: anything
+  // marked data-lantern-toggle), whose own click closes it. Closing here too raced the click: mousedown focuses the
+  // button, this fires 120 ms later, and a click released after that found the lantern closed and opened it again.
   input.addEventListener('blur', () => setTimeout(() => {
-    if (isLanternOpen() && !root.contains(document.activeElement) && document.activeElement !== pill) closeLantern();
+    if (isLanternOpen() && !root.contains(document.activeElement) && !document.activeElement?.closest?.('[data-lantern-toggle]')) closeLantern();
   }, 120));
 
   // Ctrl/Cmd+K from anywhere — even from inside the chat box — captured before the

@@ -476,6 +476,7 @@ function addDockButton(entry) {
     paintDock();
   };
   b.dataset.toggles = id;   // NOT data-frame — that belongs to the window itself
+  if (id === SEARCH_ENTRY.id) b.dataset.lanternToggle = '';   // its click closes an open lantern; the line's blur must not (lantern.js)
   // the same act, findable by name in the lantern; a key table may merge its key in (main.js)
   if (!entry.noAction) registerAction({
     id: `panel:${id}`, title: PANEL_TITLE[id] ?? id, group: 'panels', icon, detail: 'open / close the panel',
@@ -880,7 +881,7 @@ function paintEMenu() {
 const LANTERN_GLYPH = 'lighthouse';   // the owner's pick (10-01); its own glyph, so it reads apart from the search glass
 function lanternRow() {
   const row = document.createElement('button');
-  row.className = 'mrow'; row.dataset.row = 'lantern';
+  row.className = 'mrow'; row.dataset.row = 'lantern'; row.dataset.lanternToggle = '';
   row.innerHTML = `${fsvg(LANTERN_GLYPH, 15)}<span class="mname">lantern</span>`;
   row.title = `the lantern — type or say anything (${CHORD}). Its pin keeps the resting line bottom-centre; unpinned, ${CHORD} and the rail's search still open it`;
   row.onclick = () => { isLanternOpen() ? closeLantern() : openLantern(); paintEMenu(); };
@@ -936,6 +937,7 @@ function buildEMenu(m) {
       const open = gate ? !!gate() : true;
       const row = document.createElement('button');
       row.className = `mrow${open ? '' : ' dead'}`; row.dataset.row = id;
+      if (id === SEARCH_ENTRY.id) row.dataset.lanternToggle = '';
       row.innerHTML = `${fsvg(icon, 15) || fsvg('puzzle-piece', 15)}<span class="mname">${id}</span>`;
       if (!open) { row.disabled = true; row.title = `${id} — needs build rights in this world`; }
       else row.onclick = () => { action(); paintDock(); paintEMenu(); };

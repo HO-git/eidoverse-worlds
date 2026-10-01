@@ -106,6 +106,31 @@ btn.focus(); L.openLantern(''); key('Escape');
 check('a button that had focus (the pill, a rail entry) is not refocused: its Enter/Space would click it', document.activeElement !== btn,
   document.activeElement?.id || String(document.activeElement));
 
+console.log('LANTERN — a slow click on a toggle closes it (the rail\'s search, the ∃ menu\'s rows)');
+{ // Measured in the browser (10-01): mousedown focuses the button, the line's blur closes the lantern 120 ms later,
+  // and a click released after that found it closed and OPENED it again — "sometimes a bit off".
+  const tog = document.createElement('button'); tog.dataset.lanternToggle = '';
+  tog.onclick = () => (L.isLanternOpen() ? L.closeLantern() : L.openLantern());
+  document.body.append(tog);
+  L.openLantern('');
+  tog.focus();                                   // what the mousedown does
+  await new Promise((r) => setTimeout(r, 200));  // a held click
+  tog.click();
+  check('a toggle clicked after a 200 ms hold closes the lantern (the blur leaves it to the click)', !L.isLanternOpen());
+  await new Promise((r) => setTimeout(r, 200));
+  check('…and it stays closed', !L.isLanternOpen());
+  L.openLantern('');
+  tog.focus(); tog.click();
+  await new Promise((r) => setTimeout(r, 200));
+  check('a quick click closes it too, and nothing reopens it', !L.isLanternOpen());
+  const plain = document.createElement('button'); document.body.append(plain);
+  L.openLantern(''); plain.focus();
+  await new Promise((r) => setTimeout(r, 200));
+  check('focus moving to anything that is not a toggle still closes it', !L.isLanternOpen());
+  check('the resting pill is a toggle', document.getElementById('lantern-pill')!.hasAttribute('data-lantern-toggle'));
+  tog.remove(); plain.remove();
+}
+
 console.log('LANTERN — Ctrl+K from inside the line');
 L.openLantern('');
 key('k', { code: 'KeyK', ctrlKey: true });

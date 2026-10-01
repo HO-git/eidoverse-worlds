@@ -99,6 +99,7 @@ const _uPos = new THREE.Vector3(), _toT = new THREE.Vector3(), _axis = new THREE
 const _et = new THREE.Vector3(), _er = new THREE.Vector3(), _ex = new THREE.Vector3(), _ey = new THREE.Vector3(), _ctr = new THREE.Vector3(), _dir = new THREE.Vector3();
 const _prior = new THREE.Vector3(), _hp = new THREE.Vector3(), _ta = new THREE.Vector3(), _tb = new THREE.Vector3(), _tq = new THREE.Vector3(), _fa = new THREE.Vector3();
 const _q2 = new THREE.Quaternion(), _q3 = new THREE.Quaternion(), _qU = new THREE.Quaternion(), _qL = new THREE.Quaternion(), _qH = new THREE.Quaternion();
+const _lPos = new THREE.Vector3(), _jPos = new THREE.Vector3();
 const _pole = new THREE.Vector3(), _fq2 = new THREE.Quaternion(), _e2 = new THREE.Euler();   // solveLeg's scratch — dropped with the old arm solver's line on 09-19 and the whole XR tick died at feetTick (owner: 'one leg stayed straight out… hands weren't IKing')
 const smoothstep = (a, b, v) => { const t = THREE.MathUtils.clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 const wrapA = (a) => a - 2 * Math.PI * Math.floor((a + Math.PI) / (2 * Math.PI));
@@ -154,7 +155,8 @@ export function solveArm(vrm, side, targetPos, targetQuat, opts = {}) {
   U.quaternion.identity(); L.quaternion.identity(); H.quaternion.identity();
   vrm.scene.updateMatrixWorld(true);
   const uPos = U.getWorldPosition(_uPos);
-  const upper = L.position.length(), lower = H.position.length(), chain = upper + lower;
+  // WORLD lengths: targets are world, and vrm.scene wears size × the VR fit, so local offsets are not (review 09-30 B1)
+  const lPos = L.getWorldPosition(_lPos), upper = lPos.distanceTo(uPos), lower = H.getWorldPosition(_jPos).distanceTo(lPos), chain = upper + lower;
   if (upper < 1e-5 || lower < 1e-5) return false;
   // torso frame (world): the model faces +Z at hips identity; its left arm is +X
   const chest = h.getNormalizedBoneNode('upperChest') || h.getNormalizedBoneNode('chest') || h.getNormalizedBoneNode('spine');
@@ -411,9 +413,10 @@ export function solveLeg(vrm, side, targetPos, footYaw) {
   U.quaternion.identity(); L.quaternion.identity(); F.quaternion.identity();
   vrm.scene.updateMatrixWorld(true);
   const uPos = U.getWorldPosition(_uPos);
-  const l1 = L.position.length(), l2 = F.position.length();
+  const lPos = L.getWorldPosition(_lPos), l1 = lPos.distanceTo(uPos), l2 = F.getWorldPosition(_jPos).distanceTo(lPos);   // world, as solveArm
+  const ws = l1 / Math.max(L.position.length(), 1e-6);   // the clamp margins were metres on an unscaled body
   const toT = _toT.subVectors(targetPos, uPos);
-  let d = THREE.MathUtils.clamp(toT.length(), Math.abs(l1 - l2) + 0.02, l1 + l2 - 0.01);
+  let d = THREE.MathUtils.clamp(toT.length(), Math.abs(l1 - l2) + 0.02 * ws, l1 + l2 - 0.01 * ws);
   const K = Math.acos(THREE.MathUtils.clamp((l1 * l1 + l2 * l2 - d * d) / (2 * l1 * l2), -1, 1));
   const Kc = THREE.MathUtils.clamp(K, 25 * Math.PI / 180, 178 * Math.PI / 180);   // no hyperextension snap
   if (Kc !== K) d = Math.sqrt(Math.max(1e-6, l1 * l1 + l2 * l2 - 2 * l1 * l2 * Math.cos(Kc)));
@@ -560,7 +563,7 @@ export function tickXRBody(dt) {
   vrm.scene.position.set(0, 0, 0); vrm.scene.updateMatrixWorld(true);
   const le = h.getNormalizedBoneNode('leftEye'), re = h.getNormalizedBoneNode('rightEye'), hd = h.getNormalizedBoneNode('head');
   if (le && re) eyeW.copy(le.getWorldPosition(v1)).add(re.getWorldPosition(tmpS)).multiplyScalar(0.5);
-  else if (hd) eyeW.copy(hd.getWorldPosition(v1)).add(tmpS.set(0, 0.06, 0.10).applyQuaternion(hd.getWorldQuaternion(rigQ)));
+  else if (hd) eyeW.copy(hd.getWorldPosition(v1)).add(tmpS.set(0, 0.06, 0.10).multiplyScalar(vrm.scene.scale.x).applyQuaternion(hd.getWorldQuaternion(rigQ)));
   else return;
   delta.copy(hmdPos).sub(eyeW);
   av.root.getWorldQuaternion(rigQ).invert();          // root-local: the controller owns the root; we offset the VRM inside it

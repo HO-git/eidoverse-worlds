@@ -30,7 +30,7 @@ import { heightAt } from './terrain.js';
 import { surfaceUnder } from './colliders.js';
 import { DRIVEN_BONES } from './ragdoll.js';
 import { stroke as strokeIcon, strokeBold } from './icons.js';
-import { plateSize, plateClear, ownClearance, reachAbove, markBake, CLEAR_MIN } from './platesize.js';
+import { plateSize, plateClear, ownClearance, reachAbove, markBake, plateBox, CLEAR_MIN, PLATE_W } from './platesize.js';
 import { revealLevel } from './namereveal.js';
 import { crownEstimate, plateGap, plateAnchor, smoothY, DEAD as PLATE_DEAD } from './plateanchor.js';
 import { clampBodyScale, clampPlateY, plateLift, clipRate } from './bodyscale.js';
@@ -321,23 +321,31 @@ const tokv = (n, fb) => (getComputedStyle(document.documentElement).getPropertyV
 const liveAvatars = new Set();
 bus.on('style', () => { for (const a of liveAvatars) a.repaintLabel?.(); });
 
+// the name's font, and the glyphs that set every plate's height (platesize.js plateBox says why)
+const LABEL_FONT = '600 40px system-ui, "Segoe UI", sans-serif', LABEL_REF = 'Hdlgjpqy';
+const labelFont = (ctx) => { ctx.font = LABEL_FONT; try { ctx.letterSpacing = '1.5px'; } catch {} };
+let _labelCtx = null;
 const makeLabel = (name) => {
-  let pill = 0;
+  const text = name.slice(0, 24);
+  const m = (_labelCtx ??= document.createElement('canvas').getContext('2d'));
+  labelFont(m);
+  const ink = m.measureText(text), ref = m.measureText(LABEL_REF);
+  const box = plateBox({ asc: ink.actualBoundingBoxAscent, desc: ink.actualBoundingBoxDescent, width: ink.width },
+    { asc: ref.actualBoundingBoxAscent, desc: ref.actualBoundingBoxDescent });
   const s = textSprite((ctx) => {
   // humanist, not terminal (R, 08-30: "Matrix vibes, can we do better").
   // system-ui = Segoe on Windows: warm, rounded, no webfont race on a
   // canvas that draws the moment someone arrives.
-  ctx.font = '600 40px system-ui, "Segoe UI", sans-serif';
-  try { ctx.letterSpacing = '1.5px'; } catch {}
+  labelFont(ctx);
   ctx.textAlign = 'center';
-  const w = Math.min(500, ctx.measureText(name.slice(0, 24)).width + 40);
-  pill = w;
   ctx.fillStyle = tokv('--pill-bg', 'rgba(6,16,22,0.62)');
-  ctx.beginPath(); ctx.roundRect((512 - w) / 2, 6, w, 52, 26); ctx.fill();   // pill (R, 15:12)
+  ctx.beginPath(); ctx.roundRect((box.w - box.pillW) / 2, box.top, box.pillW, box.pillH, box.pillH / 2); ctx.fill();   // pill (R, 15:12)
   ctx.fillStyle = tokv('--pill-name', '#8fe8c8');
-  ctx.fillText(name.slice(0, 24), 256, 46);
-  }, 512, 64, 0.9, true);
-  s.userData.pill = pill / 512;   // the pill's share of the sprite's width: the ear and the hover card sit beside IT
+  ctx.fillText(text, box.w / 2, box.baseline);
+  }, box.w, box.h, PLATE_W, true);
+  s.userData.aspect = box.h / box.w;   // the sprite's height per metre of width: avatar.js sizes it by width each frame
+  s.userData.pillH = box.pillH / box.w;   // the pill's height, as a share of the sprite's width (the hover card's box)
+  s.userData.pill = box.pillW / box.w;   // the pill's share of the sprite's width: the ear and the hover card sit beside IT
   // Whether the viewer can SEE it, for the hover card (platecard.js): a GPU occlusion query on the plate's own draw,
   // so it is the same depth test the picture passes — walls hide it from the pointer exactly when they hide it from
   // the eye, its own body never does. The answer is a frame or two old (resolved async), and is read where the
@@ -386,7 +394,7 @@ const makeEar = () => {
   return s;
 };
 const EAR_GAP = 0.03;    // metres between pill and ear, at the plate's base size
-const EAR_K = 1.3;       // the ear's side, in plate heights
+const EAR_K = 1.3;       // the ear's side, in units of 64/512 of the plate's width (the plate's height before its pill was padded)
 const _earDir = new THREE.Vector3(), _earQ = new THREE.Quaternion(), _earQ2 = new THREE.Quaternion();
 // what hangs over the plate, in the body's frame: lifts tuned when the plate sat at a fixed 1.95 (bubble 2.3, pill 2.12,
 // pill over a bubble 2.72) — now they ride wherever the plate hangs (plateanchor.js), sitting and lying included
@@ -2482,7 +2490,7 @@ export class Avatar {
     this.label.userData.plateClear = plateClear(this._ownClear, d, rk);
     this.label.material.opacity = vis;
     this.label.visible = vis > 0.02 && !this.hideLabel;   // hideLabel: your own name is for OTHER eyes (set while presenting, xr.js selfFirstPerson)
-    this.label.scale.set(lw, lw * 64 / 512, 1);   // scale carries the aspect
+    this.label.scale.set(lw, lw * (this.label.userData.aspect ?? 64 / 512), 1);   // scale carries the aspect: the text keeps its size whatever the canvas height
     // the headphones beside it: fades toward setDeafMark's wish (the only motion it has), always at the plate's own fade
     const earWant = (this._earWant ?? 0) * (this.label.visible ? 1 : 0);
     this._earA = (this._earA ?? 0) + (earWant - (this._earA ?? 0)) * (1 - Math.exp(-dt / 0.12));

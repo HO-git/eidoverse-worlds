@@ -120,7 +120,7 @@ function plateRect(av, box) {
   _v.project(cam);
   const cx = box.left + (_v.x + 1) / 2 * W, cy = box.top + (1 - _v.y) / 2 * H;
   const lw = lab.scale.x;
-  const hw = lw * (lab.userData.pill ?? 0.5) / 2 * ppm, hh = lw * 52 / 1024 * ppm;
+  const hw = lw * (lab.userData.pill ?? 0.5) / 2 * ppm, hh = lw * (lab.userData.pillH ?? 52 / 512) / 2 * ppm;
   // the ear, when shown, belongs to the plate too (its right edge is where the card starts): it sits beside the pill,
   // one gap and its own width further right, at the plate's depth (avatar.js)
   const ear = av.ear?.visible ? (av.ear.position.distanceTo(lab.position) + av.ear.scale.x / 2) * ppm - hw : 0;

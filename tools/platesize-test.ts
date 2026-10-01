@@ -21,7 +21,7 @@ const check = (name: string, ok: boolean, detail = "") => {
 const capDeg = (d: number) => 2 * Math.atan((PLATE_CAP_H * plateSize(d).lw / PLATE_W) / 2 / d) * 180 / Math.PI;
 const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol * b;
 
-check("cap height is the measured one (30 px of 64 on a 0.1125 m sprite, ~0.053 m)", near(PLATE_CAP_H, 0.0527, 0.02), `${PLATE_CAP_H}`);
+check("cap height is the measured one (30 px at 0.9 m per 512 px, ~0.053 m)", near(PLATE_CAP_H, 0.0527, 0.02), `${PLATE_CAP_H}`);
 check("s = 1 at 2 m (world-sized up close)", plateSize(2).s === 1, JSON.stringify(plateSize(2)));
 check("lw = 0.9 at 2 m", plateSize(2).lw === 0.9, JSON.stringify(plateSize(2)));
 for (const d of [8, 12])
@@ -88,6 +88,24 @@ if (typeof P.markBake === "function") {
   check("mark bake: hysteresis — at 40 px it keeps whichever it was", P.markBake(40, "small") === "small" && P.markBake(40, "large") === "large");
   check("mark bake: a first frame in the band starts large", P.markBake(40, undefined) === "large");
 } else check("markBake exists", false);
+
+// the plate's box (owner, 10-01: "only a whisper of room between the g's and the edge"): the pill is sized from the
+// glyphs' measured ink, so the padding is the same above the tallest glyph and below the lowest descender, and a name
+// of capitals and a name of descenders get the same height (the font's reference glyphs set it)
+if (typeof P.plateBox === "function") {
+  const ref = { asc: 31.2, desc: 9.4 };   // ~ 'Hdgjpqy' at 600 40px system-ui, measured
+  const g = P.plateBox({ asc: 22, desc: 9.4, width: 210.5 }, ref), H = P.plateBox({ asc: 29.1, desc: 0, width: 140 }, ref);
+  const above = (b: any, asc: number) => b.baseline - Math.ceil(asc) - b.top, below = (b: any, desc: number) => b.top + b.pillH - (b.baseline + Math.ceil(desc));
+  check("box: 'ggg' and 'HHH' plates are the same height", g.h === H.h && g.pillH === H.pillH, JSON.stringify({ g, H }));
+  check(`box: ≥ ${P.PLATE_PAD_Y} px clear above the font's tallest ink and below its lowest descender, the same both ways`,
+    above(g, ref.asc) >= P.PLATE_PAD_Y && below(g, ref.desc) >= P.PLATE_PAD_Y && above(g, ref.asc) === below(g, ref.desc), JSON.stringify(g));
+  check(`box: ≥ ${P.PLATE_PAD_X} px either side of the name`, g.pillW >= Math.ceil(210.5) + 2 * P.PLATE_PAD_X, JSON.stringify(g));
+  check("box: the pill sits inside the canvas with a margin all round", g.top > 0 && g.top + g.pillH < g.h && g.pillW < g.w, JSON.stringify(g));
+  const tall = P.plateBox({ asc: 38, desc: 12, width: 100 }, ref);
+  check("box: a name whose ink reaches past the font's (Å, emoji) grows its pill rather than touching the edge",
+    above(tall, 38) >= P.PLATE_PAD_Y && below(tall, 12) >= P.PLATE_PAD_Y, JSON.stringify(tall));
+  check("box: a long name is clamped to the canvas", P.plateBox({ asc: 30, desc: 9, width: 900 }, ref).pillW <= 512 - 2 * P.PLATE_MARGIN);
+} else check("plateBox exists", false);
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

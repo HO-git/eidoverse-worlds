@@ -89,7 +89,7 @@ const readers = () => {
   v.project(cam);
   const b = cv.getBoundingClientRect();
   const x = b.left + (v.x + 1) / 2 * cv.clientWidth, y = b.top + (1 - v.y) / 2 * cv.clientHeight;
-  const hw = av.label.scale.x * (av.label.userData.pill ?? 0.5) / 2 * ppm, hh = av.label.scale.x * 52 / 1024 * ppm;
+  const hw = av.label.scale.x * (av.label.userData.pill ?? 0.5) / 2 * ppm, hh = av.label.scale.x * (av.label.userData.pillH ?? 52 / 512) / 2 * ppm;
   let ear = null;
   if (av.ear) {
     const e = new T.Vector3(); av.ear.getWorldPosition(e); e.project(cam);
@@ -192,6 +192,37 @@ try {
   }).catch((e) => ({ err: String(e).slice(0, 160) }));
   check('plate size: a far peer’s label width and fade are plateSize(world distance)',
     Math.abs(size.lw - size.want) < 0.01 && Math.abs(size.op - size.wantOp) < 0.02 && size.lw > 0.9, JSON.stringify(size));
+  // THE BAKE (owner, 10-01: "only a whisper of room between the g's and the edge"): the name's ink, measured in the
+  // baked canvas's own pixels, has room above and below inside the pill, the same both ways; a name of descenders and
+  // a name of capitals bake to the same height; and the sprite's height follows its canvas (the text keeps its size)
+  const plateBake = await pg.evaluate(async () => {
+    const av = EW.remotes.get('farmute')?.avatar; if (!av) return null;
+    const keep = av._labelName;
+    const read = (name) => {
+      av._labelName = name; av.repaintLabel();
+      const cv = av.label.material.map.image, x = cv.getContext('2d'), d = x.getImageData(0, 0, cv.width, cv.height).data;
+      const bg = x.getImageData(0, 0, 1, 1).data;   // the canvas corner: outside the pill
+      let pT = -1, pB = -1, tT = -1, tB = -1;
+      for (let y = 0; y < cv.height; y++) for (let i = 0; i < cv.width; i++) {
+        const k = (y * cv.width + i) * 4; if (d[k + 3] <= bg[3] + 8) continue;
+        if (pT < 0) pT = y; pB = y;
+        if (d[k + 1] > 150) { if (tT < 0) tT = y; tB = y; }   // name-hued (the name is bright; the pill is a dark ground)
+      }
+      return { name, h: cv.height, w: cv.width, pill: [pT, pB], ink: [tT, tB], above: tT - pT, below: pB - tB, aspect: av.label.userData.aspect };
+    };
+    const out = [read('guest-2ggs'), read('HHHH')];
+    av._labelName = keep; av.repaintLabel();
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    out.scaleOk = Math.abs(av.label.scale.y / av.label.scale.x - av.label.userData.aspect) < 1e-6;
+    return out;
+  }).catch((e) => ({ err: String(e).slice(0, 160) }));
+  console.log(`  · bake: ${JSON.stringify(plateBake)}`);
+  const [bg2, bH] = Array.isArray(plateBake) ? plateBake : [];
+  check('bake: "guest-2ggs" has ≥ 9 px of pill below its descenders and above its tallest glyph (it had ~2)',
+    bg2 && bg2.below >= 9 && bg2.above >= 9, JSON.stringify(bg2));
+  check('bake: …balanced above and below (within 4 px), and a name of capitals bakes to the same height',
+    bg2 && bH && Math.abs(bg2.above - bg2.below) <= 4 && bH.h === bg2.h && bH.above >= 9, JSON.stringify({ bg2, bH }));
+  check('bake: the sprite\'s height follows its canvas (scale y / x = canvas h / w)', plateBake?.scaleOk === true, JSON.stringify(plateBake?.scaleOk));
   check('ear: none for a near peer who hears', earOff(b), JSON.stringify(b?.ear));
   check('ear: none for a FAR peer (past voice range) with hearing off', earOff(c) && c?.hear === false, JSON.stringify(c));
   await shot(pg, '70-ear-near.png');

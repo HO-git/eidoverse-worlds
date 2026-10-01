@@ -17,10 +17,10 @@
 // faded out only past REVEAL_FULL–REVEAL_GONE. `k` is the eased reveal level, 0..1 (revealLevel), so press and
 // release both ease over REVEAL_EASE_MS instead of popping.
 
-export const PLATE_W = 0.9;            // metres: the label sprite's width at s = 1 (512×64 canvas)
-// Cap height of the 40 px name on the 64 px canvas, MEASURED (canvas measureText + raster rows of 'H' in headless
-// Chromium, 09-30: 30 px; Segoe UI Semibold is ~28). 30 px of 64 at a sprite 0.9 × 64/512 m tall.
-export const PLATE_CAP_H = 30 / 64 * (PLATE_W * 64 / 512);   // ≈ 0.0527 m
+export const PLATE_W = 0.9;            // metres: the label sprite's width at s = 1 (a 512 px wide canvas; its height is plateBox's)
+// Cap height of the 40 px name, MEASURED (canvas measureText + raster rows of 'H' in headless Chromium, 09-30: 30 px;
+// Segoe UI Semibold is ~28). The sprite is 0.9 m per 512 px whatever the canvas height, so 30 px is 30 × 0.9/512 m.
+export const PLATE_CAP_H = 30 * PLATE_W / 512;   // ≈ 0.0527 m
 export const TEXT_DEG = 0.6;           // the comfortable-reading angle the caps hold at range
 export const MAX_GROW = 3;             // the most a plate grows before perspective takes over again
 export const PLATE_D0 = PLATE_CAP_H / Math.tan(TEXT_DEG * Math.PI / 180);   // ≈ 5.0 m: where 0.6° starts needing help
@@ -80,3 +80,20 @@ export const revealEase = (r) => r * r * (3 - 2 * r);
 export const MARK_SMALL_BELOW = 36, MARK_LARGE_ABOVE = 44;
 /** px = the mark sprite's on-screen side in pixels; prev = 'small' | 'large' (or nothing) → which bake to show. */
 export const markBake = (px, prev) => px < MARK_SMALL_BELOW ? 'small' : px > MARK_LARGE_ABOVE ? 'large' : (prev === 'small' ? 'small' : 'large');
+
+
+// ---- the plate's box ----------------------------------------------------------------------------------------
+// avatar.js bakes the name onto a pill on a 512 px wide canvas. The pill is sized from the glyphs' MEASURED ink
+// (canvas measureText actualBoundingBox*), not from the font size (owner, 10-01: descenders touched the pill's edge).
+// Its height comes from the font's reference glyphs (a capital, the ascenders, the descenders), so "ggg" and "HHH" get
+// the same plate; a name whose own ink reaches further (Å, an emoji) grows its pill instead of touching the edge. Not
+// fontBoundingBox*: that box carries the font's line gap and sits well above the capitals, so the text would look low.
+export const PLATE_TEX_W = 512, PLATE_PAD_Y = 12, PLATE_PAD_X = 24, PLATE_MARGIN = 6;
+/** ink = the name's {asc, desc, width}; ref = the reference glyphs' {asc, desc} (px, at the bake font) →
+ *  { w, h: the canvas; pillW, pillH; top: the pill's top; baseline: where the name is drawn } (integer px) */
+export function plateBox(ink, ref) {
+  const asc = Math.ceil(Math.max(ink.asc || 0, ref.asc || 0)), desc = Math.ceil(Math.max(ink.desc || 0, ref.desc || 0));
+  const pillH = asc + desc + 2 * PLATE_PAD_Y;
+  const pillW = Math.min(PLATE_TEX_W - 2 * PLATE_MARGIN, Math.ceil(ink.width || 0) + 2 * PLATE_PAD_X);
+  return { w: PLATE_TEX_W, h: pillH + 2 * PLATE_MARGIN, pillW, pillH, top: PLATE_MARGIN, baseline: PLATE_MARGIN + PLATE_PAD_Y + asc };
+}

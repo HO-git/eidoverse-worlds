@@ -562,7 +562,10 @@ export function initDebug(p = {}) {
   // TEXT TABS BY JOB (owner, 09-29: Debug stays on the dock, its many collapsing sections become tabs):
   // physics = the ragdoll and its tuning, body = the secondary motion that rides a body (blink, hair,
   // wings), perf = what the frame costs. The frame numbers above stay put whichever tab is chosen.
-  const tabs = dbgTabs(stack, ['physics', 'body', 'perf']);
+  const tabs = dbgTabs(stack, ['physics', 'body', 'perf'], () => frame.visible);
+  // the remembered tab is chosen at boot with Debug closed: its groups wait until the panel is shown
+  const show = frame.show;
+  frame.show = () => { show.call(frame); tabs.flush(); return frame; };
   const phys = tabs.pane('physics');
   phys.append(
     viewRow('collider volumes', 'colliders', (v) => { if (!v) clearColliders(); }),
@@ -646,23 +649,24 @@ export function initDebug(p = {}) {
 }
 
 // Debug's text tabs: the strip is the profile's .pf-tabs recipe with no glyphs. A group inside a tab is
-// a quiet caption and a body; `build(body)` runs once, lazily, the first time its tab is shown — so an
-// unvisited tab costs nothing and the panel opens light. A group added to the tab already on screen
-// (perfscope arrives by dynamic import) builds at once.
-function dbgTabs(parent, names) {
+// a quiet caption and a body; `build(body)` runs once, lazily, the first time its tab is SEEN (chosen
+// while the panel shows) — so an unvisited tab costs nothing and the panel opens light. A group added to
+// the tab already on screen (perfscope arrives by dynamic import) builds at once.
+function dbgTabs(parent, names, shown) {
   const LS = 'ew-tab-debug';
   const strip = document.createElement('div');
   strip.className = 'pf-tabs dbg-tabs'; strip.setAttribute('role', 'tablist');
   parent.appendChild(strip);
   const tabs = new Map();
   let current = null;
+  const flush = () => { if (current && shown()) for (const g of tabs.get(current).pending.splice(0)) g(); };
   const show = (name) => {
     current = name;
     for (const [n, t] of tabs) {
       const on = n === name;
       t.btn.classList.toggle('on', on); t.btn.setAttribute('aria-selected', String(on)); t.pane.classList.toggle('open', on);
-      if (on) for (const g of t.pending.splice(0)) g();
     }
+    flush();
     try { localStorage.setItem(LS, name); } catch {}
   };
   for (const name of names) {
@@ -683,9 +687,10 @@ function dbgTabs(parent, names) {
       body.style.cssText = 'display:flex;flex-direction:column;gap:4px';
       t.pane.append(cap, body);
       const run = () => build(body);
-      if (current === name) run(); else t.pending.push(run);
+      if (current === name && shown()) run(); else t.pending.push(run);
       return body;
     },
+    flush,
     choose() { let want = null; try { want = localStorage.getItem(LS); } catch {} show(tabs.has(want) ? want : names[0]); },
   };
 }

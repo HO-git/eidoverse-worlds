@@ -8,6 +8,16 @@
 //
 // "Before" is emulated in-page: each body's _placePlate is swapped for the old line (label at 0, 1.95, 0) for the
 // shot, then restored — everything else on the frame is today's code.
+//
+// SEEN FROM ABOVE (owner, 10-01, a top-down shot with "guest-2ggs" on the face): one standing peer, the camera held at
+// eye level, 45°, 80° and 88° down onto its head (pinned in-page just before that body's update, so the plate lifts
+// for exactly that eye); the pill's screen rect, projected the way platecard.js does, must clear the head (its crown,
+// head bone + rest head span, sits under the rect's bottom edge), and the hover card must open on the lifted plate.
+// "Before" = _liftPlateForView stubbed out; at 80°/88° that must overlap, or the check proves nothing.
+// FIRST PERSON (owner, 10-01): wheel all the way in — your own plate (and what hangs off it) is not drawn; out again,
+// it is. Shots: looking up from first person, with the plate as it is and as it would be (the flag forced off).
+//
+//   --sections anchor,above,fp   (default: all three)
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
@@ -18,7 +28,10 @@ const avatars = arg('--avatars', 'claude').split(',');
 const prefix = Number(arg('--prefix', '90'));
 if (shotDir) mkdirSync(shotDir, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// k rendered frames (headless can run at a few fps: a sleep is not a frame)
+const settle = (pg, k = 4) => pg.evaluate((k) => new Promise((r) => { let i = 0; const t = () => (++i >= k ? r() : requestAnimationFrame(t)); requestAnimationFrame(t); }), k);
 const WORLD = 'anchors';
+const sections = new Set(arg('--sections', 'anchor,above,fp').split(','));
 
 const world = await ownedWorld({ env: { SKIP_OPT_SWEEP: '1' } });
 const { browser, close } = await launchBrowser();
@@ -53,7 +66,7 @@ try {
   const at = (fwd, right) => [fr.p[0] + fr.f[0] * fwd + fr.r[0] * right, fr.p[1], fr.p[2] + fr.f[1] * fwd + fr.r[1] * right];
   const yaw = Math.atan2(-fr.f[0], -fr.f[1]);   // face the camera
   let n = prefix;
-  for (const av of avatars) {
+  for (const av of sections.has('anchor') ? avatars : []) {
     const ids = ['stand', 'sit', 'lie'].map((c) => `${av}-${c}`);
     const base = { speed: 0, presence: 'present' };
     peer(ids[0], av, { ...base, yaw, clip: 'idle', p: at(4.2, -1.6) });
@@ -122,6 +135,137 @@ try {
     await pg.waitForFunction((ids) => ids.every((id) => !EW.remotes.get(id)), ids, { timeout: 30000 }).catch(() => {});
     await sleep(500);
   }
+
+  // ---- seen from above -------------------------------------------------------------------------------------------
+  if (sections.has('above')) {
+    const id = `${avatars[0].split('/').pop().replace(/\.vrm$/, '')}-above`;   // a library path (eidoverse/assets/vrms/x.vrm) or a bare name
+    peer(id, avatars[0], { speed: 0, presence: 'present', yaw, clip: 'idle', p: at(4, 0) });
+    await pg.waitForFunction((id) => { const r = EW.remotes.get(id); return r?.avatar?.label && !r.loading && !r.capsuleFor
+      && r.avatar.actions?.idle && r.avatar.current === r.avatar.actions.idle; }, id, { timeout: 150000 });
+    await pg.evaluate(() => { const me = EW.me(); if (me?.root) me.root.visible = false; });
+    // the camera, pinned: the follow camera's writes (position.lerp, lookAt) are switched off for the section and the
+    // pose is set directly, so every system and the draw see the same eye (the governor may stride the remotes)
+    await pg.evaluate(({ id, f }) => {
+      const a = EW.remotes.get(id).avatar, T = EW.THREE, head = a.vrm.humanoid.getRawBoneNode('head'), cam = EW.camera;
+      cam.__lookAt = cam.lookAt; cam.lookAt = function () {}; cam.position.__lerp = cam.position.lerp; cam.position.lerp = function () { return this; };
+      globalThis.__setCam = (c) => {
+        const t = c.around === 'plate' ? hung() : head.getWorldPosition(new T.Vector3()), p = c.pitch * Math.PI / 180, y = (c.yaw ?? 0) * Math.PI / 180;
+        const hx = f[0] * Math.cos(y) - f[1] * Math.sin(y), hz = f[0] * Math.sin(y) + f[1] * Math.cos(y);
+        cam.position.set(t.x + hx * c.dist * Math.cos(p), t.y + c.dist * Math.sin(p), t.z + hz * c.dist * Math.cos(p));
+        cam.__lookAt(t); cam.updateMatrixWorld(true);
+      };
+      // where the body hangs the plate, before any lift (dt 0: the chase does not move; the drawn plate is put back)
+      const hung = () => { const d = a.label.position.clone(); a._placePlate(0); const w = a.root.localToWorld(a.label.position.clone()); a.label.position.copy(d); return w; };
+      globalThis.__lift = () => +a.root.localToWorld(a.label.position.clone()).distanceTo(hung()).toFixed(5);
+      globalThis.__unpinCam = () => { cam.lookAt = cam.__lookAt; cam.position.lerp = cam.position.__lerp; };
+      // the plate rect as platecard.js projects it, the head bone, and the crown (head bone + rest head span)
+      globalThis.__above = () => {
+        const cam = EW.camera, cv = EW.renderer.domElement, b = cv.getBoundingClientRect();
+        const px = (v) => { const q = v.clone().project(cam); return { x: b.left + (q.x + 1) / 2 * cv.clientWidth, y: b.top + (1 - q.y) / 2 * cv.clientHeight }; };
+        const lw = a.label.getWorldPosition(new T.Vector3());
+        const depth = -lw.clone().applyMatrix4(cam.matrixWorldInverse).z;
+        const ppm = (cv.clientHeight / 2) / (Math.tan(T.MathUtils.degToRad(cam.fov) / 2) * depth);
+        const c = px(lw), hw = a.label.scale.x * (a.label.userData.pill ?? 0.5) / 2 * ppm, hh = a.label.scale.x * (a.label.userData.pillH ?? 52 / 512) / 2 * ppm;
+        const hb = head.getWorldPosition(new T.Vector3()), s = a.vrm.scene.getWorldScale(new T.Vector3()).y;
+        const crown = hb.clone(); crown.y += (a._plateRest?.headSpan ?? 0.2) * s;
+        const h = px(hb), cr = px(crown);
+        const camUp = new T.Vector3(0, 1, 0).applyQuaternion(cam.getWorldQuaternion(new T.Quaternion()));
+        return { rect: { l: c.x - hw, r: c.x + hw, t: c.y - hh, b: c.y + hh }, head: h, crown: cr, shown: a.label.visible,
+          plateOverHead: lw.clone().sub(hb).toArray().map((x) => +x.toFixed(3)), camUp: camUp.toArray().map((x) => +x.toFixed(3)) };
+      };
+    }, { id, f: [-fr.f[0], -fr.f[1]] });   // head → camera, horizontally: the peer's face side (it faces the original camera)
+    const views = [{ name: 'eye', pitch: 0, dist: 2.2 }, { name: '45', pitch: 45, dist: 2.2 }, { name: '80', pitch: 80, dist: 2.2 }, { name: '88', pitch: 88, dist: 2.2 }];
+    const res = {};
+    const clipAround = (m) => ({ x: Math.max(0, Math.min(1280 - 480, m.head.x - 240)), y: Math.max(0, Math.min(720 - 360, m.head.y - 220)), width: 480, height: 360 });
+    for (const v of views) {
+      await pg.evaluate((v) => __setCam(v), v);
+      await sleep(300); await settle(pg);
+      const m = await pg.evaluate(() => ({ ...__above(), lift: __lift() }));
+      const clears = m.shown && m.rect.b <= m.crown.y && !(m.head.x >= m.rect.l && m.head.x <= m.rect.r && m.head.y >= m.rect.t && m.head.y <= m.rect.b);
+      res[v.name] = { after: m };
+      if (shotDir) await pg.screenshot({ path: `${shotDir}/${n}-above-${v.name}-after.png`, clip: clipAround(m) });
+      // before: the lift off
+      await pg.evaluate((id) => { const a = EW.remotes.get(id).avatar; a.__lift = a._liftPlateForView; a._liftPlateForView = () => {}; }, id);
+      await settle(pg);
+      const mb = await pg.evaluate(() => __above());
+      res[v.name].before = mb;
+      if (shotDir) await pg.screenshot({ path: `${shotDir}/${n + 1}-above-${v.name}-before.png`, clip: clipAround(mb) });
+      await pg.evaluate((id) => { const a = EW.remotes.get(id).avatar; a._liftPlateForView = a.__lift; }, id);
+      await settle(pg);
+      console.log(`    ${v.name}:`, JSON.stringify({ lift: m.lift, rectB: m.rect.b, crownY: m.crown.y, headY: m.head.y, beforeRectB: mb.rect.b, over: m.plateOverHead, beforeOver: mb.plateOverHead },
+        (_k, x) => typeof x === 'number' ? +x.toFixed(x < 1 ? 3 : 1) : x));
+      check(`seen from ${v.name === 'eye' ? 'eye level' : v.name + '°'}: the pill's bottom edge clears the crown on screen, the head bone is outside it`, clears, JSON.stringify(m));
+      if (v.name === 'eye') check('...eye level: the plate is where it always was (lift 0)', Math.abs(m.rect.b - mb.rect.b) < 0.5, `${m.rect.b} vs ${mb.rect.b}`);
+      else if (v.pitch >= 80) check(`...and without the lift it would NOT (the check can fail)`, mb.rect.b > mb.crown.y, `before bottom ${mb.rect.b} crown ${mb.crown.y}`);
+      n += 2;
+    }
+    // steady: frame after frame at one eye, and from every side at one pitch (orbiting the plate) — the lift depends on
+    // the pitch, not on the idle sway or on which side you stand
+    {
+      await pg.evaluate(() => __setCam({ pitch: 80, dist: 2.2, around: 'plate' }));
+      await settle(pg);
+      const frames = await pg.evaluate(() => new Promise((res) => { const o = []; const t = () => { o.push(__lift()); if (o.length < 20) requestAnimationFrame(t); else res(o); }; requestAnimationFrame(t); }));
+      check('80°, 20 frames at one eye: the lift holds within 2 mm (no jitter; what moves is the idle hips under a standing plate)', frames[0] > 0.05 && Math.max(...frames) - Math.min(...frames) < 2e-3,
+        `min ${Math.min(...frames)} max ${Math.max(...frames)}`);
+      const sides = [];
+      for (let k = 0; k < 4; k++) {
+        await pg.evaluate((k) => __setCam({ pitch: 80, dist: 2.2, yaw: k * 90, around: 'plate' }), k);
+        await settle(pg);
+        sides.push(await pg.evaluate(() => __lift()));
+      }
+      check('orbiting the plate at 80° (four sides, 90° apart): the same lift on every side (within 1 mm)',
+        sides[0] > 0.05 && Math.max(...sides) - Math.min(...sides) < 1e-3, JSON.stringify(sides));
+      res.lift80 = sides[0];
+    }
+    // hover: the card opens on the lifted plate (platecard.js reads where the plate is)
+    {
+      await pg.evaluate(() => __setCam({ pitch: 80, dist: 2.2 }));
+      await settle(pg);
+      const m = await pg.evaluate(() => __above());
+      await pg.mouse.move((m.rect.l + m.rect.r) / 2, (m.rect.t + m.rect.b) / 2); await sleep(900);
+      const card = await pg.evaluate(({ id, x, y }) => { const c = document.getElementById('platecard'); const a = EW.remotes.get(id).avatar;
+        return { open: !!c && !c.hidden, for: c?.dataset.for ?? null, occluded: !!a.label.userData.occluded, under: document.elementFromPoint(x, y)?.id || document.elementFromPoint(x, y)?.tagName,
+          at: [Math.round(x), Math.round(y)], now: __above().rect }; }, { id, x: (m.rect.l + m.rect.r) / 2, y: (m.rect.t + m.rect.b) / 2 });
+      check('80°: resting the pointer on the lifted plate opens its card', card.open && card.for === id, JSON.stringify(card));
+      await pg.mouse.move(640, 700); await sleep(500);
+      await pg.keyboard.press('Escape'); await sleep(200);
+    }
+    out.above = res;
+    await pg.evaluate(() => __unpinCam());
+    endPeers();
+    await pg.waitForFunction((id) => !EW.remotes.get(id), id, { timeout: 30000 }).catch(() => {});
+  }
+
+  // ---- first person: your own plate --------------------------------------------------------------------------------
+  if (sections.has('fp')) {
+    await pg.evaluate(() => { const me = EW.me(); if (me?.root) me.root.visible = true; });
+    await pg.mouse.move(640, 360);
+    const own = () => pg.evaluate(() => { const me = EW.me(); return { shown: me.label.visible, hidden: me.ownPlateHidden, fp: me.firstPersonView, body: me.vrm.scene.visible }; });
+    await sleep(800);
+    const third = await own();
+    check('third person: your own plate is drawn', third.shown && !third.hidden && third.body, JSON.stringify(third));
+    for (let i = 0; i < 12; i++) { await pg.mouse.wheel(0, -400); await sleep(40); }
+    await sleep(800);
+    const fp = await own();
+    check('wheel all the way in (first person): your own plate is not drawn', fp.fp === true && !fp.shown && fp.hidden && !fp.body, JSON.stringify(fp));
+    // look up (right-drag) so the spot over your head is in frame, and shoot it as it is and as it would be
+    await pg.mouse.down({ button: 'right' }); await pg.mouse.move(640, 160, { steps: 8 }); await pg.mouse.up({ button: 'right' });
+    await sleep(700);
+    if (shotDir) await pg.screenshot({ path: `${shotDir}/${n}-fp-up-after.png` });
+    await pg.evaluate(() => Object.defineProperty(EW.me(), 'ownPlateHidden', { get: () => false, configurable: true }));
+    await sleep(500);
+    const forced = await own();
+    if (shotDir) await pg.screenshot({ path: `${shotDir}/${n + 1}-fp-up-before.png` });
+    await pg.evaluate(() => { delete EW.me().ownPlateHidden; });
+    console.log('    fp forced-visible (the before shot):', JSON.stringify(forced));
+    for (let i = 0; i < 12; i++) { await pg.mouse.wheel(0, 400); await sleep(40); }
+    await sleep(900);
+    const back = await own();
+    check('wheel back out (third person): it is drawn again', back.fp === false && back.shown && !back.hidden, JSON.stringify(back));
+    if (shotDir) await pg.screenshot({ path: `${shotDir}/${n + 2}-fp-third-again.png` });
+    n += 3;
+  }
+
   check('no page errors', errs.length === 0, errs.slice(0, 3).join(' | '));
   if (shotDir) writeFileSync(`${shotDir}/${prefix}-anchor-measure.json`, JSON.stringify(out, null, 1));
   await ctx.close();

@@ -204,9 +204,9 @@ document.addEventListener('pointerdown', (e) => {
     captureEl?.removeEventListener('lostpointercapture', finish);
     document.body.style.cursor = '';
     _resizing = false;
-    // the size axes this zone moved, and always the position on screen: commitRest stamps the current viewport,
-    // so a rest x/y left over from an older one would be judged against it (docked where it never was)
-    f.markMoved?.('xy' + (/[ew]/.test(z) ? 'w' : '') + (/[ns]/.test(z) ? 'h' : ''));
+    // only the axes this zone moved, each with its position: the axis's viewport is stamped, so a rest x
+    // left from an older viewport beside a new vw would read as docked where it never was
+    f.markMoved?.((/[ew]/.test(z) ? 'xw' : '') + (/[ns]/.test(z) ? 'yh' : ''));
     f.save();                              // a resize is deliberate too
 
   };
@@ -428,9 +428,12 @@ export function makeFrame(id, opts = {}) {
   // into the next load either.
   let rest = { x: state.x, y: state.y, w: state.w, h: state.h,
     vw: saved?.vw ?? innerWidth, vh: saved?.vh ?? innerHeight };
+  // Each viewport dimension is stamped only with its own axis: project() judges x/w against vw and y/h
+  // against vh, so committing a width must not re-date a y the window was squeezing at the time.
   function commitRest(axes = 'xywh') {
-    rest = { ...rest, vw: innerWidth, vh: innerHeight };
     for (const k of axes) rest[k] = state[k];
+    if (/[xw]/.test(axes)) rest.vw = innerWidth;
+    if (/[yh]/.test(axes)) rest.vh = innerHeight;
   }
   // Rest -> display for the current viewport. A frame that rested against the right
   // or bottom edge of ITS authoring viewport rides that edge (judged on the rest rect,

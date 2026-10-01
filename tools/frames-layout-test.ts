@@ -745,6 +745,30 @@ console.log("FRAMES — an edge resize while squeezed, then grow");
   vp(1900, 1000);
   check("s-edge: growing back does not dock it to the bottom", rect(s) === "100,162,300,150", rect(s));
   s.hide();
+
+  // The OTHER axis squeezed: a resize chooses only its own axis, so the axis it never touched
+  // must come back from the rest rect when the window grows, not from the clamp.
+  vp(1900, 1000);
+  const ey: any = measurable(makeFrame("sq-ey", { title: "ey", x: 100, y: 500, w: 400, h: 200 })); ey.show();
+  vp(1900, 400); ey.show();
+  check("setup: the height squeeze clamps it to y=162", ey.state.y === 162, rect(ey));
+  drag(ey.state.x + ey.state.w - 1, ey.state.y + 50, ey.state.x + ey.state.w - 101, ey.state.y + 50);
+  check("setup: the e-edge drag narrows it to 300", rect(ey) === "100,162,300,200", rect(ey));
+  vp(1900, 1000);
+  check("e-edge under a HEIGHT squeeze: growing back restores its y, not bottom-docked",
+    rect(ey) === "100,500,300,200", rect(ey));
+  ey.hide();
+
+  vp(1900, 1000);
+  const sx: any = measurable(makeFrame("sq-sx", { title: "sx", x: 900, y: 100, w: 400, h: 200 })); sx.show();
+  vp(600, 1000); sx.show();
+  check("setup: the width squeeze clamps it to x=192", sx.state.x === 192, rect(sx));
+  drag(sx.state.x + 200, sx.state.y + outerH(sx) - 1, sx.state.x + 200, sx.state.y + outerH(sx) - 51);
+  check("setup: the s-edge drag shortens it to 150", rect(sx) === "192,100,400,150", rect(sx));
+  vp(1900, 1000);
+  check("s-edge under a WIDTH squeeze: growing back restores its x, not right-docked",
+    rect(sx) === "900,100,400,150", rect(sx));
+  sx.hide();
   vp(1000, 700);
 }
 

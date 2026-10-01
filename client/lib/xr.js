@@ -33,6 +33,7 @@ import { myState, xrIntent, camYaw, setCamYaw, setXrProbe } from './controller.j
 import { ringEmoteEntries } from './emotebar.js';
 import { entities } from './world.js';
 import { flashHint, toast } from './ui.js';
+import { vrMicPreflight } from './vrmic.js';
 import { makePointerLine } from './pointer.js';
 import { markXrAbsent, registerXrGlyph, micGlyph, earGlyph, xrGlyph, micLive, earOn, flipEar } from './mictoggle.js';
 import { markActive } from './presence.js';
@@ -1360,18 +1361,24 @@ export async function initXR() {
       // nobody in the headset = dark desktop, working HUD. Once the session ends the page is a 2D panel again
       // and a controller trigger IS a click wherever the pointer sits. Nothing meant that; refuse for 1.5 s.
       if (performance.now() - lastLeaveAt < 1500) { tee('[xr] visor: enter ignored (left VR less than 1.5 s ago)'); return; }
-      if (XR_BOOT) { enterVR(); return; }
-      // Already on WebGL? Nothing to swap — enter in place, no page reload (owner, 09-07: kill the reload tax).
-      if (!renderer.backend?.isWebGPUBackend) { tee('[xr] visor: enter in place (WebGL, no reload)'); enterVR(); return; }
-      const swap = !!renderer.backend?.isWebGPUBackend;
-      const why = swap ? 'vr-webgl' : 'vr';
-      toast(swap ? 'restarting on WebGL 2 for VR — this browser can\'t present VR from WebGPU yet' : 'restarting in VR mode', 'info', 4000);
-      tee(`[xr] visor: reload (${why})`);
-      const u = new URL(location.href); u.searchParams.set('xr', '1'); u.searchParams.set('why', why);
-      setTimeout(() => { location.href = u; }, 700);
+      // ASK FOR THE MIC ON THE FLAT PAGE FIRST (R, 09-30): a permission prompt can't be relied on inside the session, so
+      // an open question is put here, where the browser can show it — then a fresh click enters (vrmic.js).
+      void vrMicPreflight(visorEnter);
     },
     live: () => presenting,
   });
+  // the visor's entry proper — straight from the press, or from the fresh click on the mic step
+  function visorEnter() {
+    if (XR_BOOT) { enterVR(); return; }
+    // Already on WebGL? Nothing to swap — enter in place, no page reload (owner, 09-07: kill the reload tax).
+    if (!renderer.backend?.isWebGPUBackend) { tee('[xr] visor: enter in place (WebGL, no reload)'); enterVR(); return; }
+    const swap = !!renderer.backend?.isWebGPUBackend;
+    const why = swap ? 'vr-webgl' : 'vr';
+    toast(swap ? 'restarting on WebGL 2 for VR — this browser can\'t present VR from WebGPU yet' : 'restarting in VR mode', 'info', 4000);
+    tee(`[xr] visor: reload (${why})`);
+    const u = new URL(location.href); u.searchParams.set('xr', '1'); u.searchParams.set('why', why);
+    setTimeout(() => { location.href = u; }, 700);
+  }
   setXrProbe(() => presenting);
 }
 

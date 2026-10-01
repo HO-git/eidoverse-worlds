@@ -589,7 +589,7 @@ registerSystem('xrmirror', () => tickXRMirror());           // desktop view whil
 // radial-menu actions: the ring speaks through the same flows the keyboard does
 bus.on('xr:sit', () => { if (!xrTrySitOn(null)) setPosture('sit'); });
 bus.on('xr:stand', () => xrDismountMe());
-bus.on('xr:mic', async () => { const { toggleMic } = await import('./lib/micstate.js'); await toggleMic(CONFIG.name); });
+bus.on('xr:mic', async () => { const { xrMicPress } = await import('./lib/vrmic.js'); await xrMicPress(); });   // in VR an open mic permission gets one bounded try, never a hang (vrmic.js); otherwise exactly toggleMic
 bus.on('xr:select', (id) => sceneSelect(id));
 let _pulseAt = 0;
 registerSystem('pulse', (dt, t, now) => {

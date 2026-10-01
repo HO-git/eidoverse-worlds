@@ -24,9 +24,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+// vrMicChoice: the pre-VR mic step (client/lib/vrmic.js) asks once per browser when the microphone permission is
+// still open — and a fresh headless context always reads 'prompt'. Every probe that clicks the visor to reach a
+// session would stop at that 2D step instead, so contexts start as a browser that already answered "not now"
+// (the step's own remembered choice; a written value is never overwritten). tools/vrmic-probe.mjs passes null to
+// drive the step itself.
 /** SFU_TEST_CHROME override ▸ managed browser. `mic: true` adds the fake-media
  *  flags a microphone probe needs (and its contexts get mic permission). */
-export async function launchBrowser({ mic = false } = {}) {
+export async function launchBrowser({ mic = false, vrMicChoice = 'later' } = {}) {
   const exe = process.env.SFU_TEST_CHROME;
   const args = mic ? ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
     '--autoplay-policy=no-user-gesture-required'] : [];
@@ -48,6 +53,7 @@ export async function launchBrowser({ mic = false } = {}) {
       ...(viewport ? { viewport } : {}),
       ...(touch ? { hasTouch: true, isMobile: true } : {}),
     });
+    if (vrMicChoice) await ctx.addInitScript((v) => { try { if (!localStorage.getItem('ew-vr-mic-choice')) localStorage.setItem('ew-vr-mic-choice', v); } catch { /* opaque origin */ } }, vrMicChoice);
     return ctx.newPage();
   };
   return { browser: b, page, close: () => b.close() };

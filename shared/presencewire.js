@@ -1,6 +1,7 @@
 // Presence (present / away / busy) on the embodied plane, the same way the
 // wing fold rides: one small field on the pose packet, no new message type,
-// relayed by the server untouched and remembered for late joiners with the
+// relayed by the server as sent (its fence, server/posecheck.ts, normalises only
+// the voice and body fields below) and remembered for late joiners with the
 // rest of the settled pose (a tester, 09-05: "broadcast that state so the Who panel
 // can show it"). Shared by client and server so both agree on the vocabulary.
 export const PRESENCE_STATES = ['present', 'away', 'busy'];

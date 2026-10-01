@@ -854,7 +854,7 @@ function applyChatPrefs() {
   if (logEl) logEl.style.fontSize = `${chatFs}px`;
   sideEl('cols')?.classList.toggle('side-left', sideSt.pos === 'left');
 }
-let gearToggle = null, gearAnchor = null, gearOpen = () => false;
+let gearToggle = null, gearAnchor = null;
 let chatFs = 14;
 const CMD_LS = 'ew-chat-md';
 let chatMd = true;   // *italic* **bold** `code` in the log — on by default (live, 09-05)
@@ -887,7 +887,6 @@ function initChatGear() {
     } else return;
     applyChatPrefs(); applySide(); paintPop();   // applySide repaints the chevron for the new side (live 09-07 23:25: it pointed the old way after a left↔right move)
   };
-  gearOpen = () => !pop.hidden;
   gearToggle = (anchor) => {
     pop.hidden = !pop.hidden;
     anchor.setAttribute('aria-expanded', String(!pop.hidden));

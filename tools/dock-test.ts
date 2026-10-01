@@ -368,6 +368,27 @@ check("the wrench has a row while gated open", !!row("edit"));
     named[named.length - 1] === "edit", JSON.stringify(named));
   check("...and last on the rail too", btns[btns.length - 1] === "edit", JSON.stringify(btns)); }
 
+{ // EVERY PIN, on → off → on with the menu open (owner, 10-01: "make sure they pin/unpin and highlight/unhighlight
+  // correctly"): the highlight follows at once, the menu stays open, and the choice is where the next boot reads it
+  const { glyphPinned } = await import("./dock-stub.mjs");
+  const L = await import("../client/lib/lantern.js");
+  const stored = (id: string) => id === "lantern" ? L.pillPinned() && localStorage.getItem("ew-lantern-pinned") !== "0"
+    : id.startsWith("glyph:") ? glyphPinned(id.slice(6)) : (savedPins() ?? []).includes(id);
+  const ids = [...menu().querySelectorAll(".mpin[data-pin]:not([disabled])")].map((p) => (p as HTMLElement).dataset.pin!);
+  check("the sweep covers the voice glyphs, the lantern, every window and the wrench", ["glyph:mic", "glyph:ear", "lantern", "chat", "world", "search", "edit"].every((id) => ids.includes(id)), ids.join());
+  for (const id of ids) {
+    const seen: string[] = [];
+    const start = pin(id)!.classList.contains("on");
+    for (let i = 0; i < 3; i++) {
+      pin(id)!.click();
+      const on = pin(id)!.classList.contains("on");
+      seen.push(`${on}/${stored(id)}/${menu().hidden ? "CLOSED" : "open"}`);
+    }
+    const want = [!start, start, !start].map((v) => `${v}/${v}/open`);
+    check(`pin ${id}: ${start ? "on→off→on→off" : "off→on→off→on"}, lit and stored alike, the menu open throughout`, seen.join() === want.join(), seen.join(" "));
+    pin(id)!.click();   // back where it started
+  }
+}
 check("the lock row and reset row close the menu", !!menu().querySelector(".mrow[data-lock]") && /reset layout/.test(menu().textContent!));
 row("chat")!.click();
 check("a row click opens that window and lights the row", getFrame("chat")!.visible && row("chat")!.classList.contains("open"));

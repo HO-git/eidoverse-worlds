@@ -761,10 +761,10 @@ export function updateFollowCamera(dt, me) {
     ).normalize();
     camera.lookAt(
       camera.position.x + _dir.x, camera.position.y + _dir.y, camera.position.z + _dir.z);
-    if (me) me.vrm.scene.visible = false;         // don't render the inside of your own head
+    if (me) { me.vrm.scene.visible = false; me.firstPersonView = true; }   // not the inside of your own head, nor your own name over it
     return;
   }
-  if (me) me.vrm.scene.visible = true;
+  if (me) { me.vrm.scene.visible = true; me.firstPersonView = false; }
 
   // desired eye, with a shoulder offset so the body doesn't sit dead-centre
   // over whatever you're aiming at

@@ -299,6 +299,19 @@ console.log('avatar.js:');
     rt.position.set(0, 0, 0); rt.rotation.y = 0; rt.scale.setScalar(1);
   }
 
+  // FIRST PERSON (owner, 10-01: "make it invisible in first-person mode"): your own plate is for other eyes — hidden
+  // in a headset (hideLabel, xr.js) and in desktop first person (firstPersonView, controller.js)
+  {
+    const a = rig().self;
+    check('third person: the own plate shows', a.ownPlateHidden === false, String(a.ownPlateHidden));
+    a.firstPersonView = true;
+    check('desktop first person: hidden', a.ownPlateHidden === true, String(a.ownPlateHidden));
+    a.firstPersonView = false; a.hideLabel = true;
+    check('presenting in VR: hidden', a.ownPlateHidden === true);
+    a.hideLabel = false;
+    check('back to third person: shows again', a.ownPlateHidden === false);
+  }
+
   const none = rig({ hipsHead: false });
   call(none.self, '_placePlate', 1 / 60);
   check('no hips/head bones: over the rest mesh top + gap', near(none.self.label.position.y, 1.8 + plateGap(1.8), 1e-6), J(none.self.label.position));

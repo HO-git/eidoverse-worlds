@@ -2075,6 +2075,10 @@ export class Avatar {
     if (d > 0) lab.position.copy(this.root.worldToLocal(_lvP.addScaledVector(_lvU, d)));
   }
 
+  /** Your own plate is for OTHER eyes: hidden while presenting (hideLabel, xr.js selfFirstPerson) and in desktop first
+   *  person (firstPersonView, controller.js updateFollowCamera) — with the mark, the typing pill and the bubble over it. */
+  get ownPlateHidden() { return !!(this.hideLabel || this.firstPersonView); }
+
   /** How far this body reaches from its plate's anchor, as the clearance its body-attached sprites write
    *  (platesize.js ownClearance/reachAbove), from where the plate hangs THAT frame (_placePlate runs first). The body is
    *  sampled ONCE (skinned positions, ≤4000 vertices a mesh, as it stands at first measure) into the VRM scene's own
@@ -2525,7 +2529,8 @@ export class Avatar {
     if (this._ownClear == null) this._ownClear = this._measureOwnClear();
     this.label.userData.plateClear = plateClear(this._ownClear, d, rk);
     this.label.material.opacity = vis;
-    this.label.visible = vis > 0.02 && !this.hideLabel;   // hideLabel: your own name is for OTHER eyes (set while presenting, xr.js selfFirstPerson)
+    const ownHidden = this.ownPlateHidden;
+    this.label.visible = vis > 0.02 && !ownHidden;
     this.label.scale.set(lw, lw * (this.label.userData.aspect ?? 64 / 512), 1);   // scale carries the aspect: the text keeps its size whatever the canvas height
     this._liftPlateForView(camera);   // after the size (the lift clears the pill as drawn), before what hangs off the plate
     // the headphones beside it: fades toward setDeafMark's wish (the only motion it has), always at the plate's own fade
@@ -2555,6 +2560,7 @@ export class Avatar {
       } else {
         this.bubble.position.copy(this.label.position).y += BUBBLE_LIFT;   // follows the plate down when they sit or lie
         this.bubble.material.opacity = THREE.MathUtils.clamp(1 - (d - 26) / 12, 0, 1);
+        this.bubble.visible = !ownHidden;
       }
     }
 
@@ -2569,7 +2575,7 @@ export class Avatar {
     // the pill sits above the plate's anchor: its own reach is the plate's plus the lift (triangle inequality); not revealed
     if (this.typing) this.typing.userData.plateClear = this._ownClear + Math.abs(this.typing.position.y - this.label.position.y);
     if (this.typing) {
-      this.typing.visible = typingNow;
+      this.typing.visible = typingNow && !ownHidden;
       if (typingNow) {
         if (now - this._typingDrawAt > 110) {
           this._typingDrawAt = now;

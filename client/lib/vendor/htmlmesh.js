@@ -1,7 +1,7 @@
 // Vendored from three examples/jsm/interactive/HTMLMesh.js (MIT — notice in ./LICENSE-three-MIT.txt) for eido's VR
-// quads (2026-09-05, from 0.185.1); the tree is on 0.186.0 and this file differs from 0.186's by 313 changed lines
-// on 09-30 (`diff client/lib/vendor/htmlmesh.js client/node_modules/three/examples/jsm/interactive/HTMLMesh.js | grep -c
-// '^[<>]'`): the EIDO patches below plus upstream drift. Used only by domquad.js (VR quads, part 4); inert on the desktop.
+// quads (2026-09-05, from 0.185.1). It differs from the installed three's copy by the EIDO patches below plus upstream
+// drift; to see the difference: `diff client/lib/vendor/htmlmesh.js client/node_modules/three/examples/jsm/interactive/HTMLMesh.js`.
+// Used only by domquad.js (VR quads, part 4); inert on the desktop.
 // Patches, each marked EIDO: (1) DPR scale — canvas rasterised at `scale` px per CSS px so the quad
 // matches xrpanels' 900 px/m; (2) inline <svg> drawn via serialise→Image (the icon system);
 // (3) `pause`/`resume` + a per-instance min interval so live panels don't re-rasterise at 60 Hz;

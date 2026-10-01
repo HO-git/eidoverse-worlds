@@ -240,6 +240,34 @@ try {
   console.log(`  · sky paint census: ${squares.natives} skinned native selects; ${squares.hidden} elements the DOM doesn't render; painted for them: ${JSON.stringify(squares.hits.slice(0, 12))}${squares.hits.length > 12 ? ` (+${squares.hits.length - 12})` : ''}`);
   check('sky: the quad paints NOTHING for an element the DOM does not render', squares.hits.length === 0, `${squares.hits.length} paints`);
 
+  // ── caption: World › Mods' sub-area captions (.sec-cap) paint as headings on the quad, not as body text — the rule
+  // above (a one-sided border), the capitals and the brand tint all reach the raster (owner, 10-01) ──
+  const caps = await ev(async () => {
+    document.getElementById('sec-mods-tab').click();
+    await new Promise((r) => setTimeout(r, 400));
+    const D = await import('./lib/domquad.js');
+    const t = D.domQuadTexture('world'); const root = t.dom;
+    const norm = document.createElement('canvas').getContext('2d');
+    const P = CanvasRenderingContext2D.prototype; const os = P.stroke, ot = P.fillText; const seen = new Map();
+    const gcs = window.getComputedStyle; let cur = null;
+    window.getComputedStyle = function (e, ...a) { cur = e; return gcs.call(this, e, ...a); };
+    const rec = (e) => { const c = e?.nodeType === 1 ? e : e?.parentElement; const cap = c?.closest?.('.sec-cap'); if (!cap) return null;
+      if (!seen.has(cap)) seen.set(cap, { text: cap.textContent, strokes: [], texts: [] }); return seen.get(cap); };
+    P.stroke = function (...a) { const r = rec(cur); if (r) r.strokes.push(this.strokeStyle); return os.apply(this, a); };
+    P.fillText = function (txt, ...a) { const r = rec(cur); if (r) r.texts.push({ txt, fill: this.fillStyle, font: this.font }); return ot.call(this, txt, ...a); };
+    try { t.paused = false; t.update(); } finally { P.stroke = os; P.fillText = ot; window.getComputedStyle = gcs; }
+    const out = [...seen.entries()].map(([el, r]) => { const cs = gcs(el); norm.fillStyle = cs.color; const want = norm.fillStyle;
+      norm.fillStyle = gcs(el.closest('.body') ?? el.parentElement).color; return { ...r, first: el === el.parentElement.firstElementChild, want, body: norm.fillStyle }; });
+    return { caps: out, total: root.querySelectorAll('.sec-cap').length };
+  });
+  console.log(`  · mods captions: ${JSON.stringify(caps.caps.map((c) => ({ t: c.text, rule: c.strokes.length, texts: c.texts.map((x) => x.txt), fill: c.texts[0]?.fill })))}`);
+  check('caption: every World › Mods caption is painted on the quad', caps.total >= 3 && caps.caps.length === caps.total, `${caps.caps.length}/${caps.total}`);
+  check('caption: each is painted in capitals, bold, in its own tint (not the body text colour)',
+    caps.caps.length > 0 && caps.caps.every((c) => c.texts.length > 0 && c.texts.every((x) => x.txt === x.txt.toUpperCase() && /^(600|bold)/.test(x.font)) && c.texts[0].fill === c.want && c.want !== c.body),
+    JSON.stringify(caps.caps.map((c) => [c.text, c.texts[0], c.want, c.body])));
+  check('caption: every caption but a pane\'s first strokes a rule above it on the quad',
+    caps.caps.length > 0 && caps.caps.every((c) => c.first ? c.strokes.length === 0 : c.strokes.length === 1), JSON.stringify(caps.caps.map((c) => [c.text, c.first, c.strokes])));
+
   // ── dimmed: partial opacity, desktop (Chrome's own compositor) vs the quad's raster, pixel for pixel ──
   // A: one element at .5 · B: a .5 GROUP whose child covers its own background (per-paint alpha would let the parent's
   // amber bleed through the child) · C: .5 inside .5 = .25 · D: a dead row at .42 (the house `.mrow.dead`) · E: an

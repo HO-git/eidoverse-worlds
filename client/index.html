@@ -644,9 +644,13 @@ a:hover { color: var(--fg); text-decoration-color: var(--brand); }
 .dbg-pane { display: none; flex-direction: column; gap: 4px; }
 .dbg-pane.open { display: flex; }
 .dbg-group-body > button { align-self: flex-start; }   /* the panes' rule: a lone button hugs its words */
-/* a caption inside a pane: groups rows without another level of collapsing (Debug's groups, the mods pane) */
-.dbg-group, .sec-cap { font-size: var(--fs-xs); letter-spacing: .06em; text-transform: lowercase; color: color-mix(in srgb, var(--brand) 35%, var(--fg)); margin: 8px 0 2px; }
-.dbg-group:first-child, .sec-cap:first-child { margin-top: 2px; }
+/* a caption inside a pane: groups rows without another level of collapsing (Debug's groups, the mods pane).
+   It must read as the START of a sub-area (owner, 10-01: "looks nearly identical to other text"): a hairline
+   above, brand-tinted capitals, more air above than below. The VR quad (htmlmesh) paints uppercase, the weight,
+   the colour and a one-sided border, but not letter-spacing, so the caption holds up without the spacing. */
+.dbg-group, .sec-cap { font-size: var(--fs-xs); font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--brand) 70%, var(--dim)); border-top: 1px solid var(--edge); padding-top: 7px; margin: 10px 0 2px; }
+.dbg-group:first-child, .sec-cap:first-child { margin-top: 2px; padding-top: 0; border-top: 0; }
 /* a list nested in a pane is not a second scroller: the frame's .stack scrolls, this one only groups */
 .sec .stack { padding: 0; flex: none; min-height: auto; }
 /* the mods pane (mods.js): name + what it is on the left, its control on the right; a row with several

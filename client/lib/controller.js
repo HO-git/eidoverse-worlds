@@ -709,7 +709,7 @@ export function updateMe(dt, me) {
   // The policy itself lives in locomotion_clip.js so it can be driven directly
   // (#196 review B2: this path selects the clip AND its blend, and nothing bound
   // it). Flight picks its own clip and returns before this line.
-  const sel = selectClip({ mantle, jumped, airborneFor, wantMove, speed: myState.speed, posture, seat: myState.seat });
+  const sel = selectClip({ mantle, jumped, airborneFor, wantMove, speed: myState.speed, scale: me.userScale, posture, seat: myState.seat });
   myState.clip = sel.clip;
 
   me.setClip(myState.clip, myState.speed, sel.opts);

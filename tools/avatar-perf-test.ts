@@ -2,12 +2,13 @@
 // picture) validates the client-written numbers, RECOMPUTES the rank (a client-sent rank is ignored), MERGES into
 // thumbs/meta.json (a height stamp and a perf stamp never erase each other), and the roster (/avatars) shows the rank
 // only while `v` is the body's current version (a re-export withholds it). Real route(), temp dirs.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, utimesSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 let pass = 0, fail = 0;
 const check = (n: string, ok: boolean, d: unknown = "") => { ok ? pass++ : fail++; console.log(`  ${ok ? "\x1b[32m✓" : "\x1b[31m✗"}\x1b[0m ${n}${ok ? "" : `  ${JSON.stringify(d)}`}`); };
 const root = mkdtempSync(join(tmpdir(), "avperf-"));
+process.on("exit", () => rmSync(root, { recursive: true, force: true }));   // a throw mid-test too
 Object.assign(process.env, { SKIP_OPT_SWEEP: "1", WORLDS_DIR: join(root, "worlds"), OPT_DIR: join(root, "opt"), EIDOVERSE_DIR: join(root, "lib"), JOIN_TOKEN: "t0k", KTX2_TOKTX: "" });
 const vdir = join(root, "lib", "eidoverse/assets/vrms"); mkdirSync(vdir, { recursive: true });
 const body = join(vdir, "bee.vrm"); writeFileSync(body, "not really a vrm");

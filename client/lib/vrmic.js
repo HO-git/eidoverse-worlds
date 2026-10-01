@@ -258,13 +258,15 @@ export function vrNote(text, ms = 7000) {
     mesh.renderOrder = 3000; mesh.frustumCulled = false; mesh.position.set(0, -0.14, -0.9); mesh.name = 'vrmic-note';
     camera.add(mesh);
     note = { mesh, tex, canvas: cv, timer: setTimeout(clearNote, ms) };
-    Object.assign(globalThis.__vrmic, { noteCanvas: cv, noteMesh: mesh, noteAt: performance.now(), noteParent: mesh.parent?.type ?? null, noteZ: mesh.position.z });
+    const m = mesh.material;
+    Object.assign(globalThis.__vrmic, { noteCanvas: cv, noteMesh: mesh, noteAt: performance.now(), noteParent: mesh.parent?.type ?? null, noteZ: mesh.position.z,
+      noteMat: { node: !!m.isNodeMaterial, output: !!m.outputNode, depthTest: m.depthTest, depthWrite: m.depthWrite } });
   } catch (e) { flashHint(text); console.warn('[vrmic] note', e); }
 }
 function clearNote() {
   if (!note) return;
   clearTimeout(note.timer);
-  if (globalThis.__vrmic) globalThis.__vrmic.noteClearedAt = performance.now();
+  if (globalThis.__vrmic) Object.assign(globalThis.__vrmic, { noteClearedAt: performance.now(), noteCanvas: null, noteMesh: null });
   note.mesh.removeFromParent(); note.mesh.geometry.dispose(); note.mesh.material.dispose(); note.tex.dispose();
   note = null;
 }

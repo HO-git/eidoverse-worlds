@@ -156,8 +156,7 @@ try {
     // the page runs ~0.7 s/frame in a headless session, so the plate may have lived out its 7 s before this read:
     // 'shown' is "still up now, or was up for (most of) its full life", read in ONE evaluate with its timestamps
     const v = p.vrmic;
-    const dbg = await ev(() => { const r = globalThis.__vrmic ?? {}; const m = r.noteMesh?.material; return { up: !!r.noteMesh?.parent, at: r.noteAt ?? 0, cleared: r.noteClearedAt ?? null,
-      mat: m ? { node: !!m.isNodeMaterial, output: !!m.outputNode, depthTest: m.depthTest, depthWrite: m.depthWrite } : null }; });
+    const dbg = await ev(() => { const r = globalThis.__vrmic ?? {}; return { up: !!r.noteMesh?.parent, at: r.noteAt ?? 0, cleared: r.noteClearedAt ?? null, mat: r.noteMat ?? null }; });
     const life = dbg.cleared != null ? dbg.cleared - dbg.at : null;
     console.log(`  · note: up now=${dbg.up}, ${life == null ? 'not cleared yet' : `lived ${(life / 1000).toFixed(1)} s (its timer is 7 s)`}`);
     check('in VR: a head-locked note says permission is needed and when it will be asked', dbg.at > 0 && (dbg.up || life >= 6000) && /needs permission/.test(v.note) && /leave VR/.test(v.note), JSON.stringify({ ...dbg, note: v.note, life }));

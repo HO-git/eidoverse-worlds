@@ -245,6 +245,13 @@ check("the wrench has a row while gated open", !!row("edit"));
   check("the rail's search entry and the menu's lantern and search rows are lantern toggles",
     ["search"].every((id) => btn(id)!.hasAttribute("data-lantern-toggle")) && row("lantern")!.hasAttribute("data-lantern-toggle") && row("search")!.hasAttribute("data-lantern-toggle"));
   L.initLantern({});   // main.js boots it; nothing above needed it
+  { // PINNING IS BOOKKEEPING (owner, 10-01: "wouldn't expect *pinning* a menu to close a menu that's open"): a pin
+    // never takes focus, so an open lantern's line keeps it and stays open — a pin's mousedown used to blur the line
+    const pins = [...menu().querySelectorAll(".mpin:not([disabled])")] as HTMLElement[];
+    const kept = pins.filter((p) => { const ev = new MouseEvent("mousedown", { bubbles: true, cancelable: true }); p.dispatchEvent(ev); return ev.defaultPrevented; });
+    check("no pin takes focus on mousedown (an open lantern keeps its line)", pins.length > 5 && kept.length === pins.length,
+      `${kept.length}/${pins.length}: ${pins.filter((p) => !kept.includes(p)).map((p) => p.dataset.pin).join()}`);
+  }
   row("lantern")!.click();
   check("the row itself opens the lantern (like a window row opens its window)", L.isLanternOpen());
   L.closeLantern();

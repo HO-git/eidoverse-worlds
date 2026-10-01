@@ -733,8 +733,10 @@ function initEMenu() {
       resizeZoneAt(e.clientX, e.clientY);   // the grab band hangs 6px outside frames
     if (!inChrome) toggleEMenu(false);
   }, true);
-  // the menu is a panel like any other: drag it by its empty parts, kept
   const m = emenuEl();
+  // a pin is bookkeeping: it never takes focus, so an open lantern keeps its line and stays open
+  m.addEventListener('mousedown', (e) => { if (e.target.closest?.('.mpin')) e.preventDefault(); });
+  // the menu is a panel like any other: drag it by its empty parts, kept
   m.addEventListener('pointerdown', (e) => {
     if (e.target !== m && e.target.className !== 'msep' && !e.target.closest?.('.fr-title')) return;
     e.preventDefault();

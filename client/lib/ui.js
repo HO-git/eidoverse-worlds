@@ -866,13 +866,14 @@ function paintEMenu() {
   lock?.classList.toggle('open', isLocked());
 }
 // THE LANTERN'S RESTING LINE (R, 10-01: "add it as a pin feature for the reverse-E menu (might need its own logo to
-// differentiate)"). Right under the rail's search entry, which opens the same lantern: the row opens it too, and its
-// pin keeps the pill bottom-centre (lantern.js setPillPinned — its own key, ew-lantern-pinned, like the glyphs').
-// A hung lamp, not the search glass, so the two rows read apart. Unpinned, the lantern is still one chord away.
+// differentiate)"). A group of its own between the voice rows and the windows ("It's not *quite* a conventional panel
+// so it can't get docked"): the row opens the lantern, and its pin keeps the pill bottom-centre (lantern.js
+// setPillPinned — its own key, ew-lantern-pinned, like the glyphs'). Unpinned, the lantern is still one chord away.
+const LANTERN_GLYPH = 'lighthouse';   // the owner's pick (10-01); its own glyph, so it reads apart from the search glass
 function lanternRow() {
   const row = document.createElement('button');
   row.className = 'mrow'; row.dataset.row = 'lantern';
-  row.innerHTML = `${fsvg('lamp-pendant', 15)}<span class="mname">lantern</span>`;
+  row.innerHTML = `${fsvg(LANTERN_GLYPH, 15)}<span class="mname">lantern</span>`;
   row.title = `the lantern — type or say anything (${CHORD}). Its pin keeps the resting line bottom-centre; unpinned, ${CHORD} and the rail's search still open it`;
   row.onclick = () => { isLanternOpen() ? closeLantern() : openLantern(); paintEMenu(); };
   const pin = document.createElement('button');
@@ -907,6 +908,8 @@ function buildEMenu(m) {
     m.appendChild(row);
   }
   { const s = document.createElement('div'); s.className = 'msep'; m.appendChild(s); }
+  m.appendChild(lanternRow());
+  { const s = document.createElement('div'); s.className = 'msep'; m.appendChild(s); }
   // ORDER AT PAINT TIME, not at registration. initDock sorts `last` to the end
   // once, but registerPanel (ui.js:329) PUSHES later mods onto dockEntries after
   // that sort has already run — so the rail stayed correct (addDockButton
@@ -940,7 +943,6 @@ function buildEMenu(m) {
       else pin.onclick = (e) => { e.stopPropagation(); pins.has(id) ? pins.delete(id) : pins.add(id); savePins(); paintDock(); paintEMenu(); };
       row.appendChild(pin);
       m.appendChild(row);
-      if (id === 'search') m.appendChild(lanternRow());
       continue;
     }
     if (!getFrame(id)) continue;   // an entry with no frame behind it (a caller's stale id) gets no row

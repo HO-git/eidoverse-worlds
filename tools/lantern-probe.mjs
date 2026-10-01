@@ -262,12 +262,16 @@ try {
   }
 
   // UNPIN (R, 10-01: "add it as a pin feature for the reverse-E menu (might need its own logo to differentiate)"): the
-  // ∃ menu's lantern row, right under search, pins the resting line. Unpinned: no pill, but Ctrl+K still opens it.
+  // ∃ menu's lantern row, in a group of its own after the voice rows, pins the resting line. Unpinned: no pill, but
+  // Ctrl+K still opens it.
   { const menuRow = () => pg.evaluate(() => { const r = document.querySelector('#emenu .mrow[data-row="lantern"]');
-      return r && { prev: r.previousElementSibling?.dataset.row ?? null, on: r.querySelector('.mpin')?.classList.contains('on'), pinTitle: r.querySelector('.mpin')?.title }; });
+      return r && { prev: r.previousElementSibling?.className ?? null, prevRow: r.previousElementSibling?.previousElementSibling?.dataset.row ?? null,
+        next: r.nextElementSibling?.className ?? null, on: r.querySelector('.mpin')?.classList.contains('on'), pinTitle: r.querySelector('.mpin')?.title }; });
     await pg.click('#hud'); await sleep(250);
     const r0 = await menuRow();
-    check('the ∃ menu lists the lantern right under search, pinned', r0?.prev === 'search' && r0?.on === true, JSON.stringify(r0));
+    check('the ∃ menu lists the lantern in a group of its own after the voice rows, pinned', r0?.prev === 'msep' && r0?.next === 'msep'
+      && r0?.prevRow === 'glyph:xr' && r0?.on === true, JSON.stringify(r0));
+    await shot(pg, '16a-emenu-lantern-group.png');
     await pg.click('#emenu .mpin[data-pin="lantern"]'); await sleep(200);
     const r1 = await menuRow();
     await shot(pg, '16-emenu-lantern-unpinned.png');

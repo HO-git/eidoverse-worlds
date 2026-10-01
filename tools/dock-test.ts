@@ -222,8 +222,13 @@ check("the wrench has a row while gated open", !!row("edit"));
   const L = await import("../client/lib/lantern.js");
   const r = row("lantern"), p = pin("lantern");
   const rows = [...menu().querySelectorAll(".mrow[data-row]")].map((x) => (x as HTMLElement).dataset.row);
-  check("the lantern has a row, right after the rail's search entry", !!r && rows.indexOf("lantern") === rows.indexOf("search") + 1, rows.join());
-  check("…wearing its own glyph (a hung lamp), not the search glass", !!r && wears(r.innerHTML, "lamp-pendant") && !wears(r.innerHTML, "magnifying-glass"));
+  // its own area (owner, 10-01: "It's not *quite* a conventional panel so it can't get docked"): a group of one, after
+  // the voice group, separated from it and from the windows the way the voice group is
+  check("the lantern has a row in a group of its own: a separator either side, after the voice rows",
+    !!r && r.previousElementSibling?.className === "msep" && r.nextElementSibling?.className === "msep"
+      && r.previousElementSibling?.previousElementSibling === row("glyph:xr"), rows.join());
+  check("…not under the rail's search entry any more", rows.indexOf("lantern") !== rows.indexOf("search") + 1, rows.join());
+  check("…wearing its own glyph (a lighthouse), not the search glass", !!r && paths("lighthouse").length > 0 && wears(r.innerHTML, "lighthouse") && !wears(r.innerHTML, "magnifying-glass"));
   check("…pinned by default (the pill rests; nothing changes for anyone who leaves it)", !!p && p.classList.contains("on") && L.pillPinned());
   check("…its pin says unpinning keeps the chord", !!p && /Ctrl K|⌘K/.test(p.title) && /still open/.test(p.title), p?.title);
   p?.click();

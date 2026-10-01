@@ -40,7 +40,7 @@ const SLIDERS = [
 // stores a preset name and logged meaning never depends on the def file.
 
 export function paintSky(body) {
-  if (body.dataset.init) { body._sync?.(); return; }
+  if (body.dataset.init) { body._sync?.(); body._readState?.(); return; }
   body.dataset.init = '1';
   body.innerHTML = '';
   const inputs = {};
@@ -89,7 +89,10 @@ export function paintSky(body) {
   };
   bus.on('sky-state', readState);
   bus.on('sky-degraded', readState);
-  setInterval(() => { if (body.isConnected) readState(); }, 30000);   // the sun moves; writes only on change
+  // the sun moves. The body stays connected when the panel closes (the frame and its tab only hide it), so ask for a
+  // rendered box: a closed panel's clock line costs nothing, and reopening the tab reads it at once (top of paintSky)
+  setInterval(() => { if (body.getClientRects().length) readState(); }, 30000);
+  body._readState = readState;
 
   const local = {};
   const preview = (patch) => {

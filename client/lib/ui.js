@@ -33,7 +33,7 @@ export function setLoadingItems(fn) { loadingItems = fn; }
 import { makeFrame, getFrame, isLocked, setLocked, resetLayout } from './frames.js';
 import { defsRegistry } from './defs.js';
 import { register as registerAction, get as getAction } from './actions.js';
-import { openLantern, closeLantern, isLanternOpen, CHORD } from './lantern.js';
+import { openLantern, closeLantern, isLanternOpen, CHORD, pillPinned, setPillPinned, setPillQuiet } from './lantern.js';
 
 const $ = (id) => document.getElementById(id);
 export const el = {
@@ -110,7 +110,9 @@ export function setAmbientHint(html) {
   else el.hint.classList.add('gone');
 }
 // Esc put every panel away (frames.js): say how to get them back, for a few seconds; when they come back, stop saying it
+// …and the lantern's resting line goes away with them and comes back with them (lantern.js setPillQuiet)
 bus.on('esc-quiet', (did) => {
+  setPillQuiet(did === 'closed');
   if (did === 'closed') flashHint('<span>panels hidden · <kbd>Esc</kbd> to bring back</span>', 4000);   // one span: the bar is a flex row, which would eat the spaces around the key
   else if (did === 'restored' && el.hint._t && /panels hidden/.test(el.hint.textContent)) endFlash();
 });
@@ -837,7 +839,7 @@ function paintEMenu() {
   for (const row of m.querySelectorAll('.mrow[data-row]')) {
     const id = row.dataset.row;
     const entry = dockEntries.find((x) => x.id === id);
-    const on = id === 'glyph:mic' ? micLive() : id === 'glyph:ear' ? earOn()
+    const on = id === 'glyph:mic' ? micLive() : id === 'glyph:ear' ? earOn() : id === 'lantern' ? isLanternOpen()
       : entry?.action ? !!entry.active?.() : !!getFrame(id)?.visible;
     row.classList.toggle('open', on);
     // the glyph bakes its ink at build; re-stamp it when the state flips
@@ -850,9 +852,11 @@ function paintEMenu() {
   }
   for (const pin of m.querySelectorAll('.mpin[data-pin]')) {
     const id = pin.dataset.pin;
-    const on = id.startsWith('glyph:') ? glyphPinned(id.slice(6)) : pins.has(id);
+    const on = id.startsWith('glyph:') ? glyphPinned(id.slice(6)) : id === 'lantern' ? pillPinned() : pins.has(id);
     pin.classList.toggle('on', on);
-    pin.title = id.startsWith('glyph:')
+    pin.title = id === 'lantern'
+      ? (on ? `hide the resting line — ${CHORD} and the rail's search still open the lantern` : 'rest the line bottom-centre again')
+      : id.startsWith('glyph:')
       ? (on ? `detach ${pin.dataset.nm} from the rail` : `attach ${pin.dataset.nm} to the rail`)
       : (on ? 'unpin from rail' : 'pin to rail');
   }
@@ -860,6 +864,23 @@ function paintEMenu() {
   const lockHtml = `${fsvg(isLocked() ? 'lock' : 'lock-open', 15)}<span class="mname">${isLocked() ? 'layout locked' : 'layout unlocked'}</span>`;
   if (lock && lock.dataset.lock !== String(isLocked())) { lock.dataset.lock = String(isLocked()); lock.innerHTML = lockHtml; }
   lock?.classList.toggle('open', isLocked());
+}
+// THE LANTERN'S RESTING LINE (R, 10-01: "add it as a pin feature for the reverse-E menu (might need its own logo to
+// differentiate)"). Right under the rail's search entry, which opens the same lantern: the row opens it too, and its
+// pin keeps the pill bottom-centre (lantern.js setPillPinned — its own key, ew-lantern-pinned, like the glyphs').
+// A hung lamp, not the search glass, so the two rows read apart. Unpinned, the lantern is still one chord away.
+function lanternRow() {
+  const row = document.createElement('button');
+  row.className = 'mrow'; row.dataset.row = 'lantern';
+  row.innerHTML = `${fsvg('lamp-pendant', 15)}<span class="mname">lantern</span>`;
+  row.title = `the lantern — type or say anything (${CHORD}). Its pin keeps the resting line bottom-centre; unpinned, ${CHORD} and the rail's search still open it`;
+  row.onclick = () => { isLanternOpen() ? closeLantern() : openLantern(); paintEMenu(); };
+  const pin = document.createElement('button');
+  pin.className = 'mpin'; pin.dataset.pin = 'lantern';
+  pin.innerHTML = fsvg('push-pin', 13);
+  pin.onclick = (e) => { e.stopPropagation(); setPillPinned(!pillPinned()); paintEMenu(); };
+  row.appendChild(pin);
+  return row;
 }
 function buildEMenu(m) {
   m.innerHTML = '<div class="fr-head"><span class="fr-title">menu</span><div class="fr-btns"><button class="fr-btn" title="close">\u2715</button></div></div>';
@@ -919,6 +940,7 @@ function buildEMenu(m) {
       else pin.onclick = (e) => { e.stopPropagation(); pins.has(id) ? pins.delete(id) : pins.add(id); savePins(); paintDock(); paintEMenu(); };
       row.appendChild(pin);
       m.appendChild(row);
+      if (id === 'search') m.appendChild(lanternRow());
       continue;
     }
     if (!getFrame(id)) continue;   // an entry with no frame behind it (a caller's stale id) gets no row

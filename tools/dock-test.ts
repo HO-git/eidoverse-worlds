@@ -217,6 +217,30 @@ check("voice rows lead: mic, ears, VR", ["glyph:mic", "glyph:ear", "glyph:xr"].e
 check("VR row is dead when no headset is sensed (disabled row + disabled pin)", row("glyph:xr")!.disabled && pin("glyph:xr")!.disabled);
 check("every window with a frame has a row; a frameless entry has none", ["chat", "world", "emotes", "debug", "modx"].every((id) => !!row(id)) && !row("nofrx"));
 check("the wrench has a row while gated open", !!row("edit"));
+{ // THE LANTERN'S RESTING LINE pins from here too (R, 10-01: "add it as a pin feature for the reverse-E menu (might
+  // need its own logo to differentiate), and have it obey the 'esc to hide' feature")
+  const L = await import("../client/lib/lantern.js");
+  const r = row("lantern"), p = pin("lantern");
+  const rows = [...menu().querySelectorAll(".mrow[data-row]")].map((x) => (x as HTMLElement).dataset.row);
+  check("the lantern has a row, right after the rail's search entry", !!r && rows.indexOf("lantern") === rows.indexOf("search") + 1, rows.join());
+  check("…wearing its own glyph (a hung lamp), not the search glass", !!r && wears(r.innerHTML, "lamp-pendant") && !wears(r.innerHTML, "magnifying-glass"));
+  check("…pinned by default (the pill rests; nothing changes for anyone who leaves it)", !!p && p.classList.contains("on") && L.pillPinned());
+  check("…its pin says unpinning keeps the chord", !!p && /Ctrl K|⌘K/.test(p.title) && /still open/.test(p.title), p?.title);
+  p?.click();
+  check("clicking the pin unpins the resting line, remembered", !L.pillPinned() && !pin("lantern")!.classList.contains("on") && localStorage.getItem("ew-lantern-pinned") === "0",
+    `${L.pillPinned()} ${localStorage.getItem("ew-lantern-pinned")}`);
+  check("…and the rail's search entry is untouched by it", btn("search")!.hidden === false);
+  pin("lantern")!.click();
+  check("clicking again pins it back", L.pillPinned() && pin("lantern")!.classList.contains("on"));
+  L.initLantern({});   // main.js boots it; nothing above needed it
+  row("lantern")!.click();
+  check("the row itself opens the lantern (like a window row opens its window)", L.isLanternOpen());
+  L.closeLantern();
+  bus.emit("esc-quiet", "closed");
+  check("Esc put the panels away (frames.js says so on the bus): the resting line goes with them", L.pillQuiet());
+  bus.emit("esc-quiet", "restored");
+  check("…and comes back with them", !L.pillQuiet());
+}
 { // ...and a row while gated CLOSED too — dead, not absent (R: "It SHOULD be
   // in the reverse-E menu regardless"). paintEMenu used to `continue` past a
   // closed gate, so the only way to learn edit mode existed was to already

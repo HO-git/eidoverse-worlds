@@ -192,7 +192,9 @@ try {
   const rest = await rect(pg, '#lantern-pill');
   check('the resting line keeps clear of the chat compose box (1280x720)', rest?.shown && compose?.shown && !meets(rest, compose),
     JSON.stringify({ rest, compose }));
-  await pg.evaluate(async () => (await import('/lib/ui.js')).flashHint('probe flash', 1500)); await sleep(150);
+  // the bar fades in (opacity .5s) from the faded state the open-lantern flash above left it in: wait for it
+  await pg.evaluate(async () => (await import('/lib/ui.js')).flashHint('probe flash', 1500));
+  for (let i = 0; i < 20 && !(await rect(pg, '#hintbar'))?.shown; i++) await sleep(50);
   const during = { hint: await rect(pg, '#hintbar'), rest: await rect(pg, '#lantern-pill') };
   check('a flash borrows the resting line’s spot: the hint shows, the line steps aside (never both)',
     during.hint?.shown && !during.rest?.shown && Math.abs((during.hint.l + during.hint.r) / 2 - (rest.l + rest.r) / 2) < 2,

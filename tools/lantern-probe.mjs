@@ -62,6 +62,16 @@ const rect = (pg, sel) => pg.evaluate((s) => { const e = document.querySelector(
   const r = e.getBoundingClientRect(); const cs = getComputedStyle(e);
   return { l: r.left, t: r.top, r: r.right, b: r.bottom, shown: cs.display !== 'none' && cs.visibility !== 'hidden' && +cs.opacity > 0 && r.width > 0 }; }, sel);
 const meets = (a, b) => a && b && a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
+// HUD layout mode (the old click-∃ behaviour) and the menu's reset layout — one place to say how they are reached
+const layoutMode = async (pg, on) => {
+  if ((await pg.evaluate(() => document.body.classList.contains('arranging'))) === on) return;
+  if (on) { await pg.click('#hud'); await sleep(250); } else { await pg.keyboard.press('Escape'); await sleep(250); }
+};
+const resetLayoutViaMenu = async (pg) => {
+  await pg.click('#hud'); await sleep(250);
+  await pg.locator('#emenu .mrow', { hasText: 'reset layout' }).click(); await sleep(300);
+  await pg.keyboard.press('Escape'); await sleep(250);
+};
 const type = async (pg, text) => { await pg.keyboard.press('Control+k'); await sleep(150); await pg.keyboard.type(text, { delay: 15 }); await sleep(200); };
 
 try {
@@ -410,6 +420,45 @@ try {
     tab: document.getElementById('sec-audio-tab')?.classList.contains('on') ?? null,
     others: [...document.querySelectorAll('.frame[data-frame="settings"] .sec.open')].map((x) => x.id) }));
   check('clicking the "audio" row opens settings on its audio TAB', audio.settings !== 'none' && audio.open === true && audio.tab === true && audio.others.join() === 'sec-audio', JSON.stringify(audio));
+  // MOVE (R, 10-01: "enable grabbing and moving the lantern … in menu-moving mode"): in HUD layout mode the resting line
+  // drags like a frame; the hint bar that borrows its spot follows it, the open panel stays on screen (hanging down from
+  // a pill in the top half), the spot survives a reload, and reset layout puts it back
+  { await pg.mouse.click(900, 300); await sleep(300);   // (not Esc: with nothing open to close, Esc puts the resting line away)
+    const centre = (r) => r && [(r.l + r.r) / 2, (r.t + r.b) / 2];
+    const p0 = await rect(pg, '#lantern-pill');
+    const c0 = centre(p0);
+    await layoutMode(pg, true);
+    await pg.mouse.move(c0[0], c0[1]); await pg.mouse.down();
+    for (let i = 1; i <= 8; i++) { await pg.mouse.move(c0[0] - (300 * i) / 8, c0[1] - (420 * i) / 8); await sleep(16); }
+    await pg.mouse.up(); await sleep(200);
+    const m = { pill: await rect(pg, '#lantern-pill'), saved: await pg.evaluate(() => localStorage.getItem('ew-lantern-pos')), open: (await lantern(pg)).open };
+    const c1 = centre(m.pill);
+    check('HUD layout mode: dragging the resting line moves it with the pointer, and the spot is saved',
+      Math.abs(c1[0] - (c0[0] - 300)) < 3 && Math.abs(c1[1] - (c0[1] - 420)) < 3 && !!m.saved, JSON.stringify({ c0, c1, ...m }));
+    check('…and the drag does not open the lantern', !m.open);
+    await shot(pg, '17-lantern-moved-layout-mode.png');
+    await layoutMode(pg, false);
+    await pg.evaluate(async () => (await import('/lib/ui.js')).flashHint('probe flash', 1500));
+    for (let i = 0; i < 20 && !(await rect(pg, '#hintbar'))?.shown; i++) await sleep(50);
+    const h = centre(await rect(pg, '#hintbar'));
+    check('the hint bar that borrows its spot follows the moved line', h && Math.abs(h[0] - c1[0]) < 2 && Math.abs(h[1] - c1[1]) < 2, JSON.stringify({ h, c1 }));
+    await sleep(1800);
+    await pg.keyboard.press('Control+k'); await sleep(250);
+    const ln = await rect(pg, '#lantern');
+    check('opened from a pill in the top half, the lantern hangs down from it and stays on screen',
+      ln?.shown && ln.l >= 0 && ln.r <= 1280 && ln.t >= 0 && ln.b <= 720 && Math.abs(ln.t - m.pill.t) < 2, JSON.stringify({ ln, pill: m.pill }));
+    await shot(pg, '18-lantern-moved-open.png');
+    await pg.keyboard.press('Escape'); await sleep(200);
+    await pg.reload({ waitUntil: 'domcontentloaded' });
+    await pg.waitForFunction(() => document.getElementById('splash')?.classList.contains('gone') && !!globalThis.EW?.me?.(), null, { timeout: 120000 });
+    await sleep(2500);
+    const c2 = centre(await rect(pg, '#lantern-pill'));
+    check('after a reload the resting line is where it was moved', Math.abs(c2[0] - c1[0]) < 2 && Math.abs(c2[1] - c1[1]) < 2, JSON.stringify({ c1, c2 }));
+    await resetLayoutViaMenu(pg);
+    const p3 = await rect(pg, '#lantern-pill');
+    check('reset layout puts it back on the bottom band, the saved spot gone',
+      Math.abs(p3.b - (720 - 24)) < 2 && !(await pg.evaluate(() => localStorage.getItem('ew-lantern-pos'))), JSON.stringify(p3));
+  }
   check('no page errors on the desktop run', errs.length === 0, errs.slice(0, 3).join(' | '));
   await ctx.close();
 

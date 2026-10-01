@@ -33,7 +33,7 @@ export function setLoadingItems(fn) { loadingItems = fn; }
 import { makeFrame, getFrame, isLocked, setLocked, resetLayout, escapeHid } from './frames.js';
 import { defsRegistry } from './defs.js';
 import { register as registerAction, get as getAction } from './actions.js';
-import { openLantern, closeLantern, isLanternOpen, CHORD, pillPinned, setPillPinned, setPillQuiet } from './lantern.js';
+import { openLantern, closeLantern, isLanternOpen, CHORD, pillPinned, setPillPinned, setPillQuiet, resetPillPlace } from './lantern.js';
 
 const $ = (id) => document.getElementById(id);
 export const el = {
@@ -836,6 +836,9 @@ function dodgeEMenu(m) {
   if (!best) return;
   m.style.left = `${best.x}px`; m.style.top = `${best.y}px`; m.style.right = m.style.bottom = 'auto';
 }
+/** Every window back where it started, and the lantern's resting line too (it is not a frame, but it moves in
+ *  HUD layout mode). The rail's own edge is NOT reset — where you put the rail is your decision (loadDockEdge). */
+export function resetHudLayout() { resetLayout(); resetPillPlace(); }
 function fsvgOrStroke(name, size) {
   if (hasFill(name)) return fsvg(name, size);
   try { return svg(name, size); } catch { return ''; }
@@ -988,7 +991,7 @@ function buildEMenu(m) {
   reset.className = 'mrow';
   reset.innerHTML = `${fsvg('sparkle', 15)}<span class="mname">reset layout</span><span class="mdot"></span>`;
   reset.title = 'put every window back where it started';
-  reset.onclick = () => { resetLayout(); paintDock(); };
+  reset.onclick = () => { resetHudLayout(); paintDock(); };
   m.appendChild(reset);
 }
 
@@ -1036,7 +1039,7 @@ export function buildHelp() {
         🔓 in the corner locks the layout once you like it.
         <button id="help-reset" style="margin-left:6px">reset layout</button></p>`;
     s.querySelector('.close-x').onclick = () => closeOverlay(el.help);
-    s.querySelector('#help-reset').onclick = () => { resetLayout(); closeOverlay(el.help); };
+    s.querySelector('#help-reset').onclick = () => { resetHudLayout(); closeOverlay(el.help); };
   }).catch((e) => report('help def', e));
   paint();
   bus.on('defs-updated', paint);   // edited prose reaches an open client too

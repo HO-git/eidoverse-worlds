@@ -166,5 +166,61 @@ console.log('LANTERN — the resting line pins from the ∃ menu, and goes quiet
   L.setPillPinned(true);
 }
 
+console.log('LANTERN — the resting line moves in HUD layout mode (R, 10-01: "enable grabbing and moving the lantern")');
+{ const pill = document.getElementById('lantern-pill')!;
+  const root = document.documentElement;
+  const v = (k: string) => root.style.getPropertyValue(k);
+  const drag = (dx: number, dy: number) => {
+    const at = { x: 500, y: 600 };
+    pill.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, clientX: at.x, clientY: at.y, pointerId: 1 }));
+    for (let i = 1; i <= 4; i++) pill.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: at.x + (dx * i) / 4, clientY: at.y + (dy * i) / 4, pointerId: 1 }));
+    pill.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, clientX: at.x + dx, clientY: at.y + dy, pointerId: 1 }));
+    pill.click();   // the browser follows a press-and-release on the same element with a click
+  };
+  L.closeLantern();
+  const x0 = v('--ln-x');
+  drag(-200, -100);
+  check('outside layout mode a drag on the pill moves nothing (and its click still opens the lantern)', v('--ln-x') === x0 && !localStorage.getItem('ew-lantern-pos') && L.isLanternOpen(), `${x0} → ${v('--ln-x')}`);
+  L.closeLantern();
+  document.body.classList.add('arranging');
+  drag(-200, -100);
+  const pos = JSON.parse(localStorage.getItem('ew-lantern-pos') ?? 'null');
+  check('in layout mode a drag moves the pill: its centre and its bottom ride --ln-x / --ln-b', parseFloat(v('--ln-x')) === innerWidth / 2 - 200 && v('--ln-b') === '124px', `${v('--ln-x')} ${v('--ln-b')}`);
+  check('…the spot is saved (centre as a fraction of the width, bottom in px)', !!pos && Math.abs(pos.x - (innerWidth / 2 - 200) / innerWidth) < 0.002 && pos.b === 124, JSON.stringify(pos));
+  check('…and the click that ends a drag does not open the lantern', !L.isLanternOpen());
+  pill.click();
+  check('a plain click in layout mode still opens it', L.isLanternOpen());
+  L.closeLantern();
+  drag(5000, 5000);
+  check('a drag past the edge keeps the pill on screen', parseFloat(v('--ln-x')) <= innerWidth - 8 && parseFloat(v('--ln-b')) >= 8, `${v('--ln-x')} ${v('--ln-b')}`);
+  drag(-5000, -5000);
+  check('…every edge', parseFloat(v('--ln-x')) >= 8 && parseFloat(v('--ln-b')) <= innerHeight - 8, `${v('--ln-x')} ${v('--ln-b')}`);
+  L.openLantern('');
+  const lnRoot = document.getElementById('lantern')!;
+  check('moved into the top half, the open lantern hangs DOWN from the pill (it would grow off the top)', lnRoot.classList.contains('down'), lnRoot.className);
+  const W = Math.min(580, innerWidth - 24);
+  check('…and its own centre is clamped so the whole panel is on screen', parseFloat(v('--ln-px')) >= W / 2 + 12, v('--ln-px'));
+  L.closeLantern();
+  document.body.classList.add('ui-locked');
+  const locked = v('--ln-x');
+  drag(300, 0);
+  check('a locked layout does not move it', v('--ln-x') === locked);
+  document.body.classList.remove('ui-locked');
+  L.closeLantern();
+  L.resetPillPlace();
+  check('reset layout puts it back: no saved spot, the default axis and bottom', !localStorage.getItem('ew-lantern-pos') && !v('--ln-b') && parseFloat(v('--ln-x')) === innerWidth / 2, `${v('--ln-x')} b=${v('--ln-b')}`);
+  L.openLantern('');
+  check('…and the open lantern grows up from the bottom again', !lnRoot.classList.contains('down'));
+  L.closeLantern();
+  drag(-150, -40);
+  document.body.classList.remove('arranging');
+  // a new page: the saved spot comes back (a fresh module instance over the same localStorage)
+  for (const id of ['lantern', 'lantern-pill']) document.getElementById(id)?.remove();
+  root.style.removeProperty('--ln-x'); root.style.removeProperty('--ln-b');
+  const L2 = await import('../client/lib/lantern.js?reload');
+  L2.initLantern({});
+  check('after a reload the pill comes back where it was moved', parseFloat(v('--ln-x')) === innerWidth / 2 - 150 && v('--ln-b') === '64px', `${v('--ln-x')} ${v('--ln-b')}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

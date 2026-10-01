@@ -190,26 +190,92 @@ function onEnter() {
 // One horizontal axis for the resting line, the hint bar that borrows its spot,
 // and the open panel: the viewport's centre, unless that would sit on the chat
 // frame's compose box — then the centre of the free span beside the frame.
+// A pill MOVED in HUD layout mode (R, 10-01) sits where it was put instead: --ln-x
+// and --ln-b carry its centre and bottom to the hint bar too, and the open panel
+// takes its own clamped centre (--ln-px) and hangs DOWN from a pill in the top half.
+// Phones keep the corner glyph (index.html's ≤600px rules); the spot is a desktop one.
+const POS_LS = 'ew-lantern-pos';   // {x: centre as a fraction of the width, b: px from the bottom}
+let spot = null;
+try { spot = JSON.parse(localStorage.getItem(POS_LS) || 'null'); } catch { /* private mode */ }
 let lastX = null;
+const PILL_B = 24, PILL_H = 36, EDGE = 8;
+const setVar = (k, v) => { const r = document.documentElement.style; if (v == null) r.removeProperty(k); else if (r.getPropertyValue(k) !== v) r.setProperty(k, v); };
 function place() {
-  if (!root || innerWidth <= 600) { if (lastX !== null) { document.documentElement.style.removeProperty('--ln-x'); lastX = null; } return; }
-  let x = innerWidth / 2;
-  const line = document.getElementById('chatline');
-  const frame = line?.closest('.frame');
-  // (frames are position:fixed, so offsetParent can't say whether one shows; its computed display can)
-  const c = line && frame && getComputedStyle(frame).display !== 'none' ? line.closest('.chat-compose')?.getBoundingClientRect() : null;
-  if (c && c.width > 0 && c.top < innerHeight) {
-    const half = Math.max(pill?.offsetWidth ?? 0, root.hidden ? 0 : root.offsetWidth, Math.min(580, innerWidth - 24)) / 2;
-    const lo = x - half - 12, hi = x + half + 12;
-    if (hi > c.left && lo < c.right) {
-      // free span to the right or left of the compose box; take the wider one
-      const right = [c.right + 12, innerWidth - 12], left = [12, c.left - 12];
-      const span = right[1] - right[0] >= left[1] - left[0] ? right : left;
-      x = Math.round((span[0] + span[1]) / 2);
+  if (!root || innerWidth <= 600) {
+    if (lastX !== null) { for (const k of ['--ln-x', '--ln-b', '--ln-px', '--ln-t']) setVar(k, null); lastX = null; }
+    root?.classList.remove('down');
+    return;
+  }
+  let x = innerWidth / 2, b = PILL_B;
+  const pw = pill?.offsetWidth ?? 0;
+  if (spot) {
+    x = Math.min(Math.max(spot.x * innerWidth, pw / 2 + EDGE), innerWidth - pw / 2 - EDGE);
+    b = Math.min(Math.max(spot.b, EDGE), innerHeight - PILL_H - EDGE);
+  } else {
+    const line = document.getElementById('chatline');
+    const frame = line?.closest('.frame');
+    // (frames are position:fixed, so offsetParent can't say whether one shows; its computed display can)
+    const c = line && frame && getComputedStyle(frame).display !== 'none' ? line.closest('.chat-compose')?.getBoundingClientRect() : null;
+    if (c && c.width > 0 && c.top < innerHeight) {
+      const half = Math.max(pw, root.hidden ? 0 : root.offsetWidth, Math.min(580, innerWidth - 24)) / 2;
+      const lo = x - half - 12, hi = x + half + 12;
+      if (hi > c.left && lo < c.right) {
+        // free span to the right or left of the compose box; take the wider one
+        const right = [c.right + 12, innerWidth - 12], left = [12, c.left - 12];
+        const span = right[1] - right[0] >= left[1] - left[0] ? right : left;
+        x = Math.round((span[0] + span[1]) / 2);
+      }
     }
   }
-  x = Math.round(x);
-  if (x !== lastX) { document.documentElement.style.setProperty('--ln-x', `${x}px`); lastX = x; }
+  x = Math.round(x); b = Math.round(b);
+  lastX = x;
+  setVar('--ln-x', `${x}px`);
+  setVar('--ln-b', spot ? `${b}px` : null);
+  // the open panel: centred on the pill as far as the viewport lets it, below a pill in the top half
+  const half = Math.min(580, innerWidth - 24) / 2;
+  setVar('--ln-px', `${Math.round(Math.min(Math.max(x, half + 12), innerWidth - half - 12))}px`);
+  const down = !!spot && innerHeight - b - PILL_H / 2 < innerHeight / 2;
+  root.classList.toggle('down', down);
+  setVar('--ln-t', down ? `${innerHeight - b - PILL_H}px` : null);
+}
+/** Reset layout: the resting line goes back to its default spot. */
+export function resetPillPlace() {
+  spot = null;
+  try { localStorage.removeItem(POS_LS); } catch { /* private mode */ }
+  place();
+}
+
+// Dragging the pill: only in HUD layout mode (body.arranging), never while the layout is locked (body.ui-locked),
+// never on a phone. A press that does not travel is still a click; one that does moves the pill and eats its click.
+let dragged = false;
+function initPillDrag() {
+  pill.addEventListener('pointerdown', (e) => {
+    const b = document.body.classList;
+    dragged = false;   // a release that produced no click (let go off the pill) leaves nothing to eat
+    if (e.button !== 0 || !b.contains('arranging') || b.contains('ui-locked') || innerWidth <= 600) return;
+    const sx = e.clientX, sy = e.clientY;
+    const x0 = parseFloat(document.documentElement.style.getPropertyValue('--ln-x')) || innerWidth / 2;
+    const b0 = parseFloat(document.documentElement.style.getPropertyValue('--ln-b')) || PILL_B;
+    let moving = false;
+    try { pill.setPointerCapture(e.pointerId); } catch { /* synthetic, or gone */ }
+    const move = (ev) => {
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      if (!moving && Math.hypot(dx, dy) < 4) return;
+      moving = true;
+      spot = { x: (x0 + dx) / innerWidth, b: b0 - dy };
+      place();
+      // what place() clamped to is what gets kept
+      spot = { x: parseFloat(document.documentElement.style.getPropertyValue('--ln-x')) / innerWidth,
+        b: parseFloat(document.documentElement.style.getPropertyValue('--ln-b')) };
+    };
+    const up = () => {
+      pill.removeEventListener('pointermove', move); pill.removeEventListener('pointerup', up); pill.removeEventListener('pointercancel', up);
+      if (!moving) return;
+      dragged = true;   // the click this release produces is the drag's, not an open (onclick consumes it)
+      try { localStorage.setItem(POS_LS, JSON.stringify({ x: +spot.x.toFixed(4), b: Math.round(spot.b) })); } catch { /* private mode */ }
+    };
+    pill.addEventListener('pointermove', move); pill.addEventListener('pointerup', up); pill.addEventListener('pointercancel', up);
+  });
 }
 
 // ---------------------------------------------------------------- boot
@@ -270,7 +336,8 @@ export function initLantern({ submit, whisperTarget } = {}) {
   if (fresh) pill.classList.add('fresh');
   paintPill();
   paintRest();
-  pill.onclick = () => (isLanternOpen() ? closeLantern() : openLantern());
+  pill.onclick = () => { if (dragged) { dragged = false; return; } isLanternOpen() ? closeLantern() : openLantern(); };
+  initPillDrag();
   document.body.appendChild(pill);
   root.querySelector('.ln-esc').addEventListener('pointerdown', (e) => { e.preventDefault(); closeLantern(); });
 

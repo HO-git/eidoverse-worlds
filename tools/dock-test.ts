@@ -389,6 +389,14 @@ check("the wrench has a row while gated open", !!row("edit"));
     pin(id)!.click();   // back where it started
   }
 }
+{ // RESET LAYOUT puts the lantern's resting line back too (it moves in HUD layout mode, lantern.js)
+  localStorage.setItem("ew-lantern-pos", JSON.stringify({ x: 0.2, b: 300 }));
+  const reset = [...menu().querySelectorAll(".mrow")].find((r) => /reset layout/.test(r.textContent!)) as HTMLButtonElement;
+  reset.click();
+  check("the menu's reset layout forgets the resting line's moved spot", localStorage.getItem("ew-lantern-pos") === null, String(localStorage.getItem("ew-lantern-pos")));
+  for (const id of ["chat", "world", "emotes", "debug"]) getFrame(id)!.hide();   // the reset reopened the default layout; the checks below start closed
+  bus.emit("frames");
+}
 check("the lock row and reset row close the menu", !!menu().querySelector(".mrow[data-lock]") && /reset layout/.test(menu().textContent!));
 row("chat")!.click();
 check("a row click opens that window and lights the row", getFrame("chat")!.visible && row("chat")!.classList.contains("open"));

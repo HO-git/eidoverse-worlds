@@ -562,15 +562,18 @@ export function initDock(entries) {
   // AUTO-PIN ON THE GRANT, and only on the transition. R asked for the wrench
   // to "activate and pin to the dock automatically when you do get it", with a
   // manual unpin still winning — so this fires on closed->open, never on every
-  // repaint, or the next paint would undo her unpin. `gateWas` starts at the
-  // gate's value so a builder who was ALREADY a builder at boot is not pinned
-  // over their own earlier choice; only an actual grant counts.
-  for (const e of dockEntries) if (e.action && e.gate) gateWas.set(e.id, !!e.gate());
+  // repaint, or the next paint would undo her unpin. A builder who was ALREADY
+  // a builder at boot is not pinned over their own earlier choice; only an
+  // actual grant counts. The gate is closed for everyone at initDock (rights
+  // ride the snapshot, which lands later), so the FIRST report is the level we
+  // start from, not an edge — read at initDock, every reload re-pinned a
+  // builder's unpinned wrench (measured 10-01; tools/dock-boot-test.ts).
   bus.on('your-rights', () => {
     for (const e of dockEntries) {
       if (!e.action || !e.gate) continue;
       const now = !!e.gate(), was = gateWas.get(e.id);
       gateWas.set(e.id, now);
+      if (was === undefined) continue;                 // the arrival: a level
       // BOTH VERBS. R asked to "gray out AND UNPIN ... when you don't have
       // builder status, and it activates and pins to the dock automatically
       // when you do get it" — I quoted that sentence in the comment above and

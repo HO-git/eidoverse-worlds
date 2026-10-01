@@ -15,7 +15,9 @@
 //   Enter run that row; "hello there" + Enter goes through chat's own send path (server echo in #chatlog);
 //   the resting line and the open panel keep clear of the chat compose box, and the hint bar and the
 //   resting line never show at once;
-//   "/who" passes through to the command path; Esc closes; a mouse click on a row runs it.
+//   "/who" passes through to the command path; Esc closes; a mouse click on a row runs it;
+//   a typo + Tab does nothing (Tab never says); while open, the hint bar steps off the footer and a
+//   click on the footer keeps the lantern open.
 // --shots writes the after/ screenshots (1280x720 and 390x844) as it goes.
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
 import { mkdirSync } from 'node:fs';
@@ -172,6 +174,16 @@ try {
     return { total: A.all().length, by };
   });
   console.log('  registry:', JSON.stringify(counts));
+  // the hint bar shares the open panel's bottom band (both bottom 24px): while the lantern is open it steps aside
+  await pg.evaluate(async () => (await import('/lib/ui.js')).flashHint('probe flash over the open lantern', 1500)); await sleep(150);
+  { const hb = await rect(pg, '#hintbar'), foot = await rect(pg, '#lantern .ln-foot');
+    check('open: a flash does not paint the hint bar over the lantern\'s footer', foot?.shown && !(hb?.shown && meets(hb, foot)), JSON.stringify({ hb, foot })); }
+  await sleep(1500);
+  // a press on the panel's own chrome (the footer) keeps it open with the caret in the line
+  { const fr = await rect(pg, '#lantern .ln-foot');
+    await pg.mouse.click(Math.round(fr.l + 6), Math.round((fr.t + fr.b) / 2)); await sleep(300);
+    const after = await lantern(pg);
+    check('a click on the footer keeps the lantern open and its line focused', after.open && after.focused, JSON.stringify({ open: after.open, focused: after.focused })); }
   await pg.keyboard.press('Escape'); await sleep(150);
   check('Esc closes it', !(await lantern(pg)).open);
 
@@ -298,6 +310,13 @@ try {
   await pg.keyboard.press('Tab'); await sleep(400);
   check('"wave" + Tab plays the emote (playEmote("wave") observed)', (await pg.evaluate(() => globalThis.__emoted)).includes('wave'),
     JSON.stringify(await pg.evaluate(() => globalThis.__emoted)));
+
+  // a typo + Tab: nothing to do, so nothing happens — Tab never says
+  { const before = await said(pg, 'zzqx');
+    await type(pg, 'zzqx'); await pg.keyboard.press('Tab'); await sleep(600);
+    const after = await lantern(pg);
+    check('"zzqx" + Tab says nothing and leaves the lantern open', (await said(pg, 'zzqx')) === before && after.open, JSON.stringify({ before, now: await said(pg, 'zzqx'), open: after.open }));
+    await pg.keyboard.press('Escape'); await sleep(150); }
 
   // plain speech: the say row first → chat's own send path (server echo lands in the log)
   await type(pg, 'hello there');

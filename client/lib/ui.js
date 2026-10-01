@@ -306,7 +306,8 @@ export function settingsFrame() {
 /** A section of the world (or settings) frame: a TAB in its strip and a pane under it. onOpen is
  *  awaited each time the tab is chosen, so rosters and catalogs re-fetch instead of going stale.
  *  The api is the accordion's: `box` (#sec-<id>, the pane, .open while chosen) holds `body`; `head`
- *  is the tab button (#sec-<id>-tab); toggle(true) chooses it, toggle(false) folds the pane away. */
+ *  is the tab button (#sec-<id>-tab); toggle(true) chooses it, toggle(false) folds the pane away,
+ *  toggle() flips. */
 export function makeSection(title, onOpen, { id = '', host: hostName = 'world' } = {}) {
   const hostFrame = hostName === 'settings' ? settingsFrame() : panelFrame();
   const box = document.createElement('div');
@@ -336,7 +337,7 @@ export function makeSection(title, onOpen, { id = '', host: hostName = 'world' }
     box, head, body, key: id || label,
     get isOpen() { return box.classList.contains('open'); },
     async toggle(force) {
-      const open = force ?? true;   // a tab click CHOOSES; only an explicit false folds the pane
+      const open = force ?? !api.isOpen;   // a tab click passes true: it CHOOSES, never folds
       if (open) {
         for (const o of hostFrame.sections) if (o !== api && o.isOpen) o.toggle(false);
         select(true);

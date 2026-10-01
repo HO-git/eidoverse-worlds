@@ -304,6 +304,14 @@ console.log('TABS — every registered section is a tab; choosing one shows its 
   const again = ui.makeSection('🎨 extra', () => {}, { host: 'settings' });
   check('a removed section\'s own row goes with it', (again.remove(), await tick(), actions.get('section:settings:extra') === null));
 
+
+  // toggle() with no argument flips, as the accordion's did (mods call ctx.ui.section(…).toggle())
+  const video = frame.sections.find((x: any) => x.key === 'video');
+  await video.toggle(true);
+  await video.toggle();
+  check('toggle() on the chosen tab folds it', !video.isOpen, state());
+  await video.toggle();
+  check('toggle() on a folded tab chooses it', video.isOpen, state());
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

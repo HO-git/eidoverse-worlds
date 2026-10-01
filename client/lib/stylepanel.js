@@ -61,6 +61,11 @@ export function setXrPanelAlpha(v) {
   bus.emit('style', { key: '--xr-panel-a', value: String(n) });   // the VR quads re-raster and pick their pass on this
 }
 
+// the opacity dials follow the token whoever sets it (a command, a reset, code): a dial that kept showing 1.00 while
+// the VR panels sat at 0.6 is a control that lies (probe shot 148, 09-30). One listener, the newest panel's repaint.
+let repaintDials = null;
+bus.on('style', (e) => { if (e?.key === '--xr-panel-a' || e?.key === '*') repaintDials?.(); });
+
 function currentHex(f) {
   const v = getComputedStyle(document.documentElement).getPropertyValue(f.key).trim();
   return f.kind === 'rgbTriplet' ? tripletToHex(v) : v;
@@ -112,6 +117,7 @@ export function initStylePanel() {
       0.3, 1, panelAlpha, setPanelAlpha);
     const xrVis = dial('VR panel opacity', 'the panels in a headset: 1 is solid (the default); lower lets the world show through behind the text.',
       ...XR_PANEL_A_RANGE, xrPanelAlphaToken, setXrPanelAlpha);
+    repaintDials = () => { vis.repaint(); xrVis.repaint(); };
 
     const reset = document.createElement('button');
     reset.textContent = 'reset to defaults';

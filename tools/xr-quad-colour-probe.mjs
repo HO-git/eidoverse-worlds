@@ -401,16 +401,31 @@ try {
       for (let i = 0; i < data.length; i += 4) { const k = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2]; hist.set(k, (hist.get(k) ?? 0) + 1); }
       let mk = 0, mn = -1; for (const [k, n] of hist) if (n > mn) { mk = k; mn = n; }
       const backPx = Array.from(t2.getImageData(2, 2, 1, 1).data).slice(0, 3);
+      // the dial on the quad shows the value the quad is at: readout text, and the thumb where HTMLMesh draws it
+      const row = [...document.querySelectorAll('#sec-style .row')].find((r) => r.querySelector('.nm')?.textContent === 'VR panel opacity');
+      const inp = row?.querySelector('input[type=range]'), readout = inp?.nextElementSibling?.textContent ?? null, value = inp?.value;
+      const tq = D.domQuadTexture('settings'); tq.paused = false; tq.update();
+      const qc = tq.image.getContext('2d'), er = tq.dom.getBoundingClientRect(), sc = tq.image.width / er.width;
+      const ir = inp.getBoundingClientRect(), H = ir.height, W = ir.width;
+      const at = (v) => { const pos = ((v - Number(inp.min)) / (Number(inp.max) - Number(inp.min))) * (W - H);
+        return Array.from(qc.getImageData(Math.round((ir.left - er.left + pos + H / 2) * sc), Math.round((ir.top - er.top + H / 2) * sc), 1, 1).data).slice(0, 3); };
+      const thumb = at(a), other = at(a === 1 ? 0.6 : 1);   // the thumb at a; and (checked at 0.6) where a stale dial's thumb would sit — bare track
       const url = tmp.toDataURL('image/png');
       rig.remove(back); back.geometry.dispose(); back.material.dispose(); tex.dispose();
       D.domQuadsExit(rig);
       S.setXrPanelAlpha?.(1);
-      return { a, panel: [mk >> 16, (mk >> 8) & 255, mk & 255], back: backPx, url };
+      return { a, panel: [mk >> 16, (mk >> 8) & 255, mk & 255], back: backPx, url, readout, value, thumb, other };
     }, a);
     save(`vr-opacity-${a === 1 ? '1.0' : 'min'}-bright-scene`, r.url);
     bright.push(r);
   }
   console.log(`  · over a bright scene: ${bright.map((r) => `VR opacity ${r.a}: panel rgb(${r.panel}), backdrop rgb(${r.back})`).join('; ')}`);
+  for (const r of bright) {
+    console.log(`  · VR opacity ${r.a}: dial value ${r.value}, readout ${r.readout}; quad thumb pixel rgb(${r.thumb}), the other end rgb(${r.other})`);
+    const lum = (p) => Math.max(...p);
+    check(`vr-a: at ${r.a} the quad's own dial shows ${r.a.toFixed(2)} (readout, and the thumb drawn there)`,
+      r.readout === r.a.toFixed(2) && Number(r.value) === r.a && lum(r.thumb) > 150 && (r.a === 1 || lum(r.other) < 100), JSON.stringify({ value: r.value, readout: r.readout, thumb: r.thumb, other: r.other }));
+  }
   check('vr-a: over a bright scene at 1, the panel is the token, untouched by what is behind (Δ ≤ 4)', near(bright[0].panel, panelTok, 4), `rgb(${bright[0].panel})`);
   check('vr-a: …at 0.6 the scene shows through (panel lighter, still well under the backdrop)',
     bright[1].panel.every((v, i) => v > panelTok[i] + 20 && v < bright[1].back[i] - 20), `rgb(${bright[1].panel}) between rgb(${panelTok}) and rgb(${bright[1].back})`);

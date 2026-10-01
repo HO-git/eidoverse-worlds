@@ -214,10 +214,15 @@ export function initEmoteBar() {
   const grid = document.createElement('div');
   grid.className = 'tiles fixed';
   const tiles = new Map();
+  // a rebuild re-registers from scratch: register() merges and skips undefined fields,
+  // so writing over the old entries would keep a moved emote's old key and a removed one's row
+  let unregs = [];
   // built from the def-hydrated vocabulary (§24l) and rebuilt when a defs
   // push re-hydrates it — icons ride the same table as the names now
   const fill = () => {
     grid.innerHTML = ''; tiles.clear();
+    for (const off of unregs) off();
+    unregs = [];
     // postures lead the row as tiles like the rest — EMOJI, same as the emotes
     // (live, 09-05 16:41: "STILL have phosphor icons instead of emojis"); the same
     // measured fallback: a platform without the glyph gets the word
@@ -245,12 +250,12 @@ export function initEmoteBar() {
       grid.appendChild(b);
       tiles.set(name, b);
       // the tile's own act, findable by name; number keys 1–9 follow EMOTE_ORDER (main.js)
-      registerAction({ id: `emote:${name}`, title: name, group: 'emotes', keywords: ['emote', 'gesture'],
-        icon: emojiRenders(em) ? em : undefined, key: i < 9 ? String(i + 1) : undefined, run: b.onclick });
+      unregs.push(registerAction({ id: `emote:${name}`, title: name, group: 'emotes', keywords: ['emote', 'gesture'],
+        icon: emojiRenders(em) ? em : undefined, key: i < 9 ? String(i + 1) : undefined, run: b.onclick }));
     });
     // sit and lie are keys (X, Z — controller.js registers those); standing up has no key, only this tile
-    registerAction({ id: 'posture:stand', title: 'stand up', group: 'body', keywords: ['posture', 'get up'], icon: 'personStanding',
-      run: () => { posture('stand'); paint(); } });
+    unregs.push(registerAction({ id: 'posture:stand', title: 'stand up', group: 'body', keywords: ['posture', 'get up'], icon: 'personStanding',
+      run: () => { posture('stand'); paint(); } }));
     if (f._state) snapTo(f._state.w);
   };
   const paint = () => { const lit = myState.emote ?? (performance.now() < litUntil ? litEmote : null); for (const [n, b] of tiles) b.classList.toggle('on', n.startsWith('posture:') ? (myState.clip === n.slice(8) || (n === 'posture:sit' && myState.clip === 'sitchair')) : lit === n); };

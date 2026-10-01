@@ -24,6 +24,7 @@ let rows = [];        // what is on screen, selectable, in display order
 let sel = 0;
 let best = -1;        // the default highlight for this query (the best action row); -1: nothing to do
 let moved = false;    // the person moved the highlight themselves: Enter runs it
+let prevFocus = null; // what had focus when it opened: closing hands it back
 let deps = { submit: () => {}, whisperTarget: () => null };
 
 const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -32,6 +33,7 @@ export const isLanternOpen = () => !!root && !root.hidden;
 
 export function openLantern(text = '') {
   if (!root) return;
+  if (root.hidden) prevFocus = document.activeElement;
   place();
   root.hidden = false;
   pill?.classList.add('open');
@@ -50,7 +52,14 @@ export function closeLantern() {
   root.hidden = true;
   pill?.classList.remove('open');
   document.body.classList.remove('lantern-open');
-  if (document.activeElement === input) input.blur();
+  // only while the line still holds focus (a click that moved it elsewhere keeps it there), and only to
+  // a field someone was typing in (the chat line): a focused button — the pill, the rail's search entry —
+  // would take the next Enter or Space as its own click instead of letting it reach the world's keys
+  if (document.activeElement === input) {
+    if (prevFocus?.isConnected && prevFocus !== input && prevFocus.matches?.('input, textarea, [contenteditable=""], [contenteditable="true"]')) prevFocus.focus();
+    else input.blur();
+  }
+  prevFocus = null;
   dispatchEvent(new CustomEvent('lantern'));
 }
 

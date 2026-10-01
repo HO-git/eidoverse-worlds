@@ -26,7 +26,7 @@ A.register({ id: 'cmd:w', title: '/w', group: 'commands', keywords: ['whisper'],
 A.register({ id: 'cmd:who', title: '/who', group: 'commands', detail: 'list everyone present', run: () => ran.push('cmd:who') });
 
 const hint = document.createElement('div'); hint.id = 'hintbar'; document.body.append(hint);
-const before = document.createElement('button'); before.id = 'before'; document.body.append(before);
+const before = document.createElement('input'); before.id = 'before'; document.body.append(before);   // the chat line, say
 L.initLantern({ submit: (q: string) => said.push(q) });
 const root = document.getElementById('lantern')!;
 const input = root.querySelector('.ln-input') as HTMLInputElement;
@@ -85,6 +85,26 @@ const pi = new Event('pointerdown', { bubbles: true, cancelable: true });
 input.dispatchEvent(pi);
 check('…but not on the line itself (placing the caret is the line\'s own business)', !pi.defaultPrevented);
 L.closeLantern();
+
+console.log('LANTERN — closing gives focus back');
+before.focus(); L.openLantern('');
+check('open: the line has focus', document.activeElement === input);
+key('Escape');
+check('Esc closes and focus goes back to the field that had it', !L.isLanternOpen() && document.activeElement === before, document.activeElement?.id || String(document.activeElement));
+before.focus(); L.openLantern('sit'); key('Tab');
+check('…after Tab runs an action too', document.activeElement === before, document.activeElement?.id || String(document.activeElement));
+const other = document.createElement('button'); other.id = 'other'; document.body.append(other);
+before.focus(); L.openLantern('');
+other.focus(); L.closeLantern();
+check('focus that already left the lantern is not pulled back', document.activeElement === other, document.activeElement?.id || String(document.activeElement));
+before.focus(); L.openLantern('');
+before.remove(); key('Escape');
+check('a previously focused node that is gone is not focused (no throw)', !L.isLanternOpen());
+document.body.append(before);
+const btn = document.createElement('button'); btn.id = 'btn'; document.body.append(btn);
+btn.focus(); L.openLantern(''); key('Escape');
+check('a button that had focus (the pill, a rail entry) is not refocused: its Enter/Space would click it', document.activeElement !== btn,
+  document.activeElement?.id || String(document.activeElement));
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

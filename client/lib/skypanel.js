@@ -19,7 +19,7 @@ import { GRASS_QUALITY, getGrassQuality, setGrassQuality,
   getGrassDensity, getGrassShed, getGrassApplied } from './terrain.js';
 import { MODEL_QUALITY } from './lod_policy.js';
 import { loggedSky, skyPreviewing, skyRendering, skyDegraded, getCloudQuality } from './sky.js';
-import { hoursAt } from '../../shared/forecast.js';
+import { effectiveClock } from '../../shared/forecast.js';
 import { stateLines } from './statelines.js';
 import { modelQuality, dialModelQuality } from './realize/models.js';
 
@@ -63,10 +63,13 @@ export function paintSky(body) {
     }
     const parts = [];
     if (a.system === 'skymesh') parts.push('basic sky');
-    if (a.clock === 'real') parts.push(`real clock${a.tz ? ` (${a.tz})` : ''}`);
+    // what actually drives the sun: no tz follows Los Angeles, and a tz that doesn't resolve leaves the parked clock
+    const ec = effectiveClock({ ...a, ts: L.t0 }, Date.now());
+    if (ec.mode === 'real') parts.push(`real clock (${ec.tz})`);
     else {
-      const h = ((hoursAt({ ...a, ts: L.t0 }, Date.now()) % 24) + 24) % 24;
-      parts.push(`${String(Math.floor(h)).padStart(2, '0')}:${String(Math.floor((h % 1) * 60)).padStart(2, '0')}${a.rate ? ' (running)' : ''}`);
+      const h = ((ec.hour % 24) + 24) % 24;
+      parts.push(`${String(Math.floor(h)).padStart(2, '0')}:${String(Math.floor((h % 1) * 60)).padStart(2, '0')}`
+        + `${ec.mode === 'rated' ? ' (running)' : ''}${ec.requestedTz ? ` (tz ${ec.requestedTz} not recognised)` : ''}`);
     }
     if (a.weather) parts.push(a.weather);
     // the detailed sky builds cumulus for a log with no (or an unknown) clouds value (sky.js makeSky), so say that

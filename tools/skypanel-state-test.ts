@@ -52,5 +52,15 @@ logSky({ hours: 18.5, rate: 0, weather: "clear", clouds: "clear" });
 check("authored clear: no note either", !/clouds⚙/.test(you()), you());
 S.cloudQuality = "medium";
 
+console.log("SKY PANEL — the clock line names what drives the sun");
+logSky({ clock: "real", weather: "clear", clouds: "clear" });
+check("a real clock with no tz names the default it follows", world().startsWith("world: real clock (America/Los_Angeles)"), world());
+logSky({ clock: "real", tz: "Europe/Paris", weather: "clear", clouds: "clear" });
+check("a real clock names its tz", world().startsWith("world: real clock (Europe/Paris)"), world());
+logSky({ clock: "real", tz: "Nowhere/Typo", dormantRated: { hours: 9, rate: 0, ts: Date.now() }, weather: "clear", clouds: "clear" });
+check("an unresolvable tz is not called a real clock", !/real clock/.test(world()), world());
+check("...the parked clock's hour shows, and the tz is named as unrecognised",
+  /^world: 09:00 .*Nowhere\/Typo/.test(world()), world());
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

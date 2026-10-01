@@ -32,7 +32,7 @@ let loadingItems = () => [];
 export function setLoadingItems(fn) { loadingItems = fn; }
 import { makeFrame, getFrame, isLocked, setLocked, resetLayout } from './frames.js';
 import { defsRegistry } from './defs.js';
-import { register as registerAction, unregister as unregisterAction, get as getAction } from './actions.js';
+import { register as registerAction, get as getAction } from './actions.js';
 import { openLantern, closeLantern, isLanternOpen, CHORD } from './lantern.js';
 
 const $ = (id) => document.getElementById(id);
@@ -352,7 +352,7 @@ export function makeSection(title, onOpen, { id = '', host: hostName = 'world' }
     /** take the tab and its pane out (a mod switched off) */
     remove() {
       const i = hostFrame.sections.indexOf(api); if (i >= 0) hostFrame.sections.splice(i, 1);
-      head.remove(); box.remove(); unregisterAction(actionId);
+      head.remove(); box.remove(); unregisterSelf();
       if (api.isOpen) { select(false); hostFrame.ensureTab(); }
       hostFrame.fitStrip();
     },
@@ -365,9 +365,12 @@ export function makeSection(title, onOpen, { id = '', host: hostName = 'world' }
   hostFrame.fitStrip();
   // a frame already on screen (restored open) gets its tab once this tick's registrations are in
   if (!hostFrame._tabQueued) { hostFrame._tabQueued = true; setTimeout(() => { hostFrame._tabQueued = false; hostFrame.ensureTab(); }, 0); }
-  // the lantern finds a section by its own name ("sky", "audio"): open the panel AND the tab
-  const actionId = `section:${hostName}:${label}`;
-  registerAction({
+  // the lantern finds a section by its own name ("sky", "audio"): open the panel AND the tab.
+  // A mod's section may share a built-in's label; a second id keeps it from merging into
+  // (and, on remove, deleting) the built-in's row.
+  let actionId = `section:${hostName}:${label}`;
+  for (let n = 2; getAction(actionId); n++) actionId = `section:${hostName}:${label}#${n}`;
+  const unregisterSelf = registerAction({
     id: actionId, title: label, group: hostName, keywords: [hostName],
     icon: glyph ?? undefined, detail: `open the ${label} tab`,
     run: () => api.toggle(true).catch((e) => report(title, e)),

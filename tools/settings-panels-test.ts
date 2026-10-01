@@ -292,6 +292,18 @@ console.log('TABS — every registered section is a tab; choosing one shows its 
   check('collapseAll folds the pane away (placing a ghost wants the view)', !ids.some((i) => document.getElementById(`sec-${i}`)!.classList.contains('open')), state());
   frame.hide(); frame.show(); await tick();
   check('shown again with nothing chosen, the frame opens its last tab (video)', state() === 'style:-/-/false video:open/on/true', state());
+
+  // a mod's section may share a built-in's label (mods.js passes no id): removing the mod's
+  // must not take the built-in's lantern row with it
+  const builtinRun = actions.get('section:settings:video')?.run;
+  const mod = ui.makeSection('video', () => {}, { host: 'settings' });
+  mod.remove(); await tick();
+  check('removing a mod section that shares a label keeps the built-in\'s lantern row',
+    !!actions.get('section:settings:video') && actions.get('section:settings:video')!.run === builtinRun,
+    `row=${!!actions.get('section:settings:video')} sameRun=${actions.get('section:settings:video')?.run === builtinRun}`);
+  const again = ui.makeSection('🎨 extra', () => {}, { host: 'settings' });
+  check('a removed section\'s own row goes with it', (again.remove(), await tick(), actions.get('section:settings:extra') === null));
+
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

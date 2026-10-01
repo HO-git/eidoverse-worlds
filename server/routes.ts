@@ -105,15 +105,15 @@ export function avatarPerfParam(raw: string | null, v: string | null): AvatarPer
   const LIM = { tris: 5e7, draws: 1e5, mats: 1e4, alpha: 1e4, bones: 1e4, texMB: 1e5 } as const;
   const n: any = {};
   for (const [k, max] of Object.entries(LIM)) {
-    const x = Number(o?.[k]);
-    if (!Number.isFinite(x) || x < 0 || x > max) return null;
+    const x = o?.[k];   // a number, not something that coerces to one (Number(null), Number([]), Number("") are all 0)
+    if (typeof x !== "number" || !Number.isFinite(x) || x < 0 || x > max) return null;
     n[k] = k === "texMB" ? Math.round(x * 100) / 100 : Math.round(x);
   }
   const r = rankOf(n);
   return { ...n, rank: r.rank, rankName: TIER_NAMES[r.rank], worst: r.worst, v };
 }
 export function avatarRoster(): { name: string; path: string; height: number | null; perf?: AvatarPerf | null; seat?: unknown }[] {
-  const seen = new Map<string, { url: string; file: string }>();
+  const seen = new Map<string, { url: string; file: string; v: string }>();
   for (const base of [LIBRARY_DIR, OPT_DIR]) {
     const dir = join(base, "eidoverse/assets/vrms");
     if (!existsSync(dir)) continue;
@@ -121,10 +121,8 @@ export function avatarRoster(): { name: string; path: string; height: number | n
       // .ktx2.vrm files are §20c texture variants living beside overlay
       // originals — negotiated serving artifacts, not bodies of their own
       if (f.endsWith(".vrm") && !f.endsWith(".ktx2.vrm")) {
-        seen.set(f.replace(".vrm", ""), {
-          url: `eidoverse/assets/vrms/${f}?v=${Math.round(Bun.file(join(dir, f)).lastModified)}`,
-          file: join(dir, f),
-        });
+        const v = String(Math.round(Bun.file(join(dir, f)).lastModified));
+        seen.set(f.replace(".vrm", ""), { url: `eidoverse/assets/vrms/${f}?v=${v}`, file: join(dir, f), v });
       }
     }
   }
@@ -137,7 +135,8 @@ export function avatarRoster(): { name: string; path: string; height: number | n
     if (!d.vrm) continue;
     const file = resolveLibFile(d.vrm);
     if (!file) { console.error(`[defs] avatar "${name}": vrm not found in library — ${d.vrm}`); continue; }
-    seen.set(name, { url: `${d.vrm}?v=${Math.round(Bun.file(file).lastModified)}`, file });
+    const v = String(Math.round(Bun.file(file).lastModified));
+    seen.set(name, { url: `${d.vrm}?v=${v}`, file, v });
   }
   // stature metadata, contributed alongside portraits (see POST /thumb);
   // a def's declared height wins over the measured sidecar
@@ -151,10 +150,10 @@ export function avatarRoster(): { name: string; path: string; height: number | n
   // never rehash a VRM and can never read a stale value as fresh). The sha
   // work behind judge() is mtime-cached, so a roster read costs hashing only
   // when a body's bytes actually changed.
-  return [...seen].map(([name, { url, file }]) => ({ name, path: url,
+  return [...seen].map(([name, { url, file, v }]) => ({ name, path: url,
     height: defs[name]?.height ?? hmeta[name.replace(/[^a-zA-Z0-9_-]/g, "_")]?.h ?? null,
-    // the loupe's rank of THIS version only: a stamp from an older export is withheld until a wearer re-measures
-    perf: ((p) => p && p.v === String(Math.round(Bun.file(file).lastModified)) ? p : null)(hmeta[name.replace(/[^a-zA-Z0-9_-]/g, "_")]?.perf),
+    // the loupe's rank of THIS version only (the v its URL carries): a stamp from an older export is withheld until a wearer re-measures
+    perf: ((p) => p && p.v === v ? p : null)(hmeta[name.replace(/[^a-zA-Z0-9_-]/g, "_")]?.perf),
     seat: seatStore.judge(name, file) }));
 }
 

@@ -22,7 +22,10 @@ const good = { tris: 70_000, draws: 40, mats: 12, alpha: 2, bones: 120, texMB: 3
 // 1. validation (pure)
 check("valid numbers → a record", !!avatarPerfParam(JSON.stringify(good), "123"));
 for (const [why, raw, v] of [["NaN field", { ...good, tris: "lots" }, "1"], ["negative", { ...good, draws: -1 }, "1"], ["absurd", { ...good, tris: 1e12 }, "1"],
-  ["missing field", { tris: 5 }, "1"], ["no v", good, null], ["v not digits", good, "1;drop"], ["not JSON", "{", "1"]] as const)
+  ["missing field", { tris: 5 }, "1"], ["no v", good, null], ["v not digits", good, "1;drop"], ["not JSON", "{", "1"],
+  // Number(null) / Number([]) / Number("") are all 0: a field must BE a number, not coerce to one (review 09-30 N4)
+  ["null field", { ...good, alpha: null }, "1"], ["array field", { ...good, bones: [] }, "1"], ["empty-string field", { ...good, mats: "" }, "1"],
+  ["numeric-string field", { ...good, tris: "70000" }, "1"]] as const)
   check(`rejects: ${why}`, avatarPerfParam(typeof raw === "string" ? raw : JSON.stringify(raw), v as any) === null);
 const lie = avatarPerfParam(JSON.stringify({ ...good, tris: 900_000, rank: 0, rankName: "excellent" }), "1");
 check("the rank is recomputed: 900k tris with a claimed 'excellent' ranks by its numbers", !!lie && lie.rank > 0 && lie.rankName !== "excellent" && lie.worst === "tris", lie);

@@ -7,7 +7,7 @@
 // What must hold:
 //   THE SPLASH, driven by boot.js's own phases (main.js is held back, so the static splash stays up and the
 //   probe owns the progress): the first paint — before any script — has the peg OFF to the left by the full
-//   travel D = 79.24 and clipped to the sphere; at p = 0.5 the peg sits at −D·(1 − ease(0.5)) (doorway.html's
+//   travel D = 80.5 (the peg's arc tip, x 88, clears the sphere's leftmost x 8 by half a unit) and clipped to the sphere; at p = 0.5 the peg sits at −D·(1 − ease(0.5)) (doorway.html's
 //   ease); at p = 1 it has NO transform and NO clip: the still mark. The frame never moves.
 //   THE REAL BOOT: the peg is painted by paint() as progress arrives (a value strictly between the ends is
 //   seen), and after finishBoot the mark is the still mark.
@@ -22,7 +22,7 @@ const shotDir = (() => { const i = process.argv.indexOf('--shots'); return i > 0
 if (shotDir) mkdirSync(shotDir, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const D = 87.620 - 8.380;
+const D = 88 - 8 + 0.5;   // boot.js PEG_D: the arc TIP (x 88) clears the sphere's leftmost x (8)
 const ease = (p) => { const k = 0.35; return (1 - k) * p + k * (1 - Math.pow(1 - p, 3)); };
 const HUD24 = [
   'M4.675 3 L19 3 L19 9 L16 9 L16 6 L1.780 6 A11 11 0 0 1 4.675 3 Z',

@@ -86,9 +86,12 @@ const escapeHtml = (v) => String(v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '
 
 // THE PEG IS THE PROGRESS (owner, 09-29 23:53): the new mark's peg enters from the sphere's left skin,
 // passes the doorway, and rests at 1 — the logo notes' splash/doorway.html render(p), verbatim in its
-// numbers. Its front (the R arc) starts exactly ON the left skin, fully outside the sphere clip:
-// right end x = 48 + √(40² − 5.5²) = 87.620, left skin x = 48 − 39.620 = 8.380 → D = 79.240 (user units).
-const PEG_D = 87.620 - 8.380;
+// numbers — except its START. The peg's front is an arc of the same r = 40 circle, so its TIP (on the centre line,
+// y = 50) is at x = 48 + 40 = 88 and the sphere's leftmost point is 8: D must be at least 80 for nothing to show at
+// rest. (The notes' 79.240 measured the arc's ends at y = 44.5 / 55.5, which left a 0.76-unit sliver of peg inside
+// the sphere while the engine woke — the owner, 10-01: "a teeny speck… looks like an error".) +0.5 clears the
+// anti-aliased edge.
+const PEG_D = 88 - 8 + 0.5;
 /** Mostly honest (linear in progress) with a gentle ease-out on the last stretch, so the peg ARRIVES
  *  rather than stops. ease(0) = 0, ease(1) = 1 exactly, monotone. */
 export function pegEase(p) { const k = 0.35; return (1 - k) * p + k * (1 - Math.pow(1 - p, 3)); }

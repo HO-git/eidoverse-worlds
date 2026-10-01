@@ -275,9 +275,25 @@ try {
   check('dimmed: every partial-opacity case lands on the quad as on the desktop (Δ ≤ 3 of 255)', dimRows.every((r) => r.d <= 3), dimRows.map((r) => `${r.k} Δ${r.d}`).join(', '));
 
   // ── exit, then #2: the quad material through the real renderer's output pass ──
-  { const t0 = Date.now();   // the exit compiles what the desktop pass draws again (TSL warnings land here): give it 2 min
-    await Promise.race([pg.evaluate(async () => { await window.__iwerDevice.activeSession?.end(); }), sleep(120000).then(() => { throw new Error('session end pinned for 120 s'); })]);
-    console.log(`  · session ended in ${((Date.now() - t0) / 1000).toFixed(1)} s`); }
+  // EXIT IS SLOW HERE, NOT HUNG (09-30, chased): session.end() resolves at once, then the desktop's first frames
+  // rebuild its pipelines (the TSL warning burst) on a headless main thread already at ~0.7 s/frame, and the page can
+  // stay unresponsive for more than ev()'s 30 s. Through the product's own leaveVR (scratch exit-diag, with and without
+  // PTT toggled in VR) the session ended ~10 s after the call either way, getUserMedia was never called, and the page
+  // answered every 5 s poll after. So: wait for the page to answer again (up to 3 min, measured and printed); if it
+  // never does, pause it over CDP and print the JS stack it is stuck in.
+  { const t0 = Date.now();
+    await pg.evaluate(() => { window.__iwerDevice.activeSession?.end(); });
+    let ok = false;
+    while (!ok && Date.now() - t0 < 180000) ok = await Promise.race([pg.evaluate(() => !window.__iwerDevice.activeSession), sleep(5000).then(() => false)]);
+    console.log(`  · session ended; page answering again after ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+    if (!ok) {
+      const cdp = await pg.context().newCDPSession(pg); await cdp.send('Debugger.enable');
+      const paused = new Promise((r) => cdp.once('Debugger.paused', r)); await cdp.send('Debugger.pause');
+      const e = await Promise.race([paused, sleep(10000).then(() => null)]);
+      console.log(`  · EXIT HANG — stack: ${e ? e.callFrames.slice(0, 12).map((f) => `${f.functionName || '(anon)'}@${f.url.split('/').pop()}:${f.location.lineNumber + 1}`).join(' < ') : 'no JS pause within 10 s (native/GPU)'}`);
+      throw new Error('the page never answered after the session ended (3 min)');
+    }
+  }
   await pg.waitForFunction(() => !window.__iwerDevice.activeSession, null, { timeout: 10000 }).catch(() => {});
   await sleep(500);
   const tokens = await ev(() => {

@@ -62,5 +62,21 @@ check("an unresolvable tz is not called a real clock", !/real clock/.test(world(
 check("...the parked clock's hour shows, and the tz is named as unrecognised",
   /^world: 09:00 .*Nowhere\/Typo/.test(world()), world());
 
+console.log("SKY PANEL — a new log over your unsaved preview");
+logSky({ hours: 12, rate: 0, weather: "clear", clouds: "clear" });
+const slider = body.querySelector('input[type="range"]') as HTMLInputElement;
+slider.value = "7"; slider.dispatchEvent(new Event("input"));
+check("a slider edit previews", /previewing \(not logged\)/.test(you()), you());
+logSky({ hours: 15, rate: 0, weather: "rain", clouds: "stratus" });   // someone else logs
+check("...a log landing on it says your edits aren't shown", /unsaved edits aren't shown/.test(you()), you());
+check("...and the slider still holds your edit", slider.value === "7", slider.value);
+slider.value = "8"; slider.dispatchEvent(new Event("input"));
+check("touching a slider previews your edits again", /previewing \(not logged\)/.test(you()) && !/unsaved/.test(you()), you());
+(body.querySelector("button.dirty") as HTMLButtonElement).click();
+logSky({ ...S.sent.at(-1)[1] });   // your own commit comes back as the log
+check("after ✓ your log is the sky: nothing to say", you() === "", you());
+logSky({ hours: 20, rate: 0, weather: "clear", clouds: "clear" });
+check("with nothing unsaved a new log is simply followed", you() === "" && slider.value === "20", `${you()} slider=${slider.value}`);
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

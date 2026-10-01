@@ -80,6 +80,9 @@ export function paintSky(body) {
     const you = [];
     if (skyRendering()) you.push('loading…');
     if (skyPreviewing()) you.push('previewing (not logged)');
+    // Unsaved edits and no preview: a log landed on top of it (applySky ends a preview). Said, not re-previewed: that
+    // would hide the sky someone just shared the moment it arrived. Touching any control previews the edits again.
+    else if (commit.classList.contains('dirty')) you.push("your unsaved edits aren't shown — a new sky was logged");
     if (!basic && getCloudQuality() === 'off' && clouds !== 'clear') you.push('no clouds (your clouds⚙ is off)');
     if (skyDegraded() && a.system !== 'skymesh') you.push("the basic sky (this GPU can't run the full one)");
     lines.set(parts.join(' · '), you.join(' · '));

@@ -38,6 +38,7 @@ const dockBtn = document.createElement('button'); dockBtn.dataset.toggles = 'pro
 const stub = await import('./settings-panels-stub.mjs');
 const { calls, emitted, xrPanels, net, bus } = stub;
 const ui = await import('../client/lib/ui.js');
+const { getFrame } = await import('../client/lib/frames.js');
 const style = await import('../client/lib/stylepanel.js');
 const video = await import('../client/lib/videopanel.js');
 const profile = await import('../client/lib/profile.js');
@@ -312,6 +313,24 @@ console.log('TABS — every registered section is a tab; choosing one shows its 
   check('toggle() on the chosen tab folds it', !video.isOpen, state());
   await video.toggle();
   check('toggle() on a folded tab chooses it', video.isOpen, state());
+}
+
+console.log('WORLD — a viewport restore opens a tab, like show() does');
+{
+  // Last session the viewport auto-hid World; its sections register while it is hidden, so the queued
+  // ensureTab finds it closed and does nothing. When the window grows back, the viewport rule un-hides it
+  // WITHOUT show() — it must still open a tab, not come back as an empty pane.
+  check('setup: World is not built yet', !getFrame('world'));
+  localStorage.setItem('ew-frame-world', JSON.stringify({ x: 700, y: 52, w: 280, h: 320, hidden: true, autoHidden: true }));
+  const sec = ui.makeSection('🧪 probe', () => {}, { id: 'probe' });
+  await tick();
+  const w: any = getFrame('world');
+  check('setup: World comes up auto-hidden, no tab open', !w.visible && !sec.isOpen, JSON.stringify({ visible: w.visible, open: sec.isOpen }));
+  const vp = (x: number, y: number) => { (window as any).innerWidth = x; (window as any).innerHeight = y; window.dispatchEvent(new Event('resize')); };
+  const w0 = innerWidth, h0 = innerHeight;
+  vp(390, 844); vp(w0, h0); await tick();
+  check('setup: the viewport restores World', w.visible === true);
+  check('…with its remembered (or first) tab open, not an empty pane', sec.isOpen, JSON.stringify(w.sections.map((x: any) => [x.key, x.isOpen])));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -273,8 +273,7 @@ function tabbedFrame(id, opts) {
     pick.toggle(true).catch((e) => report(pick.key, e));
   };
   f.rememberTab = (key) => { try { localStorage.setItem(LS, key); } catch {} };
-  const show = f.show;
-  f.show = () => { show.call(f); f.ensureTab(); fitStrip(); return f; };
+  f.onShow(() => { f.ensureTab(); fitStrip(); });   // every way back on screen, the viewport restore included
   return f;
 }
 

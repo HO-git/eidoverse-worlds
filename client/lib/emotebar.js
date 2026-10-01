@@ -79,8 +79,8 @@ export function initEmoteBar() {
     // bottom edge, and _paint alone skips every viewport clamp (#185 review).
     if (f._fit) f._fit(); else f._paint();
   };
-  // a saved size from an older layout (or any drift) refits the moment the menu opens
-  const show = f.show.bind(f);
+  // a saved size from an older layout (or any drift) refits the moment the menu is on screen — onShow, not a
+  // wrapped show(): the viewport auto-restore brings the bar back without show()
   // OPEN AT A SIZE YOU CAN ACTUALLY SEE (R, 2026-09-12: "at least be at a size
   // they can be completely viewed at when open"). show() snapped to _state.w —
   // the DEFAULT 352px — so tapping the bar open on a phone put a 352px bar in a
@@ -169,8 +169,7 @@ export function initEmoteBar() {
   // chrome sits at 27 (#dock), 45 (#micbtn/#earbtn, mictoggle.js) and 60
   // (.capnotice) — the loop measures all four — so a bar left there can never win
   // by stacking. (#emenu 40 and #trayzone 28 are not in the list at all.)
-  f.show = () => {
-    show();
+  f.onShow(() => {
     // RE-DERIVE, DO NOT RATCHET. `Math.min(state.w, room)` can only ever shrink, and
     // state.w is restored from localStorage — so one bad width outlives the condition
     // that caused it, forever. Measured 2026-09-12: while `.capnotice` was still in
@@ -209,8 +208,7 @@ export function initEmoteBar() {
     // deliberate desktop arrangement is never replayed onto a phone at all. R's call,
     // 2026-09-12 18:06; mobile is being picked up by someone else, so this is theirs to
     // design rather than ours to guess at. Disclosed in the PR body under "known".
-    return f;
-  };
+  });
   const grid = document.createElement('div');
   grid.className = 'tiles fixed';
   const tiles = new Map();

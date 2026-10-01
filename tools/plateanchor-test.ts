@@ -167,13 +167,13 @@ console.log('seen from above (owner, 10-01: "offsets away from the avatar when s
     return { eye, up, fwd };
   };
   const lift = (v: any, o: any = {}) => PA.plateViewLift?.({ ...v, plate, drop, headR, halfH, ...o });
-  // the clearance it promises, measured independently: the lifted plate's bottom edge vs the head's top on screen
+  // the clearance it promises, measured independently: the lifted plate's bottom edge vs the head's top on screen, less
+  // the stand-off it has at eye level (drop − halfH: positive for a near plate, an overlap for one grown for range)
   const margin = (v: any, d: number, hh = halfH) => {
     const P = [plate[0] + v.up[0] * d, plate[1] + v.up[1] * d, plate[2] + v.up[2] * d];
     const H = [plate[0], plate[1] - drop - headR, plate[2]];   // the head, a ball under the crown
     const rp = sub(P, v.eye), rh = sub(H, v.eye);
-    const accepted = Math.max(0, hh - drop);   // what the plate already covers of the crown at eye level (a grown plate)
-    return (dot(rp, v.up) - hh) / dot(rp, v.fwd) - (dot(rh, v.up) + headR - accepted) / dot(rh, v.fwd);
+    return (dot(rp, v.up) - hh) / dot(rp, v.fwd) - (dot(rh, v.up) + headR + drop - hh) / dot(rh, v.fwd);
   };
   check('plateViewLift exists', typeof PA.plateViewLift === 'function');
   check('eye level: no lift at all', lift(view(0)) === 0, String(lift(view(0))));
@@ -181,10 +181,10 @@ console.log('seen from above (owner, 10-01: "offsets away from the avatar when s
     lift(view(0), { halfH: 0.2 }) === 0, String(lift(view(0), { halfH: 0.2 })));
   check('looking UP at a plate: no lift', lift(view(-25)) === 0);
   const l45 = lift(view(45)), l89 = lift(view(89));
-  check('45° down: lifted, and the bottom edge clears the head exactly (the least lift that does)',
+  check('45° down: lifted, and the bottom edge stands off the head by its eye-level gap exactly (the least lift that does)',
     l45 > 0.01 && Math.abs(margin(view(45), l45)) < 1e-9, `lift ${l45} margin ${margin(view(45), l45)}`);
-  check('near-vertical: lifted about a head-radius + half a plate (and clears it)',
-    l89 > 0.12 && l89 < headR + halfH + 0.01 && Math.abs(margin(view(89), l89)) < 1e-9, `lift ${l89}`);
+  check('near-vertical: lifted about a head-radius + the gap (and clears it)',
+    l89 > 0.15 && l89 < headR + drop + 0.01 && Math.abs(margin(view(89), l89)) < 1e-9, `lift ${l89}`);
   check('...and without the lift the plate WOULD overlap the head there', margin(view(89), 0) < -0.05 && margin(view(45), 0) < 0);
   let mono = true, worst = 0, prev = 0, okAll = true;
   for (let i = 0; i <= 890; i++) {

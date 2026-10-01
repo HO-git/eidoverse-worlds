@@ -106,11 +106,14 @@ const RIGID = { dead: 0 };
 // The plate hangs a gap over the crown in WORLD up. Looking down, that gap foreshortens (cos of the pitch) and the
 // head's own top rises on screen toward the plate, until from straight above the plate sits on the face. The plate is
 // a screen-aligned sprite, so the fix is in screen terms: slide it along the camera's up (perpendicular to the view,
-// so its stereo depth and its own-body depth clearance are untouched) by the least amount that puts its bottom edge
-// over the head's top. The head is a ball of `headR` under the crown, and everything is projected through the same
-// pinhole the renderer uses, so the answer is exact at any range. Eye level is left exactly as it was: whatever the
-// plate covers of the crown there (a plate grown for range is taller than the gap) is the overlap it is allowed
-// anywhere — so the lift is 0 level, grows smoothly with the pitch, and is about headR + halfH from straight above.
+// so its stereo depth and its own-body depth clearance are untouched) by the least amount that keeps its bottom edge
+// standing off the head's top by what it does at eye level (drop − halfH: a few cm for a near plate; negative — an
+// overlap — for a plate grown for range, which keeps exactly the overlap it has there). The head is a ball of `headR`
+// under the crown, projected through the same pinhole the renderer uses, so the answer is exact at any range. The lift
+// is 0 at eye level, grows smoothly as the camera pitches down, and is about headR + drop from straight above. A level
+// or upward-looking camera lifts nothing (the rule alone would ask ~1 cm looking up 25°, the head being nearer the eye
+// than the plate; at a level camera it is exactly 0, so the cut is continuous).
+// (Clearing the head's top with no stand-off left the pill touching the head from straight above — 10-01 shots.)
 // A pure function of the camera and the plate's own anchor (not the live head), so it is as steady as the plate.
 
 /** eye, up, fwd: the camera's world position and unit up / forward ([x,y,z]); plate: the plate's centre (world);
@@ -121,8 +124,7 @@ export function plateViewLift({ eye, up, fwd, plate, drop, headR, halfH }) {
   const zP = px * fwd[0] + py * fwd[1] + pz * fwd[2];
   const down = drop + headR;   // plate centre → the head ball's centre, straight down
   const zH = zP - down * fwd[1];
-  if (!(zP > 1e-3) || !(zH > 1e-3)) return 0;   // behind the eye (or NaN): nothing to clear
+  if (!(fwd[1] < 0) || !(zP > 1e-3) || !(zH > 1e-3)) return 0;   // level or looking up; behind the eye (or NaN)
   const yP = px * up[0] + py * up[1] + pz * up[2], yH = yP - down * up[1];
-  const accepted = Math.max(0, halfH - drop);
-  return Math.max(0, zP * (yH + headR - accepted) / zH - yP + halfH);
+  return Math.max(0, zP * (yH + headR + drop - halfH) / zH - yP + halfH);
 }

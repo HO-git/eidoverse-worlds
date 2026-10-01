@@ -563,9 +563,8 @@ export function initDebug(p = {}) {
   // physics = the ragdoll and its tuning, body = the secondary motion that rides a body (blink, hair,
   // wings), perf = what the frame costs. The frame numbers above stay put whichever tab is chosen.
   const tabs = dbgTabs(stack, ['physics', 'body', 'perf'], () => frame.visible);
-  // the remembered tab is chosen at boot with Debug closed: its groups wait until the panel is shown
-  const show = frame.show;
-  frame.show = () => { show.call(frame); tabs.flush(); return frame; };
+  // the remembered tab is chosen at boot with Debug closed: its groups wait until the panel is on screen
+  frame.onShow(tabs.flush);
   const phys = tabs.pane('physics');
   phys.append(
     viewRow('collider volumes', 'colliders', (v) => { if (!v) clearColliders(); }),

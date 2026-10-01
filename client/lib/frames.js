@@ -447,6 +447,7 @@ export function makeFrame(id, opts = {}) {
     Object.assign(state, { x, y, w: rest.w, h: rest.h });
   }
 
+  const showHooks = [];
   const api = {
     id, el: root, body, head,
     // live refs for riders that own their own sizing (the emote bar snaps itself
@@ -472,9 +473,13 @@ export function makeFrame(id, opts = {}) {
       // so edge-docking and fit() were blind to any resize it sat out (Esc, resize,
       // Esc — review C1). Painted first, so it is measurable now.
       if (!fitted) { fitted = true; fit(); } else { project(); fit(); }
-      save(); raise();
+      save(); raise(); shown();
       return api;
     },
+    /** run `fn` whenever the frame comes back on screen — by show(), and by the paths that un-hide it without
+     *  show(): the viewport auto-restore and a reset that leaves it open. Wrapping api.show misses those. */
+    onShow(fn) { showHooks.push(fn); return api; },
+    _shown: () => shown(),
     hide() { state.hidden = true; state.autoHidden = false; paint(); save(); return api; },   // deliberate: never auto-restored
     toggle() { state.hidden ? api.show() : api.hide(); return api; },
     get visible() { return !state.hidden; },
@@ -524,11 +529,12 @@ export function makeFrame(id, opts = {}) {
       // by the reset path.
       fitted = true; fit();
       paint();
-      if (!state.hidden) raise();
+      if (!state.hidden) { raise(); shown(); }
       return api;
     },
   };
 
+  function shown() { for (const fn of showHooks) fn(); }
   function raise() {
     if (zTop >= Z_HI) {
       const order = [...frames.values()].filter((f) => f.el !== root)
@@ -964,7 +970,7 @@ addEventListener('resize', () => {
         f.el.style.display = 'none'; f._paint?.(); f._save?.();
       } else if (fits && f._state.hidden && f._state.autoHidden) {
         f._state.hidden = false; f._state.autoHidden = false;
-        f.el.style.display = ''; f._paint?.(); f._save?.();
+        f.el.style.display = ''; f._paint?.(); f._save?.(); f._shown?.();
       }
     }
     _lastFits = fits;

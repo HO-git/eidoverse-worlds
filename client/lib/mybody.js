@@ -107,9 +107,11 @@ function applyMyBodyPrefs(av) {
   av.setUserScale?.(p.scale);
   av.setPlateY?.(p.plateY);
 }
-/** Profile › Avatar writes here: { scale?, plateY? } for the body you have on, saved and worn at once. */
-export function setMyBodyPref(patch) {
-  const p = saveBodyPrefs(lsRef, getMyAvatarName(), patch);
+/** Profile › Avatar writes here: { scale?, plateY? } for the body you have on, saved and worn at once. `name` is for a
+ *  write that outlived its body (bodies.js's rest-timer save after a switch): saved under it, worn only if still on. */
+export function setMyBodyPref(patch, name = getMyAvatarName()) {
+  const p = saveBodyPrefs(lsRef, name, patch);
+  if (name !== getMyAvatarName()) return p;
   if (me) { me.setUserScale?.(p.scale); me.setPlateY?.(p.plateY); }
   bus.emit('body-prefs', p);
   return p;

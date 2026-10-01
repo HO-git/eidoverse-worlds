@@ -10,6 +10,7 @@
 //   bodies.js: `const onMe = n === cur && !!getMe() && !getMe()?.isCapsule;` → `n === cur`
 //   bodies.js: drop the `!getMe()?.isCapsule` clause
 //   mybody.js: restore the unconditional same-path early return in wireAvatarSwitch
+//   bodies.js: flushBodyPrefs drops the captured name (`setMyBodyPref(p.patch)`)
 import { plugin } from 'bun';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
@@ -121,6 +122,14 @@ bodiesDispatch('plate-y-reset');
 check('nameplate reset → auto (0), size kept', state.prefs.plateY === 0 && state.prefs.scale === 1.5, JSON.stringify(state.prefs));
 bodiesDispatch('body-scale-reset');
 check('size reset → 100 %', state.prefs.scale === 1, JSON.stringify(state.prefs));
+// a VR slider has no release, so its save waits SAVE_MS — wearing another body inside that window must not file the
+// first body's value under the second's name (Greptile, #212)
+state.name = 'claude'; state.me = body(); state.prefs = { scale: 1, plateY: 0 }; state.writes = 0; state.writeNames = [];
+bodiesDispatch('body-scale', 140);
+state.name = 'other'; state.me = body();   // the switch, 0 ms later
+await new Promise((r) => setTimeout(r, 300));
+check('a pending slider value is saved under the body it was dragged on, not the one worn since', state.writes === 1 && state.writeNames[0] === 'claude', `${state.writes} writes under ${JSON.stringify(state.writeNames)}`);
+state.name = 'claude';
 state.me = { isCapsule: true };
 check('no section for the capsule (there is no body to size)', !byK(bodiesFields(), 'body-scale'));
 state.me = null;

@@ -73,18 +73,20 @@ function thisBodyFields() {
 }
 // A drag fires `input` per pixel. The body follows every tick; the store (a JSON rewrite of every body's prefs) is
 // written once the value has rested SAVE_MS, or at once on release (mountBodies' `change`). The VR quad has no release
-// event of its own, so the rest timer is what saves there.
+// event of its own, so the rest timer is what saves there. The pending value carries the body it was dragged on: a
+// switch inside the window must not file it under the next body.
 const SAVE_MS = 250;
 let pending = null, saveTimer = 0;
 function flushBodyPrefs() {
   clearTimeout(saveTimer); saveTimer = 0;
-  if (pending) { const p = pending; pending = null; setMyBodyPref(p); }
+  if (pending) { const p = pending; pending = null; setMyBodyPref(p.patch, p.name); }
 }
 function liveBodyPref(patch) {
-  const me = getMe();
+  const me = getMe(), name = getMyAvatarName();
+  if (pending && pending.name !== name) flushBodyPrefs();
   if (patch.scale != null) me?.setUserScale?.(patch.scale);
   if (patch.plateY != null) me?.setPlateY?.(patch.plateY);
-  pending = { ...pending, ...patch };
+  pending = { name, patch: { ...pending?.patch, ...patch } };
   clearTimeout(saveTimer); saveTimer = setTimeout(flushBodyPrefs, SAVE_MS);
 }
 function bodyDispatch(k, v) {

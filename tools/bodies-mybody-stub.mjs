@@ -6,4 +6,8 @@ export function getMe() { return state.me; }
 export function getMyAvatarName() { return state.name; }
 // this body's size / plate lift (Profile › Avatar): the prefs the section reads, and the writer it calls
 export function myBodyPrefs() { return state.prefs ?? { scale: 1, plateY: 0 }; }
-export function setMyBodyPref(patch) { state.prefs = { ...myBodyPrefs(), ...patch }; state.writes = (state.writes ?? 0) + 1; return state.prefs; }
+// `name` defaults to the body worn NOW, as the real one does — the body the write is filed under is recorded
+export function setMyBodyPref(patch, name = state.name) {
+  state.prefs = { ...myBodyPrefs(), ...patch }; state.writes = (state.writes ?? 0) + 1;
+  (state.writeNames ||= []).push(name); return state.prefs;
+}

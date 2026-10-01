@@ -98,8 +98,12 @@ function _zoneFor(f, e) {
 function _contentClaims(e) {
   // whatever really sits under the pointer: a scrollbar strip, a button, an
   // input — interactive content beats the grab; bare frame chrome does not
-  for (let t = document.elementFromPoint(e.clientX, e.clientY); t instanceof HTMLElement; t = t.parentElement) {
+  // Element, not HTMLElement: the topmost thing over a glyph button is its SVG <path>, and an HTMLElement-only walk
+  // never reached the <button> — so a pin in the ∃ menu's flyout that hung over a frame's edge band lost its press to
+  // the resize (measured 10-01, tools/frames-resize-test.ts)
+  for (let t = document.elementFromPoint(e.clientX, e.clientY); t instanceof Element; t = t.parentElement) {
     if (['BUTTON', 'INPUT', 'TEXTAREA', 'SELECT', 'A'].includes(t.tagName)) return true;
+    if (!(t instanceof HTMLElement)) continue;   // an SVG part has no scrollbars of its own
     if (t.scrollHeight > t.clientHeight + 1) {
       const sbw = t.offsetWidth - t.clientWidth;
       if (sbw > 0 && e.clientX >= t.getBoundingClientRect().right - sbw - 2) return true;

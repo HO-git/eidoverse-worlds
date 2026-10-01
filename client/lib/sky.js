@@ -828,8 +828,8 @@ async function worldSettled() {
   teeNow(`[sky] world settled after ${((performance.now() - t0) / 1000).toFixed(1)} s: compiling the sky now`);
 }
 // 'sky-busy' (true/false): the sky is still arriving here (the stand-in gradient is up, or a tier swap is compiling or
-// baking). Its one listener today is xr.js's entry curtain, which waits on it (capped at 15 s); no panel shows it
-// (review 10b L2: this comment used to promise a 'loading…' in the World › sky panel that nothing wires).
+// baking). Two listeners: xr.js's entry curtain, which waits on it (capped at 15 s), and the `arriving` flag above,
+// which feeds skyRendering() and so the World › sky panel's "you: loading…".
 let swapping = 0, busyShown = false;
 function announceBusy() {
   const b = interimSkyShown() || swapping > 0 || bakedRefreshing();

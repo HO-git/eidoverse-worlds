@@ -338,8 +338,15 @@ const makeLabel = (name) => {
   ctx.fillText(name.slice(0, 24), 256, 46);
   }, 512, 64, 0.9, true);
   s.userData.pill = pill / 512;   // the pill's share of the sprite's width: the ear and the hover card sit beside IT
+  // Whether the viewer can SEE it, for the hover card (platecard.js): a GPU occlusion query on the plate's own draw,
+  // so it is the same depth test the picture passes — walls hide it from the pointer exactly when they hide it from
+  // the eye, its own body never does. The answer is a frame or two old (resolved async), and is read where the
+  // renderer can give it: during the draw.
+  s.occlusionTest = true;
+  s.onBeforeRender = noteOccluded;
   return s;
 };
+function noteOccluded(r) { this.userData.occluded = r.isOccluded(this); }
 
 // THE NAMEPLATE EAR (owner, 09-30: "anyone muted near you can pop up a grayed out ear *next* to their name plate"),
 // drawn as the HUD's own crossed-out headphones (icons.js 'headphonesOff') so it reads as the toggle they flipped:

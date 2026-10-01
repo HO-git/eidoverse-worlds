@@ -18,7 +18,7 @@
 //     the naive depth test, which cuts it; speech bubbles stay on top;
 //   hold-to-reveal — holding N brings a walled-off plate through, at plateSize(d, 1); release hides it again; N typed
 //     into the chat line reveals nothing;
-//   the card — resting on a plate opens it only after the delay; it names the person and says mic off / can't hear
+//   the card — a plate a wall hides opens none; resting on a plate opens it only after the delay; it names the person and says mic off / can't hear
 //     you; it follows the plate while the pointer rests on it; leaving plate and card closes it; Esc closes it and
 //     leaves the panels alone; "message" opens their DM tab;
 //   phone (390×844, touch) — a tap on a plate opens the same card inside the viewport; a tap elsewhere closes it.
@@ -293,6 +293,13 @@ try {
   const walled = await pxUntil('nearhear', (n) => n < 3);
   check('occlusion: a wall between eye and plate hides it', walled.n < 3, JSON.stringify(walled));
   await shot(pg, 'occl-a-walled.png');
+  // …and a walled plate opens no card: the pointer rests where the hidden name is, well past the hover delay. The
+  // query's own verdict is read too, so a green here is about an occluded plate, not one the hit test never reached.
+  const wp = await plate(pg, 'nearhear');
+  await pg.mouse.move(wp.x, wp.y); await sleep(700);
+  const wk = await cardState(pg), occ = await pg.evaluate(() => EW.remotes.get('nearhear').avatar.label.userData.occluded);
+  check('occlusion: resting on the walled plate opens no card (its draw is occluded)', occ === true && wk.exists && !wk.open, JSON.stringify({ occ, wk }));
+  await pg.mouse.move(640, 690); await sleep(300);
   // HOLD N: through the wall, at the held size
   await pg.mouse.move(640, 690);
   await pg.keyboard.down('KeyN');

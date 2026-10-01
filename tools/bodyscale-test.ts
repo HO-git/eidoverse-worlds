@@ -95,6 +95,15 @@ console.log('the maths:');
   check('collider: radius and height × size', J(fn(BS, 'colliderFor')(0.5)) === J({ r: 0.16, tall: 0.95 }), J(fn(BS, 'colliderFor')(0.5)));
   check('clip cadence: a 2× body walking 2× as fast plays the walk at its natural rate', near(fn(BS, 'clipRate')(3.1, 1.55, 2), 1) && near(fn(BS, 'clipRate')(1.55, 1.55, 1), 1)
     && near(fn(BS, 'clipRate')(1.55, 1.55, 2), 0.6), `${fn(BS, 'clipRate')(3.1, 1.55, 2)}`);
+  // the mantle (review 09-30 N1): a ledge is climbable relative to the body — a 50% body (0.95 m) no longer mantles 1.7 m
+  const canMantle = fn(BS, 'canMantle');
+  check('mantle: a 100% body climbs 0.3–1.7 m ledges', canMantle(1.0, 1) === true && canMantle(1.7, 1) === true && canMantle(1.8, 1) === false && canMantle(0.3, 1) === false);
+  check('mantle: a 50% body climbs 0.15–0.85 m, a 200% body 0.6–3.4 m', canMantle(1.2, 0.5) === false && canMantle(0.8, 0.5) === true
+    && canMantle(3.0, 2) === true && canMantle(0.5, 2) === false);
+  check('mantle: the controller asks canMantle with the body\'s size, and steps on by a scaled 0.6 m',
+    /canMantle\(reach, me\.userScale\)/.test(await Bun.file(here('../client/lib/controller.js')).text())
+    && /addScaledVector\(_facing, mantleStep\(me\.userScale\)\)/.test(await Bun.file(here('../client/lib/controller.js')).text()));
+  check('mantle: the step onto the ledge grows with the body (it must clear a capsule of radius 0.32·u)', near(fn(BS, 'mantleStep')(2), 1.2) && near(fn(BS, 'mantleStep')(undefined), 0.6));
   check('plate lift: authored metres × the live model→world scale, clamped', near(fn(BS, 'plateLift')(0.3, 1.5), 0.45, 1e-12) && near(fn(BS, 'plateLift')(3, 1), 0.8));
   // per body, per browser
   const m = new Map<string, string>(), ls = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => m.set(k, v) };

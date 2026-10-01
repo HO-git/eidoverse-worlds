@@ -10,7 +10,7 @@ import { THREE, camera, canvas } from './core.js';
 import { CONFIG, angleDelta, bus } from './base.js';
 import { heightAt } from './terrain.js';
 import { resolveColliders, lastBlockedTop, findSeat, raySegment } from './colliders.js';
-import { scaledSpeed, colliderFor, deskEyeY } from './bodyscale.js';   // this body's chosen size: stride, capsule, eye
+import { scaledSpeed, colliderFor, deskEyeY, canMantle, mantleStep } from './bodyscale.js';   // this body's chosen size: stride, capsule, eye
 import { chat } from './chat.js';
 import { isOverlayOpen, flashHint } from './ui.js';
 import { selectClip } from './locomotion_clip.js';
@@ -679,9 +679,9 @@ export function updateMe(dt, me) {
     if (grounded && (keys.has('Space') || (xrIntent.active && xrIntent.jump))) {
       posture = null; myState.seat = null;
       const reach = blockedTop !== null ? blockedTop - myState.pos.y : 0;
-      if (blockedTop !== null && reach > 0.3 && reach <= 1.7) {
+      if (blockedTop !== null && canMantle(reach, me.userScale)) {
         _facing.set(Math.sin(myState.yaw), 0, Math.cos(myState.yaw));
-        const to = myState.pos.clone().addScaledVector(_facing, 0.6);
+        const to = myState.pos.clone().addScaledVector(_facing, mantleStep(me.userScale));
         to.y = blockedTop;
         mantle = { from: myState.pos.clone(), to, t: 0 };
         grounded = false;

@@ -36,6 +36,12 @@ export const deskEyeY = (u) => DESK_EYE * clampBodyScale(u);
 /** Move speed for a size: stride grows with the legs. */
 export const scaledSpeed = (base, u) => base * clampBodyScale(u);
 
+/** A ledge the body can climb onto (controller.js's mantle): 0.3–1.7 m over the feet at 100%, in proportion to the size.
+ *  Jump height and gravity stay absolute — the mantle is a judgement about the body, the jump is physics. */
+export const canMantle = (reach, u) => { const s = clampBodyScale(u); return reach > 0.3 * s && reach <= 1.7 * s; };
+/** How far onto the ledge the mantle carries the root. */
+export const mantleStep = (u) => 0.6 * clampBodyScale(u);
+
 /** The walking capsule (colliders.resolveColliders r / tall): radius and height grow; a scaled body still climbs. */
 export const COLLIDER_R = 0.32, COLLIDER_TALL = 1.9;
 export const colliderFor = (u) => { const s = clampBodyScale(u); return { r: COLLIDER_R * s, tall: COLLIDER_TALL * s }; };

@@ -213,16 +213,19 @@ try {
     const out = [read('guest-2ggs'), read('HHHH')];
     av._labelName = keep; av.repaintLabel();
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    out.scaleOk = Math.abs(av.label.scale.y / av.label.scale.x - av.label.userData.aspect) < 1e-6;
-    return out;
+    // read on a NEAR peer: a far plate past its fade is not re-sized each frame, so its scale says nothing about the bake
+    const near = EW.remotes.get('nearhear')?.avatar;
+    out.scaleOk = !!near && Math.abs(near.label.scale.y / near.label.scale.x - near.label.userData.aspect) < 1e-6;
+    out.near = near && { sx: near.label.scale.x, sy: near.label.scale.y, aspect: near.label.userData.aspect };
+    return { rows: out, scaleOk: out.scaleOk, near: out.near };   // an array's own props don't survive page→probe serialisation
   }).catch((e) => ({ err: String(e).slice(0, 160) }));
   console.log(`  · bake: ${JSON.stringify(plateBake)}`);
-  const [bg2, bH] = Array.isArray(plateBake) ? plateBake : [];
+  const [bg2, bH] = Array.isArray(plateBake?.rows) ? plateBake.rows : [];
   check('bake: "guest-2ggs" has ≥ 9 px of pill below its descenders and above its tallest glyph (it had ~2)',
     bg2 && bg2.below >= 9 && bg2.above >= 9, JSON.stringify(bg2));
   check('bake: …balanced above and below (within 4 px), and a name of capitals bakes to the same height',
     bg2 && bH && Math.abs(bg2.above - bg2.below) <= 4 && bH.h === bg2.h && bH.above >= 9, JSON.stringify({ bg2, bH }));
-  check('bake: the sprite\'s height follows its canvas (scale y / x = canvas h / w)', plateBake?.scaleOk === true, JSON.stringify(plateBake?.scaleOk));
+  check('bake: the sprite\'s height follows its canvas (scale y / x = canvas h / w)', plateBake?.scaleOk === true, JSON.stringify(plateBake?.near));
   check('ear: none for a near peer who hears', earOff(b), JSON.stringify(b?.ear));
   check('ear: none for a FAR peer (past voice range) with hearing off', earOff(c) && c?.hear === false, JSON.stringify(c));
   await shot(pg, '70-ear-near.png');

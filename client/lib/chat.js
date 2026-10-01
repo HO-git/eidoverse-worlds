@@ -1054,10 +1054,11 @@ export function initChat({ send, whisper, typing, people }) {
     }
   });
 
-  // every listed slash command is an action too; one that needs an argument FILLS the prompt instead of running
+  // every listed slash command is an action too; one that needs an argument FILLS the prompt instead of running,
+  // and so does one whose first argument is its target ("/push [name]"): run bare, it would pick whoever is nearest
   for (const row of COMMANDS) {
     if (row.listed === false) continue;
-    const needsArg = new RegExp(`^/${row.name} <`).test(row.help);
+    const needsArg = new RegExp(`^/${row.name} (<|\\[(name|thing|person)\\b)`).test(row.help);
     registerAction({
       id: `cmd:${row.name}`, title: `/${row.name}`, group: 'commands', detail: row.help,
       // the name is already a word of the title ('/sit'), so it is not ALSO an exact keyword: an exact keyword

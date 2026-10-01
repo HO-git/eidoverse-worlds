@@ -311,6 +311,18 @@ check("...and `all` shows the room again",
     // canary bytes on the wire.
   }
 
+// ============================================================ commands as lantern actions
+console.log("\nCHAT — a command that acts on whoever is nearest fills the lantern's line; it never runs on a default");
+{
+  const A = await import("../client/lib/actions.js");
+  for (const n of ["push", "touch", "punt"])
+    check(`/${n} fills "/${n} " and has no run`, A.get(`cmd:${n}`)?.fill === `/${n} ` && typeof A.get(`cmd:${n}`)?.run !== "function",
+      JSON.stringify({ fill: A.get(`cmd:${n}`)?.fill, run: typeof A.get(`cmd:${n}`)?.run }));
+  check("/who (no target) still runs", typeof A.get("cmd:who")?.run === "function");
+  check("/boom (acts where you stand) still runs", typeof A.get("cmd:boom")?.run === "function");
+  check("/w (a required name) still fills", A.get("cmd:w")?.fill === "/w ");
+}
+
 // ============================================================ MODDING-UI §3: our own nodes by handle
 console.log("\nCHAT — a mod's markup carrying the public classes is never mistaken for ours");
 {

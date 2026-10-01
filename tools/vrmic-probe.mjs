@@ -156,10 +156,13 @@ try {
     // the page runs ~0.7 s/frame in a headless session, so the plate may have lived out its 7 s before this read:
     // 'shown' is "still up now, or was up for (most of) its full life", read in ONE evaluate with its timestamps
     const v = p.vrmic;
-    const dbg = await ev(() => { const r = globalThis.__vrmic ?? {}; return { up: !!r.noteMesh?.parent, at: r.noteAt ?? 0, cleared: r.noteClearedAt ?? null }; });
+    const dbg = await ev(() => { const r = globalThis.__vrmic ?? {}; const m = r.noteMesh?.material; return { up: !!r.noteMesh?.parent, at: r.noteAt ?? 0, cleared: r.noteClearedAt ?? null,
+      mat: m ? { node: !!m.isNodeMaterial, output: !!m.outputNode, depthTest: m.depthTest, depthWrite: m.depthWrite } : null }; });
     const life = dbg.cleared != null ? dbg.cleared - dbg.at : null;
     console.log(`  · note: up now=${dbg.up}, ${life == null ? 'not cleared yet' : `lived ${(life / 1000).toFixed(1)} s (its timer is 7 s)`}`);
     check('in VR: a head-locked note says permission is needed and when it will be asked', dbg.at > 0 && (dbg.up || life >= 6000) && /needs permission/.test(v.note) && /leave VR/.test(v.note), JSON.stringify({ ...dbg, note: v.note, life }));
+    check('in VR: the plate wears the quads\' colour material (quadMaterial: an outputNode undoing ACES), depth still off',
+      dbg.mat?.node && dbg.mat.output && dbg.mat.depthTest === false && dbg.mat.depthWrite === false, JSON.stringify(dbg.mat));
     check('in VR: the note rides the camera (head-locked), in front of the eyes', /Camera/.test(v.noteParent ?? '') && v.noteZ < 0, JSON.stringify({ parent: v.noteParent, z: v.noteZ }));
     check('in VR: the flag for the next flat-page moment is set', p.pending === '1', JSON.stringify(p.pending)); }
   saveUrl('vrmic-note-in-vr-texture', await ev(() => globalThis.__vrmic?.noteCanvas?.toDataURL('image/png')));

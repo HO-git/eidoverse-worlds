@@ -50,10 +50,12 @@ export const acesFilmicInverse = Fn(([lin]) => {
   return mat3(...ACES_IN_INV).mul(v).mul(0.6).div(toneMappingExposure);
 });
 
-/** Swap an HTMLMesh's material for one whose output is the authored (graded) colour after the renderer's output pass. */
+/** Swap a textured quad's material (an HTMLMesh's, or a head-locked canvas plate's) for one whose output is the
+ *  authored (graded) colour after the renderer's output pass. Blending and depth settings carry over. */
 export function quadMaterial(mesh, renderer) {
   const old = mesh.material, map = old.map;
-  const m = new THREE.MeshBasicNodeMaterial({ map, transparent: old.transparent, alphaTest: old.alphaTest, side: old.side, fog: false });
+  const m = new THREE.MeshBasicNodeMaterial({ map, transparent: old.transparent, alphaTest: old.alphaTest, side: old.side,
+    depthTest: old.depthTest, depthWrite: old.depthWrite, fog: false });
   const t = texture(map);   // decoded to linear by the texture's own colorSpace (sRGB)
   const s = sRGBTransferOETF(t.rgb);
   const y = dot(s, vec3(...LUMA));
@@ -67,6 +69,6 @@ export function quadMaterial(mesh, renderer) {
   m.toneMapped = false;   // honoured by the classic WebGLRenderer only; kept so the intent reads the same everywhere
   mesh.material = m; old.dispose();
   // HTMLMesh.dispose() disposes `material` from its closure (the old one) — keep ours from leaking
-  const dispose = mesh.dispose; mesh.dispose = function () { m.dispose(); return dispose.call(this); };
+  const dispose = mesh.dispose; if (dispose) mesh.dispose = function () { m.dispose(); return dispose.call(this); };
   return m;
 }

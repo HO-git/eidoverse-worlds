@@ -328,6 +328,12 @@ try {
       if (p) { p.canvas.width = mesh.material.map.image.width; p.canvas.height = mesh.material.map.image.height; p.canvas.getContext('2d').drawImage(mesh.material.map.image, 0, 0); p.tex.needsUpdate = true;
         p.mesh.scale.set(cols.length * 0.064, 0.064, 1); p.mesh.position.set(0, 0, 0); p.mesh.rotation.set(0, 0, 0); mesh = p.mesh; mesh.material.map.pause = () => {}; }
     }
+    if (path === 'plate') {   // a head-locked canvas plate as vrmic's note and the XR curtain's splash build it: blended, depth off
+      const tex = new THREE.CanvasTexture(mesh.material.map.image); tex.colorSpace = THREE.SRGBColorSpace;
+      const plate = new THREE.Mesh(new THREE.PlaneGeometry(cols.length * 0.064, 0.064), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }));
+      (await import('./lib/quadcolour.js')).quadMaterial?.(plate, renderer);
+      mesh.dispose(); mesh = plate; tex.pause = () => {};
+    }
     if (path === 'domquad') { mesh.material.transparent = false; mesh.material.alphaTest = 0.5; }
     if (path === 'domquad') D.prepareQuadMaterial?.(mesh);   // absent on a parent without the fix: the stand-in then carries the bare HTMLMesh material
     div.remove(); mesh.material.map.pause();
@@ -346,8 +352,9 @@ try {
     const exposure = renderer.toneMappingExposure, toneMapping = renderer.toneMapping;
     const url = (() => { renderer.render(sc, cam); const g = renderer.domElement; const tmp = document.createElement('canvas'); tmp.width = g.width; tmp.height = g.height; tmp.getContext('2d').drawImage(g, 0, 0); return tmp.toDataURL('image/png'); })();
     renderer.toneMappingExposure = exp0;
-    mesh.dispose?.();
-    return { names, want: cols, got, exposure, toneMapping, url, size: [size.x, size.y, dpr] };
+    const depth = { test: mesh.material.depthTest, write: mesh.material.depthWrite };
+    mesh.dispose?.();   // a plate has none (quadMaterial must not assume one)
+    return { names, want: cols, got, exposure, toneMapping, url, size: [size.x, size.y, dpr], depth };
   }, [tokens, exposure, path]);
   const setGrade = (g) => ev(async (g) => (await import('./lib/quadcolour.js').catch(() => null))?.setGrade(g, false) ?? null, g);
   const hadGrade = await setGrade({ saturation: 1, contrast: 1 });   // null on a parent without quadcolour.js
@@ -367,6 +374,12 @@ try {
   const rowsC = mc.names.map((k, i) => ({ k, d: Math.max(...mc.got[i].map((v, j) => Math.abs(v - hexRgb(mc.want[i])[j]))) }));
   console.log(`  · canvasquads fallback: ${mc.names.map((k, i) => `${k} ${mc.want[i]}→#${mc.got[i].map((v) => v.toString(16).padStart(2, '0')).join('')}`).join(', ')}`);
   check('colour: the ?canvasquads fallback quad shows the token colours too', rowsC.every((r) => r.d <= 4), rowsC.map((r) => `${r.k} Δ${r.d}`).join(', '));
+  // the head-locked plates (vrmic's in-VR note, the XR curtain's splash) through the same quadMaterial
+  const mp = await measure(null, 'plate');
+  const rowsP = mp.names.map((k, i) => ({ k, d: Math.max(...mp.got[i].map((v, j) => Math.abs(v - hexRgb(mp.want[i])[j]))) }));
+  console.log(`  · head-locked plate: ${mp.names.map((k, i) => `${k} ${mp.want[i]}→#${mp.got[i].map((v) => v.toString(16).padStart(2, '0')).join('')}`).join(', ')}; depth ${JSON.stringify(mp.depth)}`);
+  check('colour: a head-locked plate (blended, depth off) shows the token colours too, and keeps its depth settings',
+    rowsP.every((r) => r.d <= 4) && mp.depth.test === false && mp.depth.write === false, `${rowsP.map((r) => `${r.k} Δ${r.d}`).join(', ')} ${JSON.stringify(mp.depth)}`);
   // the REAL settings and world quads (their own material, as domquad builds them) through the output pass, for the eye
   for (const id of ['settings', 'world']) {
     const url = await ev(async (id) => {

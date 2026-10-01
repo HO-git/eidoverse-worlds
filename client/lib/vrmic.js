@@ -17,7 +17,8 @@
 // The decisions are vrmic_policy.js (pure, tested); this file is the effects.
 import { bus, CONFIG } from './base.js';
 import { flashHint, toast } from './ui.js';
-import { THREE, camera } from './core.js';   // static: xr.js (our importer) already holds core, and the plate must land in the same breath as its words
+import { THREE, camera, renderer } from './core.js';   // static: xr.js (our importer) already holds core, and the plate must land in the same breath as its words
+import { quadMaterial } from './quadcolour.js';   // the plate's colours as authored, not ACES-washed (the VR panels' path)
 import { preVrStep, inVrMicPlan, inVrAfterTry, afterExitStep, MIC_CHOICE_KEY, MIC_PENDING_KEY } from './vrmic_policy.js';
 
 export const TRY_MS = 6000;          // long enough to answer a prompt the headset DOES show; short enough not to strand
@@ -242,6 +243,7 @@ export function vrNote(text, ms = 7000) {
     const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.56, 0.56 * 176 / 1024),
       new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }));
+    quadMaterial(mesh, renderer);
     mesh.renderOrder = 3000; mesh.frustumCulled = false; mesh.position.set(0, -0.14, -0.9); mesh.name = 'vrmic-note';
     camera.add(mesh);
     note = { mesh, tex, canvas: cv, timer: setTimeout(clearNote, ms) };

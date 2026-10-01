@@ -4,6 +4,7 @@ import { CONFIG, bus, tee } from './base.js';
 import { DrawBatches } from './draw_batches.js';
 import { warm, warmDepth, P_AMBIENT } from './warmqueue.js';
 import { gpuBegin, gpuEnd } from './gputime.js';
+import { quadMaterial } from './quadcolour.js';
 
 const batches = new DrawBatches({ warm: async (mesh, live) => {
   let error;
@@ -87,6 +88,7 @@ export function setXRCurtain(on) {
     };
     paint(0); curtain.userData.paint = paint; curtain.userData.lastDots = -1;
     const text = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.2), new THREE.MeshBasicNodeMaterial({ map: tex, transparent: true, depthTest: false }));
+    quadMaterial(text, renderer);   // the splash's colours as authored, not ACES-washed (the VR panels' path)
     text.frustumCulled = false; text.renderOrder = 1; curtain.add(text); curtain.userData.text = text;
   }
 }

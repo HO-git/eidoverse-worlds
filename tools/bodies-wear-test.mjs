@@ -97,16 +97,23 @@ check('the same-path early return exempts the capsule',
 // body, writing through mybody's setMyBodyPref, with a reset only when there is something to reset.
 const { bodiesDispatch } = await import('../client/lib/bodies.js');
 const byK = (f, k) => f.find((x) => x.k === k);
-state.me = { isCapsule: false }; state.prefs = { scale: 1, plateY: 0 }; state.writes = 0;
+const body = () => ({ isCapsule: false, userScale: 1, plateY: 0, setUserScale(u) { this.userScale = u; }, setPlateY(y) { this.plateY = y; } });
+state.me = body(); state.prefs = { scale: 1, plateY: 0 }; state.writes = 0;
 f = bodiesFields();
 const size = byK(f, 'body-scale'), plate = byK(f, 'plate-y');
 check('this body: a size slider, 50–200 %', size?.t === 'range' && size.min === 50 && size.max === 200 && size.value === 100, JSON.stringify(size));
 check('this body: a nameplate slider, −30…+80 cm', plate?.t === 'range' && plate.min === -30 && plate.max === 80 && plate.value === 0, JSON.stringify(plate));
 check('this body: the resulting height in m (roster 1.60 m at 100%)', f.some((x) => x.label === 'height' && /^1\.60 m/.test(x.value)), JSON.stringify(f.find((x) => x.label === 'height')));
 check('this body: at default, no reset buttons', !byK(f, 'body-scale-reset') && !byK(f, 'plate-y-reset'));
-bodiesDispatch('body-scale', 150);
-bodiesDispatch('plate-y', 30);
-check('the sliders write through to the worn body\'s prefs (percent → ×, cm → m)', state.prefs.scale === 1.5 && state.prefs.plateY === 0.3, JSON.stringify(state.prefs));
+// a drag: one `input` per step. The body follows each one; the store is written once, after the value rests
+// (review 09-30 S6: a JSON rewrite of every body's prefs on every pixel of a drag)
+for (let v = 101; v <= 150; v++) bodiesDispatch('body-scale', v);
+for (let v = 1; v <= 30; v++) bodiesDispatch('plate-y', v);
+check('mid-drag the worn body follows every tick (percent → ×, cm → m)', state.me.userScale === 1.5 && state.me.plateY === 0.3, JSON.stringify(state.me));
+check('...and the store is not written per tick', state.writes === 0, `${state.writes} writes during an 80-tick drag`);
+check('...and the section reads the body, not the store, mid-drag', byK(bodiesFields(), 'body-scale')?.value === 150, JSON.stringify(byK(bodiesFields(), 'body-scale')));
+await new Promise((r) => setTimeout(r, 300));
+check('once the value rests, the sliders write through to the worn body\'s prefs, once', state.prefs.scale === 1.5 && state.prefs.plateY === 0.3 && state.writes === 1, `${JSON.stringify(state.prefs)} in ${state.writes} writes`);
 f = bodiesFields();
 check('...the height reads 2.40 m (1.60 m at 100%)', f.some((x) => x.label === 'height' && /^2\.40 m \(1\.60 m at 100%\)/.test(x.value)), JSON.stringify(f.find((x) => x.label === 'height')));
 check('...and both resets appear', !!byK(f, 'body-scale-reset') && !!byK(f, 'plate-y-reset'));

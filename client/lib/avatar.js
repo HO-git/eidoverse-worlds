@@ -384,6 +384,7 @@ const _earDir = new THREE.Vector3(), _earQ = new THREE.Quaternion(), _earQ2 = ne
 // pill over a bubble 2.72) — now they ride wherever the plate hangs (plateanchor.js), sitting and lying included
 const BUBBLE_LIFT = 0.35, TYPING_LIFT = 0.17, TYPING_OVER_BUBBLE = 0.77;
 const _pHips = new THREE.Vector3(), _pHead = new THREE.Vector3(), _pFoot = new THREE.Vector3(), _pScale = new THREE.Vector3();
+const _ownM = new THREE.Matrix4();
 const _pRoot = new THREE.Vector3();
 
 function wrap(text, n) {
@@ -1968,7 +1969,7 @@ export class Avatar {
         const pos = o.isMesh && o.visible !== false ? o.geometry?.attributes?.position : null;
         if (!pos) return;
         m.multiplyMatrices(inv, o.matrixWorld);
-        const step = Math.max(1, Math.floor(pos.count / 4000));
+        const step = Math.max(1, Math.ceil(pos.count / 4000));
         for (let i = 0; i < pos.count; i += step) {
           o.getVertexPosition(i, v);   // skinned + morphed, in the mesh's own space
           v.applyMatrix4(m);
@@ -2019,29 +2020,51 @@ export class Avatar {
   }
 
   /** How far this body reaches from its plate's anchor, as the clearance its body-attached sprites write
-   *  (platesize.js ownClearance/reachAbove). Measured once, on the body as it stands (skinned positions, sampled to
-   *  ≤4000 vertices a mesh), from where the plate hangs THAT frame (_placePlate runs first). A body with nothing
-   *  measurable clears a head (CLEAR_MIN). */
+   *  (platesize.js ownClearance/reachAbove), from where the plate hangs THAT frame (_placePlate runs first). The body is
+   *  sampled ONCE (skinned positions, ≤4000 vertices a mesh, as it stands at first measure) into the VRM scene's own
+   *  frame; a size, lift or VR-fit change only re-projects that sample through the scene's current transform. Skinning
+   *  every vertex again on each slider tick, and on every remote's change, was the cost (review 09-30 S6); re-projecting
+   *  is exact for those changes, since none of them moves a vertex within the scene. A body with nothing measurable
+   *  clears a head (CLEAR_MIN). */
   _measureOwnClear() {
     try {
       const sceneRoot = this.vrm?.scene;
       if (!sceneRoot) return ownClearance(0);
       this.root.updateMatrixWorld(true);
-      const inv = new THREE.Matrix4().copy(this.root.matrixWorld).invert(), m = new THREE.Matrix4(), v = new THREE.Vector3();
-      const pts = [], ax = this.label.position.x, az = this.label.position.z;
-      sceneRoot.traverse((o) => {
-        const pos = o.isMesh && o.visible !== false ? o.geometry?.attributes?.position : null;
-        if (!pos) return;
-        m.multiplyMatrices(inv, o.matrixWorld);
-        const step = Math.max(1, Math.floor(pos.count / 4000));
-        for (let i = 0; i < pos.count; i += step) {
-          o.getVertexPosition(i, v);   // skinned + morphed, in the mesh's own space
-          v.applyMatrix4(m);
-          pts.push(v.x - ax, v.y, v.z - az);   // relative to the plate's own column (it hangs over the hips, not the root)
-        }
-      });
-      return ownClearance(reachAbove(pts, this.label.position.y));
+      const pts = this._ownPts ??= this._sampleOwnBody(sceneRoot);
+      const out = this._ownXyz ??= new Float32Array(pts.length);
+      const e = _ownM.copy(this.root.matrixWorld).invert().multiply(sceneRoot.matrixWorld).elements;
+      const ax = this.label.position.x, az = this.label.position.z;
+      for (let i = 0; i < pts.length; i += 3) {
+        const x = pts[i], y = pts[i + 1], z = pts[i + 2];
+        out[i] = e[0] * x + e[4] * y + e[8] * z + e[12] - ax;   // relative to the plate's own column (it hangs over the hips, not the root)
+        out[i + 1] = e[1] * x + e[5] * y + e[9] * z + e[13];
+        out[i + 2] = e[2] * x + e[6] * y + e[10] * z + e[14] - az;
+      }
+      return ownClearance(reachAbove(out, this.label.position.y));
     } catch { return ownClearance(0); }
+  }
+  _sampleOwnBody(sceneRoot) {
+    const inv = new THREE.Matrix4().copy(sceneRoot.matrixWorld).invert(), m = new THREE.Matrix4(), v = new THREE.Vector3();
+    const meshes = [];
+    let n = 0;
+    sceneRoot.traverse((o) => {
+      const pos = o.isMesh && o.visible !== false ? o.geometry?.attributes?.position : null;
+      if (!pos) return;
+      const step = Math.max(1, Math.ceil(pos.count / 4000));
+      meshes.push([o, pos.count, step]); n += Math.ceil(pos.count / step);
+    });
+    const pts = new Float32Array(n * 3);
+    let k = 0;
+    for (const [o, count, step] of meshes) {
+      m.multiplyMatrices(inv, o.matrixWorld);
+      for (let i = 0; i < count; i += step) {
+        o.getVertexPosition(i, v);   // skinned + morphed, in the mesh's own space
+        v.applyMatrix4(m);
+        pts[k++] = v.x; pts[k++] = v.y; pts[k++] = v.z;
+      }
+    }
+    return pts;
   }
 
   /** The nameplate ear: `on` = this person cannot hear you (hearing off, and near enough that it matters). The

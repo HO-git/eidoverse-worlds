@@ -173,6 +173,39 @@ console.log('avatar.js:');
   const headW = new THREE.Vector3(); self.vrm.humanoid.getRawBoneNode('head').getWorldPosition(headW);
   check('lying at 150%, lifted: over the head at head + span·1.5 + gap + 0.45', near(self.label.position.x, headW.x, 1e-6)
     && near(self.label.position.y, headW.y + self._plateRest.headSpan * 1.5 + plateGap(height * 1.5) + 0.45, 1e-6), `${J(self.label.position)} head ${J(headW)}`);
+  // the own-body clearance (review 09-30 S6): a slider drag and every remote's size/lift change invalidate it; the skinned
+  // sample must be taken once per body, not on each change, at ≤ 4000 vertices a mesh — and stay exact at the new size
+  {
+    const { self: b, scene: sc } = rig();
+    const dense = new THREE.Mesh(new THREE.BufferGeometry()); dense.position.y = 1.2; sc.add(dense);
+    const n = 4001, arr = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { arr[i * 3] = Math.cos(i) * 0.25; arr[i * 3 + 1] = (i / n) * 0.5; arr[i * 3 + 2] = Math.sin(i) * 0.25; }
+    dense.geometry.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+    let reads = 0; const gvp = dense.getVertexPosition.bind(dense); dense.getVertexPosition = (i: number, t: any) => { reads++; return gvp(i, t); };
+    const placeAndMeasure = () => { b._plateOff = null; call(b, '_placePlate', 1 / 60); b._ownClear = null; return call(b, '_measureOwnClear'); };
+    placeAndMeasure();
+    check('the skinned sample is capped at 4000 vertices a mesh (4001 → ≤ 4000 reads)', reads > 0 && reads <= 4000, `${reads}`);
+    reads = 0;
+    const atScale: number[] = [];
+    for (const u of [1.1, 1.2, 1.3, 1.4, 1.5]) { call(b, 'setUserScale', u); atScale.push(placeAndMeasure()); }
+    // the reference, computed here by brute force (every vertex, so it differs from the ≤4000 sample by under 1 mm here): each skinned into the root's frame, around the plate's column
+    const { reachAbove, ownClearance, CLEAR_MIN, CLEAR_MAX } = await import('../client/lib/platesize.js');
+    const brute = () => {
+      const inv = new THREE.Matrix4().copy(b.root.matrixWorld).invert(), v = new THREE.Vector3(), xyz: number[] = [];
+      b.vrm.scene.traverse((o: any) => { const pos = o.isMesh ? o.geometry?.attributes?.position : null; if (!pos) return;
+        for (let i = 0; i < pos.count; i++) { THREE.Mesh.prototype.getVertexPosition.call(o, i, v).applyMatrix4(o.matrixWorld).applyMatrix4(inv);
+          xyz.push(v.x - b.label.position.x, v.y, v.z - b.label.position.z); } });
+      return ownClearance(reachAbove(xyz, b.label.position.y));
+    };
+    const at15 = brute();
+    call(b, 'setPlateY', -0.2); const lowered = placeAndMeasure(), atLift = brute();
+    check('slider ticks and lift changes re-measure without re-skinning the body', reads === 0, `${reads} vertex reads over 6 changes`);
+    const inside = (c: number) => c > CLEAR_MIN + 1e-3 && c < CLEAR_MAX - 1e-3;
+    check('...and the re-projected clearance equals a brute-force one, at 150% and with a lift', near(atScale[4], at15, 1e-3) && near(lowered, atLift, 1e-3),
+      `${atScale[4]} vs ${at15}; ${lowered} vs ${atLift}`);
+    check('...on clearances the clamps did not decide (the comparison has a subject)', inside(at15) && inside(atLift), `${at15} ${atLift}`);
+    check('...which the size actually moved (the comparison has a subject)', !near(atScale[0], atScale[4], 1e-3), J(atScale));
+  }
   // a pooled VRM that comes back still wearing its last owner's size is reset by the constructor
   const src = String(Avatar.prototype.constructor);
   check('the constructor writes a fresh size before measuring (a pooled VRM carries no stale scale)', /vrm\.scene\.scale\.setScalar\(1\)[\s\S]*_measurePlateRest\(\)/.test(src));

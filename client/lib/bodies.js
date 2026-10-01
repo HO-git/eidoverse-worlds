@@ -58,7 +58,7 @@ function thisBodyFields() {
   const me = getMe();
   if (!me || me.isCapsule) return [];
   const name = getMyAvatarName() ?? 'this body';
-  const p = myBodyPrefs();
+  const saved = myBodyPrefs(), p = { scale: me.userScale ?? saved.scale, plateY: me.plateY ?? saved.plateY };   // mid-drag the body is ahead of the store
   // the height a stranger would read off you: the roster's measured height, else the crown this client measured
   const base = (net.avatars ?? []).find((a) => a.name === name)?.height ?? me._plateRest?.height ?? null;
   const cm = Math.round(p.plateY * 100);
@@ -71,11 +71,27 @@ function thisBodyFields() {
     ...(cm !== 0 ? [{ t: 'btn', k: 'plate-y-reset', label: 'nameplate: back to auto' }] : []),
   ];
 }
+// A drag fires `input` per pixel. The body follows every tick; the store (a JSON rewrite of every body's prefs) is
+// written once the value has rested SAVE_MS, or at once on release (mountBodies' `change`). The VR quad has no release
+// event of its own, so the rest timer is what saves there.
+const SAVE_MS = 250;
+let pending = null, saveTimer = 0;
+function flushBodyPrefs() {
+  clearTimeout(saveTimer); saveTimer = 0;
+  if (pending) { const p = pending; pending = null; setMyBodyPref(p); }
+}
+function liveBodyPref(patch) {
+  const me = getMe();
+  if (patch.scale != null) me?.setUserScale?.(patch.scale);
+  if (patch.plateY != null) me?.setPlateY?.(patch.plateY);
+  pending = { ...pending, ...patch };
+  clearTimeout(saveTimer); saveTimer = setTimeout(flushBodyPrefs, SAVE_MS);
+}
 function bodyDispatch(k, v) {
-  if (k === 'body-scale' && Number.isFinite(+v)) setMyBodyPref({ scale: +v / 100 });
-  else if (k === 'plate-y' && Number.isFinite(+v)) setMyBodyPref({ plateY: +v / 100 });
-  else if (k === 'body-scale-reset') setMyBodyPref({ scale: 1 });
-  else if (k === 'plate-y-reset') setMyBodyPref({ plateY: 0 });
+  if (k === 'body-scale' && Number.isFinite(+v)) liveBodyPref({ scale: +v / 100 });
+  else if (k === 'plate-y' && Number.isFinite(+v)) liveBodyPref({ plateY: +v / 100 });
+  else if (k === 'body-scale-reset') { flushBodyPrefs(); setMyBodyPref({ scale: 1 }); }
+  else if (k === 'plate-y-reset') { flushBodyPrefs(); setMyBodyPref({ plateY: 0 }); }
   else return false;
   bus.emit('xr:repaint');
   return true;
@@ -107,6 +123,6 @@ export function mountBodies(host) {
   bus.on('avatar-worn', repaint);
   // a slider fires `input` all the way through a drag (applied live, no repaint — a rebuild would drop the thumb under
   // the pointer); `change` is the release, and that is when the height and plate readouts catch up
-  host.addEventListener('change', (e) => { if (e.target?.classList?.contains('sp-range')) repaint(); });
+  host.addEventListener('change', (e) => { if (e.target?.classList?.contains('sp-range')) { flushBodyPrefs(); repaint(); } });
   return repaint;
 }

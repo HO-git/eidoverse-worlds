@@ -242,25 +242,30 @@ try {
 
   // ── dimmed: partial opacity, desktop (Chrome's own compositor) vs the quad's raster, pixel for pixel ──
   // A: one element at .5 · B: a .5 GROUP whose child covers its own background (per-paint alpha would let the parent's
-  // amber bleed through the child) · C: .5 inside .5 = .25 · D: a dead row at .42 (the house `.mrow.dead`)
+  // amber bleed through the child) · C: .5 inside .5 = .25 · D: a dead row at .42 (the house `.mrow.dead`) · E: an
+  // inline <svg> icon with its own inline opacity .5 (the layer applies it; the serialised clone must not apply it again)
   const fx = await ev(() => {
     const d = document.createElement('div'); d.id = 'dimfx';
-    d.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;width:260px;height:60px;background:rgb(5,20,20);display:flex;gap:10px;padding:10px;box-sizing:border-box';
+    d.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;width:310px;height:60px;background:rgb(5,20,20);display:flex;gap:10px;padding:10px;box-sizing:border-box';
     d.innerHTML = '<div style="width:40px;height:40px;background:#8fe8c8;opacity:.5"></div>'
       + '<div style="width:40px;height:40px;background:#ffc46b;opacity:.5"><div style="width:40px;height:40px;background:#8fe8c8"></div></div>'
       + '<div style="width:40px;height:40px;opacity:.5"><div style="width:40px;height:40px;background:#ebebe9;opacity:.5"></div></div>'
-      + '<div style="width:40px;height:40px;background:#ebebe9;opacity:.42"></div>';
+      + '<div style="width:40px;height:40px;background:#ebebe9;opacity:.42"></div>'
+      + '<svg width="40" height="40" viewBox="0 0 40 40" style="opacity:.5"><rect width="40" height="40" fill="#8fe8c8"/></svg>';
     document.body.appendChild(d);
     return [...d.children].map((c) => { const r = c.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; });
   });
   await sleep(200);
-  const deskPng = await pg.screenshot({ clip: { x: 0, y: 0, width: 260, height: 60 } });
+  const deskPng = await pg.screenshot({ clip: { x: 0, y: 0, width: 310, height: 60 } });
   const dim = await ev(async ([png, pts]) => {
     const img = new Image(); img.src = 'data:image/png;base64,' + png; await img.decode();
     const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const x = c.getContext('2d'); x.drawImage(img, 0, 0);
     const desk = pts.map(([px, py]) => Array.from(x.getImageData(Math.floor(px), Math.floor(py), 1, 1).data).slice(0, 3));
     const { HTMLMesh } = await import('./lib/vendor/htmlmesh.js');
     const d = document.getElementById('dimfx'); const mesh = new HTMLMesh(d, { scale: 1 }); mesh.material.map.pause();
+    const svg = d.querySelector('svg'), t0 = performance.now();   // EIDO (2): the icon draws once its image has loaded
+    while (!svg.__eidoReady && performance.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 50));
+    mesh.material.map.resume(); mesh.material.map.pause();   // one raster with the icon in it
     const q = mesh.material.map.image.getContext('2d');
     const quad = pts.map(([px, py]) => Array.from(q.getImageData(Math.floor(px), Math.floor(py), 1, 1).data).slice(0, 3));
     const url = mesh.material.map.image.toDataURL('image/png');
@@ -269,7 +274,7 @@ try {
   }, [deskPng.toString('base64'), fx]);
   if (shotDir) { const f = `${shotDir}/${shotN++}-dimmed-fixture-desktop.png`; writeFileSync(f, deskPng); console.log(`  · shot ${f}`); }
   save('dimmed-fixture-quad', dim.url);
-  const dimNames = ['A .5', 'B .5 group', 'C .5×.5', 'D .42'];
+  const dimNames = ['A .5', 'B .5 group', 'C .5×.5', 'D .42', 'E svg .5'];
   const dimRows = dimNames.map((k, i) => ({ k, desk: dim.desk[i], quad: dim.quad[i], d: Math.max(...dim.desk[i].map((v, j) => Math.abs(v - dim.quad[i][j]))) }));
   console.log(`  · dimmed fixture, desktop vs quad: ${dimRows.map((r) => `${r.k} rgb(${r.desk}) vs rgb(${r.quad}) Δ${r.d}`).join('; ')}`);
   check('dimmed: every partial-opacity case lands on the quad as on the desktop (Δ ≤ 3 of 255)', dimRows.every((r) => r.d <= 3), dimRows.map((r) => `${r.k} Δ${r.d}`).join(', '));

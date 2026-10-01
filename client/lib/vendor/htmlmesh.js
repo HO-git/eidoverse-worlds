@@ -1,7 +1,7 @@
 // Vendored from three examples/jsm/interactive/HTMLMesh.js (MIT — notice in ./LICENSE-three-MIT.txt) for eido's VR
-// quads (2026-09-05, from 0.185.1); the tree is on 0.186.0 and this file differs from 0.186's by 107 diff lines
-// (`diff client/lib/vendor/htmlmesh.js client/node_modules/three/examples/jsm/interactive/HTMLMesh.js`): the EIDO
-// patches below plus upstream drift. Used only by domquad.js (VR quads, part 4); inert on the desktop.
+// quads (2026-09-05, from 0.185.1); the tree is on 0.186.0 and this file differs from 0.186's by 313 changed lines
+// on 09-30 (`diff client/lib/vendor/htmlmesh.js client/node_modules/three/examples/jsm/interactive/HTMLMesh.js | grep -c
+// '^[<>]'`): the EIDO patches below plus upstream drift. Used only by domquad.js (VR quads, part 4); inert on the desktop.
 // Patches, each marked EIDO: (1) DPR scale — canvas rasterised at `scale` px per CSS px so the quad
 // matches xrpanels' 900 px/m; (2) inline <svg> drawn via serialise→Image (the icon system);
 // (3) `pause`/`resume` + a per-instance min interval so live panels don't re-rasterise at 60 Hz;
@@ -161,7 +161,7 @@ class HTMLTexture extends CanvasTexture {
 	}
 	pause() { this.paused = true; }   // EIDO (3): a quad that isn't shown stops rasterising
 	// EIDO (6): a quad kept across sessions (domquad soft swap) stops WATCHING while its element lives on the desktop
-	suspend() { this.suspended = true; this.observer?.disconnect(); this.scheduleUpdate = clearTimeout( this.scheduleUpdate ); }
+	suspend() { this.suspended = true; this.observer?.disconnect(); this.scheduleUpdate = clearTimeout( this.scheduleUpdate ); layers.delete( this.image ); }   // EIDO (12): the opacity layers are rebuilt at the next raster
 	unsuspend() { if ( ! this.suspended ) return; this.suspended = false; this.observer?.observe( this.dom, this.observerConfig ); }
 	resume() { this.paused = false; this.update(); }
 
@@ -185,6 +185,7 @@ class HTMLTexture extends CanvasTexture {
 		}
 
 		this.scheduleUpdate = clearTimeout( this.scheduleUpdate );
+		layers.delete( this.image );   // EIDO (12)
 
 		super.dispose();
 
@@ -329,9 +330,10 @@ function html2canvas( element, scale = 1 ) {   // EIDO (1)
 		// opacity:0, 1×1 px (dropdown.js, index.html select.dd-native) and the quad drew it, background plus EVERY option's
 		// text stacked in one spot: the "little black squares like checkboxes" over World › Sky's labels (owner, 09-30).
 		// Opacity 0 and display:none take the subtree; visibility:hidden too (a visible child inside one is rare here).
+		let cs = null;
 		if ( element.nodeType === Node.ELEMENT_NODE ) {
 
-			const cs = window.getComputedStyle( element );
+			cs = window.getComputedStyle( element );
 			const op = parseFloat( cs.opacity );
 			if ( cs.display === 'none' || cs.visibility === 'hidden' || op === 0 ) return;
 			// EIDO (12): PARTIAL opacity is a group opacity, as the browser composites it: the element and its subtree are
@@ -388,7 +390,7 @@ function html2canvas( element, scale = 1 ) {   // EIDO (1)
 			if ( ! element.__eidoImg ) {
 				const img = new Image();
 				const clone = element.cloneNode( true );
-				const cs = window.getComputedStyle( element );
+				clone.style.opacity = ''; clone.removeAttribute( 'opacity' );   // EIDO (12): a dimmed icon's opacity is its layer's; kept here too, it dimmed twice
 				clone.setAttribute( 'xmlns', 'http://www.w3.org/2000/svg' );
 				if ( ! clone.getAttribute( 'width' ) ) clone.setAttribute( 'width', w ); if ( ! clone.getAttribute( 'height' ) ) clone.setAttribute( 'height', h );
 				// Chrome computes a color-mix() token as color(srgb …), which the SVG-as-image rasteriser
@@ -434,7 +436,7 @@ function html2canvas( element, scale = 1 ) {   // EIDO (1)
 			width = rect.width;
 			height = rect.height;
 
-			style = window.getComputedStyle( element );
+			style = cs;
 
 			// Get the border of the element used for fill and border
 

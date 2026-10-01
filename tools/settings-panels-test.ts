@@ -30,7 +30,7 @@ globalThis.fetch = (async () => new Response('[]', { status: 200 })) as any;
 // the elements ui.js binds at import, plus the sheet's own tokens the style panel reads back
 for (const id of ['hud', 'loading', 'toasts', 'hintbar', 'door', 'help', 'dock', 'touch']) { const d = document.createElement('div'); d.id = id; document.body.append(d); }
 const sheet = document.createElement('style');
-sheet.textContent = ':root{--panel-a:.9;--panel-rgb:20 24 28;--brand:#aabbcc;--attn:#ff5533;--fg:#eeeeee}';
+sheet.textContent = ':root{--panel-a:.9;--xr-panel-a:1;--panel-rgb:20 24 28;--brand:#aabbcc;--attn:#ff5533;--fg:#eeeeee}';
 document.head.append(sheet);
 // the dock's profile button: what paintPresence (ui.js) repaints on presence:me
 const dockBtn = document.createElement('button'); dockBtn.dataset.toggles = 'profile'; document.getElementById('dock')!.append(dockBtn);
@@ -85,10 +85,27 @@ console.log('STYLE — setPanelAlpha persists and repaints --panel-a');
   check('a swatch repaints its token', computed('--brand') === '#112233', computed('--brand'));
   check('…persists it', tokens()['--brand'] === '#112233');
   check('…and emits style{--brand}', emitted.slice(e0).some((e) => e[0] === 'style' && e[1]?.key === '--brand'));
+  // the two opacity dials (owner, 09-30): the desktop one says it is the desktop's, and VR has its own
+  const dials = [...body.querySelectorAll('input[type=range]')] as HTMLInputElement[];
+  const label = (el: Element) => el.closest('.row')?.querySelector('.nm')?.textContent ?? '';
+  check('two opacity dials: desktop, then VR', dials.length === 2 && label(dials[0]) === 'desktop panel opacity' && label(dials[1]) === 'VR panel opacity',
+    dials.map(label).join(' | '));
+  const xr = dials[1];
+  check('the VR dial starts opaque (1) and spans 0.6–1', xr?.value === '1' && xr?.min === '0.6' && xr?.max === '1', `${xr?.value} ${xr?.min}–${xr?.max}`);
+  const e1 = emitted.length;
+  xr.value = '0.6'; fire(xr, 'input');
+  check('dragging the VR dial repaints --xr-panel-a (and leaves --panel-a alone)', computed('--xr-panel-a') === '0.6' && computed('--panel-a') === '0.66', `${computed('--xr-panel-a')} ${computed('--panel-a')}`);
+  check('…persists it with the style tokens', tokens()['--xr-panel-a'] === '0.6', JSON.stringify(tokens()));
+  check('…and emits style{--xr-panel-a} (what the VR quads re-raster on)', emitted.slice(e1).some((e) => e[0] === 'style' && e[1]?.key === '--xr-panel-a'));
+  style.setXrPanelAlpha(0.2);
+  check('setXrPanelAlpha clamps to the dial\'s range', computed('--xr-panel-a') === '0.6', computed('--xr-panel-a'));
+  root().removeProperty('--xr-panel-a'); style.applyStyleTokens();
+  check('the VR value survives a re-apply from storage', computed('--xr-panel-a') === '0.6', computed('--xr-panel-a'));
   (body.querySelector('button') as HTMLElement).click();   // reset to defaults
   check('reset clears the live tokens', computed('--panel-a') === '.9' && computed('--brand') === '#aabbcc', `${computed('--panel-a')} ${computed('--brand')}`);
   check('reset empties the store', Object.keys(tokens()).length === 0, JSON.stringify(tokens()));
   check('reset repaints the slider from the sheet', slider.value === '0.9', slider.value);
+  check('reset returns VR panels to opaque, dial included', computed('--xr-panel-a') === '1' && xr.value === '1', `${computed('--xr-panel-a')} ${xr.value}`);
 }
 
 // ============================================================ video rows

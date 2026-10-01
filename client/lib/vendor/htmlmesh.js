@@ -6,7 +6,7 @@
 // matches xrpanels' 900 px/m; (2) inline <svg> drawn via serialise→Image (the icon system);
 // (3) `pause`/`resume` + a per-instance min interval so live panels don't re-rasterise at 60 Hz;
 // (4) events are NOT re-dispatched on window (three's did — it tripped desktop handlers);
-// (8) wrapped text nodes draw word by word; (9) unpainted elements (opacity 0, CSS display/visibility) are skipped; (10) colour inputs are swatches; (11) a native <select> draws its label; (5) elementAt/scrollAt for trigger-scroll; (7) a pick targets ONE element and bubbles; (6) `suspend`/`unsuspend` — the DOM observer off while a
+// (8) wrapped text nodes draw word by word; (9) unpainted elements (opacity 0, CSS display/visibility) are skipped; (10) colour inputs are swatches; (11) a native <select> draws its label; (12) partial opacity composites as a group, like the browser; (5) elementAt/scrollAt for trigger-scroll; (7) a pick targets ONE element and bubbles; (6) `suspend`/`unsuspend` — the DOM observer off while a
 // kept quad's element is back on the desktop (domquad's soft swap).
 import {
 	CanvasTexture,
@@ -196,6 +196,7 @@ class HTMLTexture extends CanvasTexture {
 //
 
 const canvases = new WeakMap();
+const layers = new WeakMap();   // EIDO (12): raster canvas → its opacity layers, by depth
 
 function html2canvas( element, scale = 1 ) {   // EIDO (1)
 
@@ -314,7 +315,7 @@ function html2canvas( element, scale = 1 ) {   // EIDO (1)
 
 	}
 
-	function drawElement( element, style ) {
+	function drawElement( element, style, layered = false ) {
 
 		// Do not render invisible elements, comments and scripts.
 		if ( element.nodeType === Node.COMMENT_NODE || element.nodeName === 'SCRIPT' || ( element.style && element.style.display === 'none' ) ) {
@@ -331,7 +332,18 @@ function html2canvas( element, scale = 1 ) {   // EIDO (1)
 		if ( element.nodeType === Node.ELEMENT_NODE ) {
 
 			const cs = window.getComputedStyle( element );
-			if ( cs.display === 'none' || cs.visibility === 'hidden' || parseFloat( cs.opacity ) === 0 ) return;
+			const op = parseFloat( cs.opacity );
+			if ( cs.display === 'none' || cs.visibility === 'hidden' || op === 0 ) return;
+			// EIDO (12): PARTIAL opacity is a group opacity, as the browser composites it: the element and its subtree are
+			// drawn into a layer, and the layer lands at `op` (nested layers multiply down the chain). Skipped, a dimmed
+			// control (a disabled range at .5, a dead row at .42) read fully live on the quad (owner, 09-30). A layer, not
+			// ctx.globalAlpha per paint: a translucent button's label over its own background would double-dim.
+			if ( op < 1 && ! layered ) {
+
+				drawLayer( element, style, op );
+				return;
+
+			}
 
 		}
 
@@ -635,6 +647,46 @@ function html2canvas( element, scale = 1 ) {   // EIDO (1)
 
 	}
 
+	// EIDO (12): one layer canvas per nesting depth, reused across rasters. Only the element's own box (+2 px for
+	// antialiasing) is cleared and composited — chat's timestamps are each at .6 and a live quad re-rasters at 4 Hz, so
+	// a full-canvas clear + draw per dimmed element added up. A descendant overflowing that box is clipped to it.
+	function drawLayer( element, style, op ) {
+
+		const r = element.getBoundingClientRect();
+		const x0 = Math.max( 0, Math.floor( ( r.left - offset.left - 2 ) * scale ) ), y0 = Math.max( 0, Math.floor( ( r.top - offset.top - 2 ) * scale ) );
+		const x1 = Math.min( canvas.width, Math.ceil( ( r.right - offset.left + 2 ) * scale ) ), y1 = Math.min( canvas.height, Math.ceil( ( r.bottom - offset.top + 2 ) * scale ) );
+		if ( x1 <= x0 || y1 <= y0 ) return;
+		const main = context, mainClipper = clipper;
+		const pool = layers.get( canvas ) ?? [];
+		layers.set( canvas, pool );
+		const layer = pool[ depth ] ?? ( pool[ depth ] = document.createElement( 'canvas' ) );
+		if ( layer.width !== canvas.width || layer.height !== canvas.height ) { layer.width = canvas.width; layer.height = canvas.height; }
+		context = layer.getContext( '2d' );
+		context.setTransform( 1, 0, 0, 1, 0, 0 );
+		context.globalAlpha = 1;
+		context.clearRect( x0, y0, x1 - x0, y1 - y0 );
+		context.setTransform( scale, 0, 0, scale, 0, 0 );
+		clipper = new Clipper( context );   // clips inside the subtree; the parent's clips apply when the layer lands
+		depth ++;
+		try {
+
+			drawElement( element, style, true );
+
+		} finally {
+
+			depth --;
+			context = main; clipper = mainClipper;
+
+		}
+
+		main.save();   // balanced, so the Clipper's own save/restore stack is untouched; the clip it holds applies
+		main.setTransform( 1, 0, 0, 1, 0, 0 );
+		main.globalAlpha *= op;
+		main.drawImage( layer, x0, y0, x1 - x0, y1 - y0, x0, y0, x1 - x0, y1 - y0 );
+		main.restore();
+
+	}
+
 	const offset = element.getBoundingClientRect();
 
 	let canvas = canvases.get( element );
@@ -649,9 +701,10 @@ function html2canvas( element, scale = 1 ) {   // EIDO (1)
 	canvas.width = Math.ceil( offset.width * scale );   // EIDO (1)
 	canvas.height = Math.ceil( offset.height * scale );
 
-	const context = canvas.getContext( '2d'/*, { alpha: false }*/ );
+	let context = canvas.getContext( '2d'/*, { alpha: false }*/ );
 
-	const clipper = new Clipper( context );
+	let clipper = new Clipper( context );
+	let depth = 0;   // EIDO (12)
 
 	// console.time( 'drawElement' );
 

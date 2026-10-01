@@ -29,23 +29,18 @@ const _rc = new THREE.Raycaster(); const _m = new THREE.Matrix4();
 
 function ensureStage() {
   if (stage) return stage;
-  // XR-only chrome for the staged frames: HTMLMesh's mini-renderer has no blur/shadow, so the head
-  // strip gets a solid token blend; desktop-only furniture (✕, resize, collapse) is hidden on the quad
+  // XR-only chrome for the staged frames: HTMLMesh's mini-renderer has no blur/shadow, so none is asked
+  // for; desktop-only furniture (✕, resize, collapse) is hidden on the quad
   const css = document.createElement('style'); css.id = 'xr-stage-css';
-  // The desktop panel is a dark translucency over a bright viewport; on a quad it composites over
-  // nothing and then sits unlit in a lit world, so the same colour reads near-black (the frame test,
-  // 09-05 23:17: "the panel colour might not have come through"). Lift toward the text tone, opaque.
-  // ?quadlift=N is the mix percent (default 18; 0 = the desktop colour as-is).
-  const lift = Math.max(0, Math.min(60, Number(new URLSearchParams(location.search).get('quadlift') ?? 18)));
-  // Plain rgb() strings: HTMLMesh parses computed colours itself, and Chrome serialises a
-  // color-mix() result as color(srgb …), which that parser mangled to PURPLE (pairs probe, 23:40).
-  const cs = getComputedStyle(document.documentElement);
-  const rgb = (cs.getPropertyValue('--panel-rgb').trim().split(/\s+/).map(Number));
-  const base = rgb.length === 3 && rgb.every(Number.isFinite) ? rgb : [5, 20, 20];
-  const tone = [223, 232, 232];   // the text tone the panel is lifted toward
-  const mix = (pct) => `rgb(${base.map((v, i) => Math.round(v + (tone[i] - v) * pct / 100)).join(' ')})`;
-  css.textContent = `#xr-stage .frame.panel { box-shadow: none; backdrop-filter: none; background: ${mix(lift)}; }
-#xr-stage .fr-head { background: ${mix(Math.round(lift * 0.6))}; backdrop-filter: none; }
+  // The panel is the TOKEN (--panel-rgb), opaque by default: its desktop glass (--panel-a) composites over a viewport a
+  // quad does not have. No lift: the panel was mixed 18% toward the text tone (09-05, when it read near-black) — that
+  // was the ACES output pass darkening it, which quadcolour.js now undoes, so the lift only made it lighter than
+  // authored (owner, 09-30). --xr-panel-a is Settings › Style's "VR panel opacity" (setXrPanelAlpha below).
+  // rgb(var()) computes to a plain rgb()/rgba(): HTMLMesh parses computed colours itself, and Chrome serialises a
+  // color-mix() result as color(srgb …), which that parser mangled to PURPLE (pairs probe, 09-05 23:40).
+  // The head strip keeps its desktop rgb(0 0 0 / .3), composited on the quad's own canvas over the panel.
+  css.textContent = `#xr-stage .frame.panel { box-shadow: none; backdrop-filter: none; background: rgb(var(--panel-rgb) / var(--xr-panel-a, 1)); }
+#xr-stage .fr-head { backdrop-filter: none; }
 #xr-stage .fr-btns { display: none; }`;
   document.head.appendChild(css);
   stage = document.createElement('div'); stage.id = 'xr-stage';
@@ -79,6 +74,7 @@ function build(q) {
   mesh.material.transparent = false;   // stays in the opaque pass (no sorting, no blending)…
   mesh.material.alphaTest = 0.5;       // …while the raster's clear corners (a frame's border-radius) cut out instead of drawing black
   prepareQuadMaterial(mesh);           // the authored colour after the output pass (quadcolour.js says why)
+  applyPanelAlpha(mesh);               // Settings › Style › VR panel opacity: below 1 the quad leaves the opaque pass
   const k = W / (cssW * 0.001);   // HTMLMesh geometry = CSS px × 1 mm; rescale to W metres
   mesh.scale.setScalar(k);
   const a = (q.i - (q.n - 1) / 2) * 0.55;
@@ -94,6 +90,30 @@ function build(q) {
 
 /** The quad's material: undoes the renderer's ACES output pass and applies the VR panel grade (exported for the probe). */
 export const prepareQuadMaterial = (mesh) => quadMaterial(mesh, renderer);
+
+// VR panel opacity (Settings › Style; stylepanel.js stores it as the --xr-panel-a token, default 1). It is the PANEL
+// BACKGROUND's alpha, as --panel-a is on the desktop — text and controls stay opaque — carried by the raster's own alpha
+// (the #xr-stage rule above). At 1 the quad is exactly what it always was: opaque pass, alphaTest cutting the corners.
+// Below 1 it must blend, so it joins the transparent pass: three sorts those back-to-front by distance after every
+// opaque thing, so the world shows through; depthWrite stays ON so a nearer panel still hides what is behind it and a
+// laser/particle drawn later can't paint through the text. alphaTest drops to 0.01: it still cuts the clear corners.
+export const xrPanelAlpha = () => {
+  const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--xr-panel-a'));
+  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1;
+};
+function applyPanelAlpha(mesh) {
+  const m = mesh.material, see = xrPanelAlpha() < 1;
+  if (m.transparent === see && m.userData.panelAlphaSet) return;
+  m.transparent = see; m.alphaTest = see ? 0.01 : 0.5; m.depthWrite = true; m.userData.panelAlphaSet = true; m.needsUpdate = true;
+}
+// a style token changed (a colour, the VR opacity): every built quad re-rasters from the live DOM and re-checks its pass
+bus.on('style', () => {
+  for (const q of all) {
+    if (!q.mesh) continue;
+    applyPanelAlpha(q.mesh);
+    const t = q.mesh.material.map; if (q.mesh.visible && !t.paused) t.update?.();
+  }
+});
 
 function drop(q) { if (!q.mesh) return; q.mesh.removeFromParent(); q.mesh.dispose(); q.mesh = null; }
 
@@ -283,3 +303,4 @@ export function domQuadRelease(q, rig) {
   return p;
 }
 export const domQuadTexture = (id) => quads?.find((q) => q.id === id)?.mesh?.material.map ?? null;
+export const domQuadMesh = (id) => quads?.find((q) => q.id === id)?.mesh ?? null;   // probe window (the material's pass)

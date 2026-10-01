@@ -5,6 +5,9 @@
 //   swatch  — Settings › Style: every <input type=color> paints ITS colour on the quad (not the hex as text)
 //   squares — World › Sky: no dark square is painted where the DOM shows none (hidden/unrendered form controls)
 //   colour  — the quad's material through the REAL renderer's output pass: token colours in, the same values out
+//   panel   — the quad's panel background IS the --panel-rgb token (no lift), in the raster and on screen
+//   dimmed  — partial opacity (a disabled range, a dead row) lands as the browser composites it: group, multiplied
+//   vr-a    — Settings › Style › VR panel opacity: default 1 (opaque pass), lower → the quad's panel alpha, reset → 1
 // On Chromium the engine runs WebGPURenderer's WebGL 2 backend in the headset too (owner, 09-30), so this headless
 // path IS the user path for the output transform. What it can't show: the headset's own compositor/display.
 // Run it under the house guards: flock the headless lock, perf-guard; clouds are forced off before boot here.
@@ -59,6 +62,42 @@ try {
   const backend = await ev(async () => (await import('./lib/core.js')).backendName());
   console.log(`  · backend: ${backend}`);
 
+  // ── dimmed, a REAL control: Settings › Audio's mic-sensitivity row, which push-to-talk dims to .45 (audiopanel.js
+  // dimFloor) — the state made through the UI's own path (the PTT checkbox). Dimming is measured as the row's mean
+  // contrast against its own background, dimmed ÷ live: blending is linear in sRGB on both paths, so that ratio IS the
+  // effective alpha whatever each renderer draws for a slider. Desktop: Chrome's compositor (panel made opaque for the
+  // shot, so both sit on the same ground). VR: the quad's raster. ──
+  const CONTRAST = `(d) => { const h = new Map(); for (let i = 0; i < d.length; i += 4) { const k = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2]; h.set(k, (h.get(k) ?? 0) + 1); }
+    let mk = 0, mn = -1; for (const [k, n] of h) if (n > mn) { mk = k; mn = n; } const bg = [mk >> 16, (mk >> 8) & 255, mk & 255];
+    let sum = 0; for (let i = 0; i < d.length; i += 4) sum += Math.max(Math.abs(d[i] - bg[0]), Math.abs(d[i + 1] - bg[1]), Math.abs(d[i + 2] - bg[2]));
+    return { bg, c: sum / (d.length / 4) }; }`;
+  const ptt = (on) => ev(async (on) => {
+    const row = [...document.querySelectorAll('#sec-audio .sp-row')].find((l) => l.querySelector('.nm')?.textContent.trim() === 'push-to-talk');
+    const cb = row?.querySelector('input[type=checkbox]'); if (!cb) return null;
+    if (cb.checked !== on) cb.click();
+    await new Promise((r) => setTimeout(r, 150));
+    const floor = document.querySelector('#sec-audio [data-meter]')?.closest('.sp-row');
+    return { checked: cb.checked, opacity: floor ? getComputedStyle(floor).opacity : null };
+  }, on);
+  await ev(async () => { const F = await import('./lib/frames.js'); F.getFrame('settings')?.show(); document.getElementById('sec-audio-tab').click();
+    document.documentElement.style.setProperty('--panel-a', '1'); });
+  await sleep(400);
+  const deskDim = {};
+  for (const on of [false, true]) {
+    const st = await ptt(on);
+    await sleep(250);
+    const el = await pg.$('#sec-audio [data-meter]');
+    const rowEl = el ? await el.evaluateHandle((e) => e.closest('.sp-row')) : null;
+    const png = rowEl ? await rowEl.asElement().screenshot() : null;
+    if (png && shotDir) { const f = `${shotDir}/${shotN++}-dimmed-real-desktop-${on ? 'ptt-dimmed' : 'live'}.png`; writeFileSync(f, png); console.log(`  · shot ${f}`); }
+    deskDim[on ? 'dim' : 'live'] = png ? await ev(async ([b64, fn]) => { const img = new Image(); img.src = 'data:image/png;base64,' + b64; await img.decode();
+      const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const x = c.getContext('2d'); x.drawImage(img, 0, 0);
+      return eval(fn)(x.getImageData(0, 0, c.width, c.height).data); }, [png.toString('base64'), CONTRAST]) : null;
+    deskDim[on ? 'dimState' : 'liveState'] = st;
+  }
+  await ptt(false);
+  await ev(() => document.documentElement.style.removeProperty('--panel-a'));
+
   // open both frames on the tabs under test (desktop), and shoot the DOM
   for (const [frame, tab] of [['world', 'sky'], ['settings', 'style']]) {
     await ev(async ([frame, tab]) => { const F = await import('./lib/frames.js'); F.getFrame(frame)?.show(); document.getElementById(`sec-${tab}-tab`).click(); }, [frame, tab]);
@@ -91,7 +130,12 @@ try {
         return { tag: c.tagName.toLowerCase(), type: c.type ?? null, value: c.value, rendered, x: r.left - er.left, y: r.top - er.top, w: r.width, h: r.height,
           centre: rendered ? px(r.left - er.left + r.width / 2, r.top - er.top + r.height / 2) : null };
       });
-      out[id] = { url: cv.toDataURL('image/png'), w: cv.width, h: cv.height, controls };
+      // the panel background = the raster's most common pixel (rgba)
+      const all = ctx.getImageData(0, 0, cv.width, cv.height).data; const hist = new Map();
+      for (let i = 0; i < all.length; i += 4) { const k = (all[i] << 24 | all[i + 1] << 16 | all[i + 2] << 8 | all[i + 3]) >>> 0; hist.set(k, (hist.get(k) ?? 0) + 1); }
+      let mk = 0, mn = -1; for (const [k, n] of hist) if (n > mn) { mk = k; mn = n; }
+      const mode = [mk >>> 24, (mk >>> 16) & 255, (mk >>> 8) & 255, mk & 255];
+      out[id] = { url: cv.toDataURL('image/png'), w: cv.width, h: cv.height, controls, mode, modeShare: mn / (all.length / 4) };
     }
     return out;
   });
@@ -106,6 +150,72 @@ try {
   check('style: there are four colour swatches on the quad', colours.length === 4, `${colours.length}`);
   check('style: every swatch paints its own colour at its centre (±6)', colours.length > 0 && colours.every((c) => near(c.centre, hexRgb(c.value), 6)),
     JSON.stringify(colours.map((c) => `${c.value} → rgb(${c.centre?.slice(0, 3)})`)));
+
+  // ── panel: the quad's background is the token, no lift (R, 09-30: the 18% lift was ACES compensation, obsolete) ──
+  const panelTok = await ev(() => getComputedStyle(document.documentElement).getPropertyValue('--panel-rgb').trim().split(/\s+/).map(Number));
+  for (const id of ['settings', 'world']) {
+    const r = raster[id];
+    console.log(`  · ${id} raster panel (mode, ${(r.modeShare * 100).toFixed(0)}% of pixels): rgba(${r.mode}) — token rgb(${panelTok})`);
+    check(`panel: the ${id} quad's raster background is the --panel-rgb token, opaque (Δ ≤ 1)`, near(r.mode, panelTok, 1) && r.mode[3] === 255, `rgba(${r.mode}) vs rgb(${panelTok})`);
+  }
+
+  // ── vr-a: Settings › Style › VR panel opacity. Default 1: the quad is opaque, in the opaque pass ──
+  const vrA = async (v) => ev(async (v) => {
+    const D = await import('./lib/domquad.js');
+    const row = [...document.querySelectorAll('#sec-style .row')].find((r) => r.querySelector('.nm')?.textContent === 'VR panel opacity');
+    const input = row?.querySelector('input[type=range]');
+    if (!input) return { found: false, desktopLabel: [...document.querySelectorAll('#sec-style .row .nm')].map((n) => n.textContent) };
+    const before = input.value;
+    if (v != null) { input.value = String(v); input.dispatchEvent(new Event('input')); }
+    await new Promise((r) => setTimeout(r, 400));   // the re-raster rides the observer/throttle
+    const t = D.domQuadTexture('settings');
+    const cv = t.image, ctx = cv.getContext('2d');
+    const all = ctx.getImageData(0, 0, cv.width, cv.height).data; const hist = new Map();
+    for (let i = 0; i < all.length; i += 4) { const k = (all[i] << 24 | all[i + 1] << 16 | all[i + 2] << 8 | all[i + 3]) >>> 0; hist.set(k, (hist.get(k) ?? 0) + 1); }
+    let mk = 0, mn = -1; for (const [k, n] of hist) if (n > mn) { mk = k; mn = n; }
+    const probeMat = D.domQuadMesh?.('settings')?.material ?? null;
+    const cssA = getComputedStyle(document.documentElement).getPropertyValue('--xr-panel-a').trim();
+    return { found: true, before, value: input.value, cssA, stored: JSON.parse(localStorage.getItem('ew-style-tokens') || '{}')['--xr-panel-a'] ?? null,
+      mode: [mk >>> 24, (mk >>> 16) & 255, (mk >>> 8) & 255, mk & 255], mat: probeMat ? { transparent: probeMat.transparent, depthWrite: probeMat.depthWrite, alphaTest: probeMat.alphaTest } : null };
+  }, v);
+  const a1 = await vrA(null);
+  console.log(`  · VR panel opacity at default: ${JSON.stringify(a1)}`);
+  check('vr-a: Settings › Style has a "VR panel opacity" dial, default 1', a1.found && Number(a1.value) === 1, JSON.stringify(a1));
+  check('vr-a: at 1 the quad stays opaque (opaque pass, panel alpha 255)', a1.found && a1.mode?.[3] === 255 && a1.mat?.transparent === false, JSON.stringify({ mode: a1.mode, mat: a1.mat }));
+  const a06 = await vrA(0.6);
+  console.log(`  · VR panel opacity at 0.6: ${JSON.stringify(a06)}`);
+  check('vr-a: at the minimum (0.6) the quad\'s panel alpha is 0.6 (153 ±2), its colour still the token', a06.found && Math.abs(a06.mode?.[3] - 153) <= 2 && near(a06.mode, panelTok, 2), JSON.stringify(a06.mode));
+  check('vr-a: …and the quad blends (transparent pass, depthWrite on)', a06.mat?.transparent === true && a06.mat?.depthWrite === true, JSON.stringify(a06.mat));
+  check('vr-a: …persisted with the style tokens', a06.stored === '0.6', String(a06.stored));
+
+  const aBack = await vrA(1);   // back to opaque for the rest (the bright-scene shots set their own)
+
+  // ── dimmed, the real control in VR: the same row on the settings quad's raster, live and PTT-dimmed ──
+  const vrDim = {};
+  await ev(() => document.getElementById('sec-audio-tab').click());
+  for (const on of [false, true]) {
+    await ptt(on);
+    await sleep(600);   // the observer re-rasters
+    vrDim[on ? 'dim' : 'live'] = await ev(async ([fn, tag]) => {
+      const D = await import('./lib/domquad.js');
+      const t = D.domQuadTexture('settings'); t.paused = false; t.update();
+      const cv = t.image, er = t.dom.getBoundingClientRect(), s = cv.width / er.width;
+      const r = document.querySelector('#sec-audio [data-meter]').closest('.sp-row').getBoundingClientRect();
+      const x = Math.round((r.left - er.left) * s), y = Math.round((r.top - er.top) * s), w = Math.round(r.width * s), h = Math.round(r.height * s);
+      const crop = document.createElement('canvas'); crop.width = w; crop.height = h; crop.getContext('2d').drawImage(cv, x, y, w, h, 0, 0, w, h);
+      return { ...eval(fn)(cv.getContext('2d').getImageData(x, y, w, h).data), url: crop.toDataURL('image/png') };
+    }, [CONTRAST, on]);
+    save(`dimmed-real-quad-${on ? 'ptt-dimmed' : 'live'}`, vrDim[on ? 'dim' : 'live'].url);
+  }
+  await ptt(false);
+  await ev(() => document.getElementById('sec-style-tab').click());
+  await sleep(300);
+  const aDesk = deskDim.dim && deskDim.live ? deskDim.dim.c / deskDim.live.c : NaN, aVR = vrDim.dim.c / vrDim.live.c;
+  console.log(`  · mic-sensitivity row under PTT (opacity ${deskDim.dimState?.opacity}): desktop contrast ${deskDim.live?.c.toFixed(2)} → ${deskDim.dim?.c.toFixed(2)} = alpha ${aDesk.toFixed(3)} (${(aDesk * 255).toFixed(1)}/255); `
+    + `VR quad ${vrDim.live.c.toFixed(2)} → ${vrDim.dim.c.toFixed(2)} = alpha ${aVR.toFixed(3)} (${(aVR * 255).toFixed(1)}/255); grounds desktop rgb(${deskDim.live?.bg}) VR rgb(${vrDim.live.bg})`);
+  check('dimmed (real): PTT dims the mic-sensitivity row on the desktop (the state exists)', deskDim.dimState?.opacity === '0.45' && aDesk < 0.6, `opacity ${deskDim.dimState?.opacity}, alpha ${aDesk.toFixed(3)}`);
+  check('dimmed (real): …and on the VR quad by the same alpha (within 5/255)', Math.abs(aVR - aDesk) * 255 <= 5, `desktop ${(aDesk * 255).toFixed(1)}/255, VR ${(aVR * 255).toFixed(1)}/255`);
+  check('vr-a: back at 1 the quad returns to the opaque pass', aBack.mode?.[3] === 255 && aBack.mat?.transparent === false, JSON.stringify({ mode: aBack.mode, mat: aBack.mat }));
 
   // ── #1: nothing the DOM hides is painted as a box on the quad ──
   const sky = raster.world.controls;
@@ -130,8 +240,44 @@ try {
   console.log(`  · sky paint census: ${squares.natives} skinned native selects; ${squares.hidden} elements the DOM doesn't render; painted for them: ${JSON.stringify(squares.hits.slice(0, 12))}${squares.hits.length > 12 ? ` (+${squares.hits.length - 12})` : ''}`);
   check('sky: the quad paints NOTHING for an element the DOM does not render', squares.hits.length === 0, `${squares.hits.length} paints`);
 
+  // ── dimmed: partial opacity, desktop (Chrome's own compositor) vs the quad's raster, pixel for pixel ──
+  // A: one element at .5 · B: a .5 GROUP whose child covers its own background (per-paint alpha would let the parent's
+  // amber bleed through the child) · C: .5 inside .5 = .25 · D: a dead row at .42 (the house `.mrow.dead`)
+  const fx = await ev(() => {
+    const d = document.createElement('div'); d.id = 'dimfx';
+    d.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;width:260px;height:60px;background:rgb(5,20,20);display:flex;gap:10px;padding:10px;box-sizing:border-box';
+    d.innerHTML = '<div style="width:40px;height:40px;background:#8fe8c8;opacity:.5"></div>'
+      + '<div style="width:40px;height:40px;background:#ffc46b;opacity:.5"><div style="width:40px;height:40px;background:#8fe8c8"></div></div>'
+      + '<div style="width:40px;height:40px;opacity:.5"><div style="width:40px;height:40px;background:#ebebe9;opacity:.5"></div></div>'
+      + '<div style="width:40px;height:40px;background:#ebebe9;opacity:.42"></div>';
+    document.body.appendChild(d);
+    return [...d.children].map((c) => { const r = c.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; });
+  });
+  await sleep(200);
+  const deskPng = await pg.screenshot({ clip: { x: 0, y: 0, width: 260, height: 60 } });
+  const dim = await ev(async ([png, pts]) => {
+    const img = new Image(); img.src = 'data:image/png;base64,' + png; await img.decode();
+    const c = document.createElement('canvas'); c.width = img.width; c.height = img.height; const x = c.getContext('2d'); x.drawImage(img, 0, 0);
+    const desk = pts.map(([px, py]) => Array.from(x.getImageData(Math.floor(px), Math.floor(py), 1, 1).data).slice(0, 3));
+    const { HTMLMesh } = await import('./lib/vendor/htmlmesh.js');
+    const d = document.getElementById('dimfx'); const mesh = new HTMLMesh(d, { scale: 1 }); mesh.material.map.pause();
+    const q = mesh.material.map.image.getContext('2d');
+    const quad = pts.map(([px, py]) => Array.from(q.getImageData(Math.floor(px), Math.floor(py), 1, 1).data).slice(0, 3));
+    const url = mesh.material.map.image.toDataURL('image/png');
+    mesh.dispose(); d.remove();
+    return { desk, quad, url };
+  }, [deskPng.toString('base64'), fx]);
+  if (shotDir) { const f = `${shotDir}/${shotN++}-dimmed-fixture-desktop.png`; writeFileSync(f, deskPng); console.log(`  · shot ${f}`); }
+  save('dimmed-fixture-quad', dim.url);
+  const dimNames = ['A .5', 'B .5 group', 'C .5×.5', 'D .42'];
+  const dimRows = dimNames.map((k, i) => ({ k, desk: dim.desk[i], quad: dim.quad[i], d: Math.max(...dim.desk[i].map((v, j) => Math.abs(v - dim.quad[i][j]))) }));
+  console.log(`  · dimmed fixture, desktop vs quad: ${dimRows.map((r) => `${r.k} rgb(${r.desk}) vs rgb(${r.quad}) Δ${r.d}`).join('; ')}`);
+  check('dimmed: every partial-opacity case lands on the quad as on the desktop (Δ ≤ 3 of 255)', dimRows.every((r) => r.d <= 3), dimRows.map((r) => `${r.k} Δ${r.d}`).join(', '));
+
   // ── exit, then #2: the quad material through the real renderer's output pass ──
-  await ev(async () => { await window.__iwerDevice.activeSession?.end(); });
+  { const t0 = Date.now();   // the exit compiles what the desktop pass draws again (TSL warnings land here): give it 2 min
+    await Promise.race([pg.evaluate(async () => { await window.__iwerDevice.activeSession?.end(); }), sleep(120000).then(() => { throw new Error('session end pinned for 120 s'); })]);
+    console.log(`  · session ended in ${((Date.now() - t0) / 1000).toFixed(1)} s`); }
   await pg.waitForFunction(() => !window.__iwerDevice.activeSession, null, { timeout: 10000 }).catch(() => {});
   await sleep(500);
   const tokens = await ev(() => {
@@ -140,8 +286,6 @@ try {
     const out = {};
     for (const k of ['--fg', '--brand', '--attn', '--dim', '--accent']) { const v = cs.getPropertyValue(k).trim(); if (v) out[k] = norm(v); }
     const p = cs.getPropertyValue('--panel-rgb').trim().split(/\s+/).map(Number); if (p.length === 3) out['--panel-rgb'] = norm(`rgb(${p.join(',')})`);
-    const st = document.getElementById('xr-stage-css')?.textContent.match(/\.frame\.panel \{[^}]*background: (rgb\([^)]*\))/);
-    if (st) out['quad panel (lifted)'] = norm(st[1]);
     return out;
   });
   console.log(`  · tokens: ${JSON.stringify(tokens)}`);
@@ -224,6 +368,62 @@ try {
     }, id);
     save(`quad-rendered-${id}`, url);
   }
+  // vr-a over a BRIGHT scene: the settings quad rendered through the real renderer with a bright backdrop behind it,
+  // at VR panel opacity 1 (the token, whatever is behind) and at the dial's minimum (the backdrop shows through)
+  const bright = [];
+  for (const a of [1, 0.6]) {
+    const r = await ev(async (a) => {
+      const { THREE, renderer } = await import('./lib/core.js');
+      const D = await import('./lib/domquad.js'); const S = await import('./lib/stylepanel.js');
+      S.setXrPanelAlpha?.(a);
+      const rig = new THREE.Scene(); D.domQuadsEnter(rig); D.domQuadShow('settings', true);
+      await new Promise((r) => setTimeout(r, 900));
+      const mesh = rig.children.find((o) => o.material?.map === D.domQuadTexture('settings'));
+      rig.children.forEach((o) => { o.visible = o === mesh; });
+      mesh.position.set(0, 0, 0); mesh.rotation.set(0, 0, 0); mesh.updateMatrixWorld(true);
+      const bb = new THREE.Box3().setFromObject(mesh); const w = bb.max.x - bb.min.x, h = bb.max.y - bb.min.y;
+      const g = renderer.domElement; const asp = g.width / g.height; const hw = Math.max(w / 2, h / 2 * asp) * 1.25, hh = hw / asp;
+      const cam = new THREE.OrthographicCamera(-hw, hw, hh, -hh, 0.01, 10); cam.position.z = 1;
+      // the bright scene: a lit-sky backdrop with a sun-bright band across it, behind the panel
+      const cv = document.createElement('canvas'); cv.width = 256; cv.height = 256; const c2 = cv.getContext('2d');
+      c2.fillStyle = '#bfe3ff'; c2.fillRect(0, 0, 256, 256); c2.fillStyle = '#fff4d6'; c2.fillRect(0, 96, 256, 64);
+      const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+      const back = new THREE.Mesh(new THREE.PlaneGeometry(hw * 2, hh * 2), new THREE.MeshBasicMaterial({ map: tex }));
+      back.position.z = -0.3; rig.add(back);
+      for (let k = 0; k < 6; k++) { renderer.render(rig, cam); await new Promise((r) => setTimeout(r, 120)); }
+      renderer.render(rig, cam);
+      const tmp = document.createElement('canvas'); tmp.width = g.width; tmp.height = g.height; const t2 = tmp.getContext('2d'); t2.drawImage(g, 0, 0);
+      // the panel's on-screen colour: the most common pixel inside the quad's projected box, in the upper (sky) band
+      const p0 = new THREE.Vector3(bb.min.x, bb.max.y, 0).project(cam), p1 = new THREE.Vector3(bb.max.x, bb.min.y, 0).project(cam);
+      const X0 = Math.ceil((p0.x + 1) / 2 * g.width) + 4, X1 = Math.floor((p1.x + 1) / 2 * g.width) - 4;
+      const Y0 = Math.ceil((1 - p0.y) / 2 * g.height) + 4, Y1 = Math.min(Math.floor((1 - p1.y) / 2 * g.height) - 4, Math.floor(g.height * (96 / 256)) - 2);
+      const data = t2.getImageData(X0, Y0, Math.max(1, X1 - X0), Math.max(1, Y1 - Y0)).data; const hist = new Map();
+      for (let i = 0; i < data.length; i += 4) { const k = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2]; hist.set(k, (hist.get(k) ?? 0) + 1); }
+      let mk = 0, mn = -1; for (const [k, n] of hist) if (n > mn) { mk = k; mn = n; }
+      const backPx = Array.from(t2.getImageData(2, 2, 1, 1).data).slice(0, 3);
+      const url = tmp.toDataURL('image/png');
+      rig.remove(back); back.geometry.dispose(); back.material.dispose(); tex.dispose();
+      D.domQuadsExit(rig);
+      S.setXrPanelAlpha?.(1);
+      return { a, panel: [mk >> 16, (mk >> 8) & 255, mk & 255], back: backPx, url };
+    }, a);
+    save(`vr-opacity-${a === 1 ? '1.0' : 'min'}-bright-scene`, r.url);
+    bright.push(r);
+  }
+  console.log(`  · over a bright scene: ${bright.map((r) => `VR opacity ${r.a}: panel rgb(${r.panel}), backdrop rgb(${r.back})`).join('; ')}`);
+  check('vr-a: over a bright scene at 1, the panel is the token, untouched by what is behind (Δ ≤ 4)', near(bright[0].panel, panelTok, 4), `rgb(${bright[0].panel})`);
+  check('vr-a: …at 0.6 the scene shows through (panel lighter, still well under the backdrop)',
+    bright[1].panel.every((v, i) => v > panelTok[i] + 20 && v < bright[1].back[i] - 20), `rgb(${bright[1].panel}) between rgb(${panelTok}) and rgb(${bright[1].back})`);
+  // reset to defaults brings VR panels back to opaque
+  const rs = await ev(async () => {
+    const S = await import('./lib/stylepanel.js'); S.setXrPanelAlpha?.(0.7);
+    document.getElementById('sec-style-tab')?.click();
+    const b = [...document.querySelectorAll('#sec-style button')].find((x) => /reset to defaults/.test(x.textContent));
+    b?.click();
+    return { css: getComputedStyle(document.documentElement).getPropertyValue('--xr-panel-a').trim(), stored: localStorage.getItem('ew-style-tokens'), clicked: !!b };
+  });
+  check('vr-a: "reset to defaults" returns VR panels to 1', rs.clicked && rs.css === '1' && !/xr-panel-a/.test(rs.stored ?? ''), JSON.stringify(rs));
+
   if (hadGrade) {   // the VR grade: default and both extremes, against the pure-math twin (tools/quadcolour-test.mjs tests the twin)
     const { gradeSRGB, GRADE_DEFAULT, GRADE_RANGE } = await import('../client/lib/quadgrade.js').catch(() => ({}));
     for (const [tag, g] of [['default', GRADE_DEFAULT], ['low', { saturation: GRADE_RANGE.saturation[0], contrast: GRADE_RANGE.contrast[0] }], ['high', { saturation: GRADE_RANGE.saturation[1], contrast: GRADE_RANGE.contrast[1] }]]) {
@@ -250,7 +450,7 @@ try {
     check('Settings › VR: the panel saturation/contrast sliders drive the quads\' grade and persist', vr.rows === 2 && Math.abs(vr.grade?.saturation - 1.6) < 1e-6 && /1\.6/.test(vr.stored ?? ''), JSON.stringify(vr));
   }
   check('no page errors', errs.length === 0, errs.slice(0, 3).join(' | '));
-} catch (e) { check('probe ran', false, e.stack || e.message); }
+} catch (e) { check('probe ran', false, `${e.stack || e.message}${errs.length ? ` — page errors: ${errs.slice(0, 3).join(' | ')}` : ''}`); }
 finally {
   try { await browser.close(); } catch {}
   try { await world.close(); } catch {}

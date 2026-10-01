@@ -31,6 +31,10 @@
      glass legibility collapses over bright scenes, so the floor is one
      user-ownable number away. /panels <0.3-1> sets it, persisted. */
   --panel-a:   0.7;
+  /* --xr-panel-a is the VR quads' panel alpha (Settings › Style › VR panel
+     opacity; domquad.js). 1 = opaque, as VR panels always were: a quad has
+     no viewport under it for the desktop's glass to tint. */
+  --xr-panel-a: 1;
   --panel-rgb: 5 20 20;    /* deep-ocean teal — saturated dark that the brand seafoam sits IN, not ON */
   --panel:     rgb(var(--panel-rgb) / var(--panel-a));
   --chip:      rgb(0 0 0 / .62);       /* tabs & floating chips */

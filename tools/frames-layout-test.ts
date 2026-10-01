@@ -705,5 +705,48 @@ console.log("FRAMES — a shrink is not a decision: grow the window back and eve
   check("a drag while squeezed keeps its new x but not the squeezed height", ng.state.x === 320 && ng.state.h === 500, rect(ng));
 }
 
+console.log("FRAMES — an edge resize while squeezed, then grow");
+{
+  // A resize commits its size axis and stamps the CURRENT viewport into the rest rect, so a position
+  // left over from the old, bigger viewport was paired with the new small one: the frame read as
+  // docked against an edge it never touched, jumped on the next 1px resize and docked on the grow.
+  // Through the real edge hit-tester; every other frame closed so none can win the grab.
+  for (const x of allFrames()) x.hide();
+  const vp = (w: number, h: number) => { (window as any).innerWidth = w; (window as any).innerHeight = h; window.dispatchEvent(new Event("resize")); };
+  const rect = (f: any) => [f.state.x, f.state.y, f.state.w, f.state.h].join(",");
+  const drag = (x0: number, y0: number, x1: number, y1: number) => {
+    document.dispatchEvent(pe("pointerdown", x0, y0));
+    document.dispatchEvent(pe("pointermove", x1, y1));
+    document.dispatchEvent(pe("pointerup", x1, y1));
+  };
+
+  vp(1900, 1000);
+  const e: any = measurable(makeFrame("sq-e", { title: "e", x: 900, y: 100, w: 400, h: 200 })); e.show();
+  vp(600, 1000); e.show();   // shown in the small window (the viewport rule may have auto-hidden it)
+  check("setup: the shrink clamps it to x=192", e.state.x === 192, rect(e));
+  const right = e.state.x + e.state.w - 1, midY = e.state.y + 100;
+  drag(right, midY, right - 100, midY);
+  check("setup: the e-edge drag narrows it to 300 where it stands", rect(e) === "192,100,300,200", rect(e));
+  vp(601, 1000);
+  check("e-edge: a 1px window resize leaves it where the person resized it", rect(e) === "192,100,300,200", rect(e));
+  vp(1900, 1000);
+  check("e-edge: growing back does not dock it right", rect(e) === "192,100,300,200", rect(e));
+  e.hide();
+
+  vp(1900, 1000);
+  const s: any = measurable(makeFrame("sq-s", { title: "s", x: 100, y: 500, w: 300, h: 200 })); s.show();
+  vp(1900, 400); s.show();
+  check("setup: the shrink clamps it to y=162", s.state.y === 162, rect(s));
+  const bottom = s.state.y + outerH(s) - 1, midX = s.state.x + 150;
+  drag(midX, bottom, midX, bottom - 50);
+  check("setup: the s-edge drag shortens it to 150 where it stands", rect(s) === "100,162,300,150", rect(s));
+  vp(1900, 401);
+  check("s-edge: a 1px window resize leaves it where the person resized it", rect(s) === "100,162,300,150", rect(s));
+  vp(1900, 1000);
+  check("s-edge: growing back does not dock it to the bottom", rect(s) === "100,162,300,150", rect(s));
+  s.hide();
+  vp(1000, 700);
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

@@ -204,8 +204,9 @@ document.addEventListener('pointerdown', (e) => {
     captureEl?.removeEventListener('lostpointercapture', finish);
     document.body.style.cursor = '';
     _resizing = false;
-    // the axes this zone moved: w/e change width (w also x), n/s change height (n also y)
-    f.markMoved?.((/[ew]/.test(z) ? 'w' : '') + (z.includes('w') ? 'x' : '') + (/[ns]/.test(z) ? 'h' : '') + (z.includes('n') ? 'y' : ''));
+    // the size axes this zone moved, and always the position on screen: commitRest stamps the current viewport,
+    // so a rest x/y left over from an older one would be judged against it (docked where it never was)
+    f.markMoved?.('xy' + (/[ew]/.test(z) ? 'w' : '') + (/[ns]/.test(z) ? 'h' : ''));
     f.save();                              // a resize is deliberate too
 
   };

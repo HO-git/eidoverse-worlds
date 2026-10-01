@@ -17,6 +17,10 @@
 // the lower of the two blends wins. A bow or a crouch keeps the head high, so it doesn't count either.
 // Y is smoothed (a critically-damped chase with a small dead zone for breathing and head bob); X/Z are not — a plate
 // that trails its walking body sideways reads as lag.
+// STANDING IS RIGID (owner, 10-01: "big noticeable lag on the nameplate on jumping"): the chase was on the live anchor,
+// and a jump clip moves the hips under the root (crouch, tuck, land), so the eased plate chased a swinging target.
+// Upright in ordinary motion (STAND_SLOTS) the plate rides the REST crown over the root and the clip cannot move it;
+// the chase only runs when the target changes, which is a posture change (stand ↔ sit ↔ lie).
 
 export const EYE_K = 1.35;        // crown = eye + 1.35·(eye − head bone)            (Basis)
 export const NO_EYE_K = 0.45;     // no eyes: crown = head + 0.45·(head − hips)       (Basis)
@@ -84,3 +88,16 @@ export function smoothY(prev, target, dt, { tau = TAU, dead = DEAD } = {}) {
   const goal = target - Math.sign(err) * dead;
   return prev + (goal - prev) * (1 - Math.exp(-Math.max(0, dt) / tau));
 }
+
+/** The clip slots that are standing for the plate: upright in ordinary motion — a fall off a ledge plays the jump.
+ *  Flight, climbing and seat/lie poses keep the live anchor. */
+export const STAND_SLOTS = new Set(['idle', 'walk', 'run', 'jump']);
+
+/** One frame of the plate's height over the root. Standing, the target is the rest anchor (standY) and the chase has
+ *  no dead zone, so after a posture change it lands on it exactly and then never moves; otherwise the live anchor
+ *  (liveY), chased as before. A change of target is a posture change, and that is what eases. */
+export function plateOffset(prev, { standing, standY, liveY }, dt, opts = {}) {
+  if (!standing) return smoothY(prev, liveY, dt, opts);
+  return smoothY(prev, standY, dt, opts.tau == null ? RIGID : { tau: opts.tau, dead: 0 });   // per body, per frame: no garbage
+}
+const RIGID = { dead: 0 };

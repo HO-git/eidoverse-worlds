@@ -11,6 +11,8 @@
 //     raised above where the hips say wins; ground-sitting is not lying;
 //   lying — under 50% of rest head height it blends over the head (head + head span + gap), fully by 30%, continuously;
 //   smoothing — Y chases at 1 − exp(−dt/τ) with a 2 cm dead zone, frame-rate independent, never overshoots;
+//   standing is rigid — idle/walk/run/jump (setClip's slot) hang it at the rest crown over the root whatever the hips
+//     do; only a posture change eases; a gesture, held pose or ragdoll keeps the live anchor;
 //   the real Avatar methods — the rest crown measured in model units, scaled live, written in the ROOT's frame (turned,
 //     moved, scaled), the old 1.95 with nothing to measure, and the own-body clearance measured from the new anchor.
 
@@ -220,6 +222,63 @@ console.log('avatar.js:');
   check('nothing to measure at all: the old fixed 1.95', near(bare.label.position.y, 1.95), J(bare.label.position));
   const noeye = rig({ eyes: false, hair: 1.0 });
   check('no eye bones, mesh under the head: head + 0.45·(head − hips)', near(noeye.self._plateRest?.crown, 1.5 + 0.45 * 0.55, 1e-6), J(noeye.self._plateRest));
+
+  // THE JUMP (owner, 10-01: "big noticeable lag on the nameplate on jumping"). Standing — idle, walking, running,
+  // jumping, falling — the plate rides the REST crown over the root, rigidly: the jump clip's crouch, tuck and landing
+  // move the hips under it and it does not move. Only a posture change (stand ↔ sit ↔ lie) eases. Driven through the
+  // real setClip (the controller and remotes.js both call it with the wire's clip), so the slot it records is the one
+  // the plate reads.
+  {
+    const J2 = rig(); const a = J2.self, hp = J2.hips, rt = J2.root;
+    a.actions = {};
+    const g2 = plateGap(1.8 - 0.08), restY = 1.8 + g2;
+    call(a, 'setClip', 'idle'); call(a, '_placePlate', 1 / 60);
+    check('standing (idle): the plate at the rest crown + gap', near(a.label.position.y, restY, 1e-6), J(a.label.position));
+    call(a, 'setClip', 'jump');
+    let dev = 0, hipsMin = Infinity;
+    for (let i = 0; i <= 72; i++) {   // 0.8 s at 90 Hz: crouch (hips −0.3), tuck (+0.1 over rest), land (−0.2), stand
+      const t = i / 72;
+      hp.position.y = 0.95 + (t < 0.2 ? -0.3 * Math.sin(t / 0.2 * Math.PI / 2) : t < 0.6 ? -0.3 + 0.4 * (t - 0.2) / 0.4 : t < 0.8 ? 0.1 - 0.3 * (t - 0.6) / 0.2 : -0.2 + 0.2 * (t - 0.8) / 0.2);
+      hp.position.z = 0.05 * Math.sin(t * Math.PI);
+      rt.position.y = 1.2 * Math.sin(Math.min(1, t / 0.9) * Math.PI);   // the root's own arc
+      hipsMin = Math.min(hipsMin, hp.position.y);
+      call(a, '_placePlate', 1 / 90);
+      dev = Math.max(dev, Math.abs(a.label.position.y - restY));
+    }
+    check('jump: the hips drop 0.3 m and rise again, the root arcs — the plate does not move relative to the root',
+      dev <= 1e-6 && hipsMin <= 0.651, `max deviation ${dev.toFixed(4)} m (hips min ${hipsMin.toFixed(3)})`);
+    for (const slot of ['walk', 'run']) {
+      call(a, 'setClip', slot); hp.position.y = 0.95 - 0.08; call(a, '_placePlate', 1 / 90);
+      check(`${slot}: the stride's hip bob does not move it either`, near(a.label.position.y, restY, 1e-6), J(a.label.position));
+    }
+    rt.position.set(0, 0, 0);
+    // stand → sit: eases down to the live sitting anchor
+    call(a, 'setClip', 'sit'); hp.position.set(0, 0.35, 0.1);
+    call(a, '_placePlate', 1 / 90);
+    check('stand → sit: y eases (not a snap)', a.label.position.y < restY - 0.01 && a.label.position.y > restY - 0.3, J(a.label.position));
+    for (let i = 0; i < 120; i++) call(a, '_placePlate', 1 / 90);
+    const sitY = 0.35 + (1.8 - 0.95) + g2;
+    check('...and settles over the sitting hips (within the dead zone)', Math.abs(a.label.position.y - sitY) <= DEAD + 1e-4, J(a.label.position));
+    // sit → stand: eases back up, and lands ON the rest height (no dead-zone residual while standing)
+    call(a, 'setClip', 'idle'); hp.position.set(0, 0.95, 0);
+    call(a, '_placePlate', 1 / 90);
+    const up1 = a.label.position.y;
+    check('sit → stand: y eases back up (not a snap)', up1 > sitY && up1 < restY - 0.05, `${up1}`);
+    for (let i = 0; i < 200; i++) call(a, '_placePlate', 1 / 90);
+    check('...and lands on the rest crown + gap exactly (no 2 cm short)', near(a.label.position.y, restY, 1e-4), J(a.label.position));
+    // a gesture, a held pose or a fall owns the body: those keep the live anchor (a bow, a crouch, a tumble)
+    a.emote = { action: null, until: Infinity }; hp.position.y = 0.95 - 0.4;
+    for (let i = 0; i < 200; i++) call(a, '_placePlate', 1 / 90);
+    check('an emote playing: the plate follows the live hips (it came down)', a.label.position.y < restY - 0.3, J(a.label.position));
+    a.emote = null; hp.position.y = 0.95;
+    for (let i = 0; i < 200; i++) call(a, '_placePlate', 1 / 90);
+    a._limp = true; hp.position.y = 0.3;
+    for (let i = 0; i < 200; i++) call(a, '_placePlate', 1 / 90);
+    check('limp (a ragdoll fall): the live anchor too', a.label.position.y < restY - 0.3, J(a.label.position));
+    a._limp = false;
+    call(a, 'setClip', 'lie');
+    check('setClip records the asked-for slot even when the body has no clip for it (lie falls back to idle)', a.postureSlot === 'lie', String(a.postureSlot));
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -32,7 +32,7 @@ import { DRIVEN_BONES } from './ragdoll.js';
 import { stroke as strokeIcon, strokeBold } from './icons.js';
 import { plateSize, plateClear, ownClearance, reachAbove, markBake, plateBox, CLEAR_MIN, PLATE_W } from './platesize.js';
 import { revealLevel } from './namereveal.js';
-import { crownEstimate, plateGap, plateAnchor, smoothY, DEAD as PLATE_DEAD } from './plateanchor.js';
+import { crownEstimate, plateGap, plateAnchor, plateOffset, STAND_SLOTS, DEAD as PLATE_DEAD } from './plateanchor.js';
 import { clampBodyScale, clampPlateY, plateLift, clipRate } from './bodyscale.js';
 import { Fn, userData, positionView, cameraNear, cameraFar, min, viewZToPerspectiveDepth, viewZToReversedPerspectiveDepth,
   viewZToOrthographicDepth } from 'three/tsl';
@@ -404,6 +404,7 @@ const _ownM = new THREE.Matrix4();
 const _pArgs = { hips: [0, 0, 0], head: [0, 0, 0], feetY: 0, rest: null, s: 1, gap: 0, lift: 0 }, _pOut = { p: [0, 0, 0], lie: 0 };
 const FEET = ['leftFoot', 'rightFoot'];
 const _pSmooth = { dead: PLATE_DEAD };
+const _pRest = new THREE.Vector3(), _pTarget = { standing: false, standY: 0, liveY: 0 };
 const plateBone = (h, n) => h?.getRawBoneNode?.(n) ?? h?.getNormalizedBoneNode?.(n) ?? null;
 const _pRoot = new THREE.Vector3();
 
@@ -1155,6 +1156,7 @@ export class Avatar {
 
   // ---- locomotion / clips
   setClip(slot, speed = 0, { fade, ease = false } = {}) {
+    this.postureSlot = slot;   // what was ASKED (the wire's clip), before any fallback: the plate reads posture from it
     // Moving cancels an emote. Standing frozen mid-cheer while walking away
     // is worse than cutting the cheer short.
     if (this.emote && speed > 0.05) this.cancelEmote();
@@ -2007,6 +2009,7 @@ export class Avatar {
   /** Hang the plate from the body, this frame (plateanchor.js says why). X/Z over the live hips (over the head, when
    *  lying); Y from the rest crown, chased smoothly. The chase is on the plate's height ABOVE THE ROOT, so moving the
    *  whole body (walking up stairs, a jump's root arc, a lift) never makes it trail — only posture changes ease.
+   *  Standing (_plateStanding), Y is the rest crown over the root, so a jump clip moving the hips doesn't move it.
    *  Worked in WORLD (up is up even if the root tilts), then written into the root's frame, which is where the plate,
    *  the deaf mark, the typing pill and the bubble all live. A body with no hips/head hangs it over its rest mesh top;
    *  with nothing at all, at the old fixed 1.95. */
@@ -2035,9 +2038,21 @@ export class Avatar {
       x = _pHips.x; y = _pHips.y + gap + lift; z = _pHips.z;
       this._plateLie = 0;
     }
-    this._plateOff = smoothY(this._plateOff, y - rootY, dt, _pSmooth);
+    const standing = hipsN && headN && r.crown != null && this._plateStanding();
+    let standY = 0;
+    if (standing) {
+      x = _pArgs.hips[0]; z = _pArgs.hips[2]; this._plateLie = 0;
+      _pRest.set(0, r.crown, 0); sc.localToWorld(_pRest);
+      standY = _pRest.y + gap + lift - rootY;
+    }
+    _pTarget.standing = !!standing; _pTarget.standY = standY; _pTarget.liveY = y - rootY;
+    this._plateOff = plateOffset(this._plateOff, _pTarget, dt, _pSmooth);
     this.label.position.copy(this.root.worldToLocal(_pHips.set(x, rootY + this._plateOff, z)));
   }
+
+  /** Upright in ordinary motion (plateanchor.js STAND_SLOTS), with nothing else owning the body: a gesture, a held
+   *  pose and a ragdoll fall can crouch, bow or tumble it, so they keep the live anchor. */
+  _plateStanding() { return STAND_SLOTS.has(this.postureSlot) && !this.emote && !this._override && !this._limp; }
 
   /** How far this body reaches from its plate's anchor, as the clearance its body-attached sprites write
    *  (platesize.js ownClearance/reachAbove), from where the plate hangs THAT frame (_placePlate runs first). The body is

@@ -89,6 +89,26 @@ try {
       && si.plateAboveRoot < st.plateAboveRoot - 0.2 && si.plateAboveRoot > si.headAboveRoot);
     check(`${av}: lying plate over the head, just above it`, li.slot === 'lie' && li.lie > 0.99 && li.plateOverHeadXZ < 0.05
       && li.plateAboveRoot > li.headAboveRoot && li.plateAboveRoot - li.headAboveRoot < 0.6);
+    // THE JUMP (owner, 10-01: "big noticeable lag on the nameplate on jumping"): the standing peer streams the jump
+    // clip in place; its hips move under the root and the plate, over the root, does not (sampled every frame for 1.5 s)
+    peers[0].pose = { ...peers[0].pose, clip: 'jump' };
+    await pg.waitForFunction((id) => { const a = EW.remotes.get(id)?.avatar; return a?.actions?.jump && a.current === a.actions.jump; }, ids[0], { timeout: 30000 }).catch(() => {});
+    const jump = await pg.evaluate((id) => new Promise((res) => {
+      const a = EW.remotes.get(id).avatar, T = EW.THREE, lw = new T.Vector3(), rw = new T.Vector3(), hw = new T.Vector3();
+      const hipsB = a.vrm.humanoid.getRawBoneNode('hips'); let pMin = Infinity, pMax = -Infinity, hMin = Infinity, hMax = -Infinity, frames = 0;
+      const t0 = performance.now();
+      const tick = () => {
+        a.label.getWorldPosition(lw); a.root.getWorldPosition(rw); hipsB.getWorldPosition(hw);
+        const p = lw.y - rw.y, h = hw.y - rw.y; pMin = Math.min(pMin, p); pMax = Math.max(pMax, p); hMin = Math.min(hMin, h); hMax = Math.max(hMax, h); frames++;
+        if (performance.now() - t0 < 1500) requestAnimationFrame(tick);
+        else res({ slot: a.currentSlot, posture: a.postureSlot, frames, plateSwing: pMax - pMin, hipsSwing: hMax - hMin });
+      };
+      requestAnimationFrame(tick);
+    }), ids[0]);
+    console.log('    jump:', JSON.stringify(jump, (_k, v) => typeof v === 'number' ? +v.toFixed(4) : v));
+    check(`${av}: jumping in place, the hips move under the root and the plate does not (≤ 1 mm)`, jump.slot === 'jump' && jump.frames > 3
+      && jump.hipsSwing > 0.03 && jump.plateSwing <= 0.001, JSON.stringify(jump));
+    peers[0].pose = { ...peers[0].pose, clip: 'idle' };
     if (shotDir) {
       await pg.screenshot({ path: `${shotDir}/${n}-anchor-${av}-after.png` });
       await pg.evaluate((ids) => { for (const id of ids) { const a = EW.remotes.get(id).avatar;

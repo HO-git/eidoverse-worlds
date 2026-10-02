@@ -167,7 +167,7 @@ try {
   check('…at the panels\' angular size (0.002 rad per CSS px), rasterised at 2.5 px per CSS px', Math.abs(geo.radPerPx - 0.002) < 0.0001 && Math.abs(geo.raster - 2.5) < 0.05,
     JSON.stringify({ radPerPx: geo.radPerPx, raster: geo.raster, fontPx: geo.fontPx, textDeg: +(geo.fontPx * 0.002 * 57.3).toFixed(2) }));
   check('…drawn: an opaque card with ink on it (not an empty or faded raster)', geo.solid > 0.8 && geo.bright > 200, JSON.stringify({ solid: geo.solid, bright: geo.bright }));
-  check('rows: name, mic off, can\'t hear you, not in VR', /vrmute/.test(geo.text) && /mic off/.test(geo.text) && /can’t hear you/.test(geo.text) && /not in VR/.test(geo.text), geo.text);
+  check('rows: name, mic off, headphones off, not in VR', /vrmute/.test(geo.text) && /mic off/.test(geo.text) && /headphones off/.test(geo.text) && /not in VR/.test(geo.text), geo.text);
   check('…and no "message" button in VR (a desktop surface); the DOM card is off the desktop mirror', geo.xr && geo.btns === 'none' && geo.offDesk, JSON.stringify({ xr: geo.xr, btns: geo.btns, offDesk: geo.offDesk }));
 
   // ---- 2. aim away: it closes ---------------------------------------------------------------------------------------

@@ -7,7 +7,7 @@
 // beside the plate of anyone nearby with hearing off. The headphone toggle gates VOICE only (mic and TTS; world sound
 // is a separate slider), so that mark only mattered to someone speaking aloud and was noise to everyone typing; it
 // is gone. Mic and hearing live in the card below, in words. A client too old to say leaves them undefined and the
-// card reads "not shared" — unknown is not "can't hear you".
+// card reads "not shared" — unknown is not "headphones off".
 //
 // THE CARD: rest the pointer on a nameplate (or the head under it) for HOVER_MS and a small card opens beside the
 // plate — name, presence, mic and hearing in words, distance / VR / agent, and the one per-person action the people
@@ -25,7 +25,6 @@
 // The "message" button is left out in VR: it opens the DM tab, a desktop surface (index.html #platecard[data-xr]).
 // The trigger on a plate does nothing new.
 import * as THREE from 'three';
-import { VOICE_SILENT_M } from './voiceconsent.js';
 import { claimEscape } from './frames.js';
 import { svg, fsvg } from './icons.js';
 import { HTMLMesh } from './vendor/htmlmesh.js';
@@ -278,10 +277,9 @@ function paint() {
   if (!r) return;
   const me = d.myPos();
   const dist = me && r.avatar?.root ? r.avatar.root.position.distanceTo(me) : null;
-  const near = dist != null && dist <= VOICE_SILENT_M;
   const pres = r.presence ?? 'present';
   const known = typeof r.mic === 'boolean' || typeof r.hear === 'boolean';
-  const s = [pres, r.mic, r.hear, near, dist == null ? '' : Math.round(dist), !!r.xrOn, !!r.agent].join('|');
+  const s = [pres, r.mic, r.hear, dist == null ? '' : Math.round(dist), !!r.xrOn, !!r.agent].join('|');
   if (s === sig) return;
   sig = s;
   const rows = [];
@@ -289,7 +287,7 @@ function paint() {
     rows.push(`<div class="pc-row" data-k="mic" data-on="${r.mic === true}">${svg(r.mic === true ? 'mic' : 'micOff', 14)}<span>${
       r.mic === true ? 'mic on' : r.mic === false ? 'mic off' : 'mic: not shared'}</span></div>`);
     rows.push(`<div class="pc-row" data-k="hear" data-on="${r.hear === true}">${svg(r.hear === false ? 'headphonesOff' : 'headphones', 14)}<span>${
-      r.hear === true ? 'hearing voices' : r.hear === false ? (near ? 'voices off — can’t hear you' : 'voices off') : 'hearing: not shared'}</span></div>`);
+      r.hear === true ? 'headphones on' : r.hear === false ? 'headphones off' : 'headphones: not shared'}</span></div>`);
   } else {
     rows.push(`<div class="pc-row" data-k="voice"><span>voice state not shared</span></div>`);
   }

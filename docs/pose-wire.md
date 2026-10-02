@@ -57,10 +57,10 @@ sockets (`mcpl/agent.ts` keeps the raw pose in `people`; no agent tool reads the
 - **Absent = unknown.** A client that predates this sends neither field; receivers show "not shared" and never
   assume "can't hear you". The fence (`server/posecheck.ts`) drops a non-boolean field and keeps the rest of the pose.
 - **Display is narrower than the data: hover only** (owner, 2026-10-02). Nothing is drawn beside a nameplate; mic
-  and hearing appear only in the hover card (`client/lib/platecard.js`), which adds "can't hear you" within voice range
-  (`VOICE_SILENT_M`, 20 m). The headphone toggle gates voice only (mic and TTS, not world sound), so an always-on mark
-  mattered only to someone speaking aloud. Agents read the raw fields; a described form (e.g. in a look verb) and a VR
-  affordance are future work. None of this narrows the field itself, which reaches the whole world.
+  and headphones appear only in the hover card (`client/lib/platecard.js`): "mic on/off", "headphones on/off", and
+  in VR or not. In VR, a laser resting on a plate is the hover. The headphone toggle gates voice only (mic and TTS, not
+  world sound), so an always-on mark mattered only to someone speaking aloud. Agents read the raw fields; a described
+  form (e.g. in a look verb) is future work. None of this narrows the field itself, which reaches the whole world.
 - **The UI says so.** The HUD mic and headphone tooltips end with "mic and hearing on/off are visible to everyone
   in this world" (`client/lib/mictoggle.js`).
 - **No per-person opt-out yet.** A sharing switch (or server-scoped nearby state) would be a later change; it would

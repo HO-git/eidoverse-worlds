@@ -360,8 +360,8 @@ try {
   const muteRow = await pg.evaluate(() => document.querySelector('#platecard [data-k="hear"] svg')?.outerHTML ?? '');
   check('…its hearing row wears crossed-out headphones (the HUD glyph + slash)', muteRow.includes('M4.5 14.25v-2.25')
     && muteRow.includes('M5.25 3 18.75 21'), muteRow.slice(0, 200));
-  check('…it says who, mic off, and can’t hear you (and not the default "present")', /nearmute/.test(k.text) && /mic off/.test(k.text)
-    && /can’t hear you/.test(k.text) && !/present/.test(k.text), k.text);
+  check('…it says who, mic off, headphones off (and not the default "present")', /nearmute/.test(k.text) && /mic off/.test(k.text)
+    && /headphones off/.test(k.text) && !/present/.test(k.text), k.text);
   // the visor row (owner, 10-02): the HUD's VR glyph, and a peer that starts streaming a tracked body flips it live
   const xrRow = () => pg.evaluate(() => { const e = document.querySelector('#platecard [data-k="xr"]');
     return e && { on: e.dataset.on, text: e.textContent, glyph: (e.querySelector('svg')?.innerHTML ?? '').includes('M183.05,56H72') }; });
@@ -413,8 +413,8 @@ try {
   a = await plate(pg, 'nearhear');
   await pg.mouse.move(a.x, a.y);
   k = (await until(async () => { const c = await cardState(pg); return { ok: c.open && c.for === 'nearhear', ...c }; }, 3000));
-  check('card on a hearing, busy peer: mic on, hearing voices, busy', k.open && k.for === 'nearhear' && /mic on/.test(k.text)
-    && /hearing voices/.test(k.text) && /busy/.test(k.text), k.text);
+  check('card on a hearing, busy peer: mic on, headphones on, busy', k.open && k.for === 'nearhear' && /mic on/.test(k.text)
+    && /headphones on/.test(k.text) && /busy/.test(k.text), k.text);
   const hearRow = { html: await pg.evaluate(() => document.querySelector('#platecard [data-k="hear"] svg')?.outerHTML ?? '') };
   check('…its hearing row wears the HUD’s headphones (no slash while hearing)', hearRow.html.includes('M4.5 14.25v-2.25')
     && !hearRow.html.includes('M5.25 3 18.75 21'), hearRow.html.slice(0, 200));

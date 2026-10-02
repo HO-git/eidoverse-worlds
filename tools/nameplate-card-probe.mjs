@@ -1,4 +1,4 @@
-// nameplate-card-probe — the nameplate ear and the hover card (client/lib/platecard.js), in the REAL client against
+// nameplate-card-probe — the hover card (and that nothing else is drawn beside a plate) (client/lib/platecard.js), in the REAL client against
 // an owned scratch world (probe-harness), with fake peers that are plain sockets joined to the same world and
 // streaming pose packets — the wire every body uses, so `mic` / `hear` arrive exactly as a browser's would.
 // Clouds are forced OFF before boot (a cloudy sky bakes on the CPU in headless Chromium and has frozen the host).
@@ -375,7 +375,7 @@ try {
   const xr2 = await until2(async () => { const r = await xrRow(); return { ok: r?.on === 'false', r }; });
   check('…and back when it stops', xr2?.ok, JSON.stringify(xr2));
   check('…beside the plate (right of it), inside the viewport',
-    k.side === 'right' && k.l >= (a.ear?.r ?? a.r) && k.l - (a.ear?.r ?? a.r) < 24 && k.inView, JSON.stringify({ k, a }));
+    k.side === 'right' && k.l >= a.r && k.l - a.r < 24 && k.inView, JSON.stringify({ k, a }));
   await shot(pg, '71-hover-card.png');
 
   // rest on the card, then the person steps sideways: the card follows the plate
@@ -459,7 +459,7 @@ try {
     plog: await ph.pg.evaluate(() => __plog.slice(-6)),
     top: await ph.pg.evaluate(([x, y]) => { const e = document.elementFromPoint(x, y); return e ? `${e.tagName}#${e.id}.${e.className}` : null; }, [a.x, a.y]) }));
   check('phone: a tap on a plate opens its card, inside the viewport', k.open && k.for === 'nearmute' && k.inView, JSON.stringify(k));
-  check('…clear of the plate (no overlap)', k.t >= a.b || k.l >= (a.ear?.r ?? a.r) || k.r <= a.l, JSON.stringify({ k, a }));
+  check('…clear of the plate (no overlap)', k.t >= a.b || k.l >= a.r || k.r <= a.l, JSON.stringify({ k, a }));
   await shot(ph.pg, '72-hover-card-phone.png');
   await ph.pg.touchscreen.tap(195, 780); await sleep(300);
   k = await cardState(ph.pg);

@@ -16,8 +16,8 @@ export function applyPresenceWire(target, sample) {
   return true;
 }
 
-// Voice state on the same packet (2026-09-30, the nameplate ear and hover card): `mic` — this body's microphone is
-// live (the HUD mic glyph's own reading); `hear` — it is hearing voices (the ear glyph: receiving AND not hushed).
+// Voice state on the same packet (2026-09-30; the hover card, agents' look): `mic` — this body's microphone is
+// live (the HUD mic glyph's own reading); `hear` — it is hearing voices (the headphones glyph: receiving AND not hushed).
 // Additive and optional like `presence`: a client that predates it sends neither, and a receiver then knows NOTHING
 // (undefined) rather than assuming "can't hear you". Booleans only; anything else is dropped.
 export function voiceWire(v) {

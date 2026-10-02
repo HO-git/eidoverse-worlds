@@ -2,7 +2,7 @@
 // R, 2026-09-30). Pure: no THREE, no DOM — tools/bodyscale-test.ts drives these very functions.
 //
 // SIZE, Basis/VRChat semantics: one multiplier `u` grows the body, its eye height, its stride (move speed) and its
-// collider together. On an Avatar it lives on vrm.scene (never the root: the root also carries the nameplate, the ear,
+// collider together. On an Avatar it lives on vrm.scene (never the root: the root also carries the nameplate,
 // the typing pill and the bubble, which stay screen-sized — platesize.js owns their size), multiplied with the VR
 // puppet fit: vrm.scene.scale = u · puppet.
 //

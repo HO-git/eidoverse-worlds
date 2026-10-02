@@ -5,7 +5,7 @@
 //   bun tools/emenu-probe.mjs [--shots <dir>]
 //
 // What must hold:
-//   the menu hangs from the ∃, to its right, OVER the mic/ear glyphs (on top of them); its top level reads
+//   the menu hangs from the ∃, to its right, OVER the mic/headphones glyphs (on top of them); its top level reads
 //     Save world · Load world | Panels ▸ · Lite client | Log in · Help · Keys · About ▸; Save/Load greyed for now and a
 //     press says why; Lite client asks first in a centred dialog (Esc: nothing happens), and yes lands in lite, saved;
 //   Panels ▸ opens on hover beside its row, inside the viewport; every enabled pin there goes on → off → on under a

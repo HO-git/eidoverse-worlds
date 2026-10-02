@@ -82,7 +82,6 @@ if (has("plateClear")) {
   check("plateClear: monotone in k", [0, 0.2, 0.4, 0.6, 1].every((k, i, a) => i === 0 || P.plateClear(0.5, 8, k) >= P.plateClear(0.5, 8, a[i - 1])));
 }
 
-// the mark's two bakes: small where it is small, large up close, and no flicker at the boundary
 
 // the plate's box (owner, 10-01: "only a whisper of room between the g's and the edge"): the pill is sized from the
 // glyphs' measured ink, so the padding is the same above the tallest glyph and below the lowest descender, and a name

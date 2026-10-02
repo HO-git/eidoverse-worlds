@@ -382,7 +382,7 @@ wireNet({
   myAvatarPath: () => getMyAvatarPath(),   // a bare name: the server resolves
   myState,
   me: () => getMe(),
-  myVoice: () => ({ mic: micLive(), hear: earOn() }),   // rides presence: others' nameplate ear + hover card
+  myVoice: () => ({ mic: micLive(), hear: earOn() }),   // rides presence: others' hover card + agents' look
   onRestore: (r) => {
     // a remembered pose can carry null (JSON has no NaN — tonight's NaN body
     // was stored as [null,0,null] and every rejoin put the owner back on it): only

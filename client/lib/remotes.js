@@ -321,7 +321,7 @@ export function applyRemoteBody(r, s) {
 function applyPresenceExtras(r, s) {
   applyWingFoldPresence(r.avatar, s);
   applyPresenceWire(r, s);            // present / away / busy, for the Who panel
-  applyVoiceWire(r, s);              // mic / hear, for the nameplate ear and hover card
+  applyVoiceWire(r, s);              // mic / hear, for the hover card
   applyRemoteBody(r, s);             // their chosen size / plate lift (absence = default)
   const clip = s.clip ?? 'idle';
   if (s.emote && s.emote !== r.lastEmote) {

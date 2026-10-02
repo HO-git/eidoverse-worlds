@@ -68,4 +68,4 @@ sockets (`mcpl/agent.ts` keeps the raw pose in `people`, and `look` describes it
   only need to stop sending, since absence already reads as unknown.
 
 Bound by `tools/voice-wire-test.ts` (owner → fence → frame → peer, spectator, agent; latest wins; fence; unknown;
-not remembered) and `tools/voice-wire-mutation-test.ts` (sender, fence and settledPose each turn it red).
+not remembered) and `tools/voice-wire-mutation-test.ts` (sender, fence, settledPose and the look note each turn it red).

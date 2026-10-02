@@ -180,7 +180,7 @@ export function initVoiceSfu(name) {
   // NOTE: this is the CLIENT half of the same rolloff the server's proximity
   // gate uses (FULL_M=3, SILENT_M=20). The server gate is an efficiency hint
   // that only ever subtracts; this is what actually makes distance audible.
-  const FULL_M = VOICE_FULL_M, SILENT_M = VOICE_SILENT_M;   // one number, shared with the nameplate ear (voiceconsent.js)
+  const FULL_M = VOICE_FULL_M, SILENT_M = VOICE_SILENT_M;   // one number (voiceconsent.js)
   setInterval(() => {
     for (const [id, s] of sfuSpeakers()) {
       const r = remotes.get(id);

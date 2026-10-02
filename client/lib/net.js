@@ -240,7 +240,7 @@ export function sendPose(now) {
     pitch: Math.round((ov?.pitch ?? s.pitch ?? 0) * 100) / 100,
     ...wingFoldPresence(s.wingsFolded),
     ...presenceWire(presence()),        // present / away / busy — for the Who panel (R, 09-05)
-    ...voiceWire(hooks.myVoice()),      // mic live / hearing voices — the nameplate ear and hover card
+    ...voiceWire(hooks.myVoice()),      // mic live / headphones on — the hover card, agents' look
   };
   const avatar = hooks.me();
   Object.assign(pose, bodyWire({ scale: avatar.userScale, plateY: avatar.plateY }));   // this body's size / plate lift — only when not default

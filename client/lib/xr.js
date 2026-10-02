@@ -1184,7 +1184,10 @@ export function updateXR(dtSec = 1 / 72) {
       // what makes the panel under it scrollable with the stick, and shows where a trigger will land
       // …or on a nameplate: resting there is VR's hover (platecard.js opens the card). Panels claim the laser first.
       const panelNow = xrPanelsPick(hand.ray, false);
-      const plate = panelNow == null ? platePick(hand.ray, renderer.xr.getCamera()) : null;
+      // a plate counts only if nothing in the world is nearer along the same laser (the beam stops at the first thing) —
+      // decided HERE, before the trust gate below, so the first 700 ms after a controller wakes obey it too (review 10-02)
+      const seen = panelNow == null ? platePick(hand.ray, renderer.xr.getCamera()) : null;
+      const plate = seen && !rayHitEntity(hand.ray, seen.dist) ? seen : null;
       aimPlate(side, plate?.id);
       hand.laser.visible = grip || trig || panelNow != null || plate != null;
       hand.box.visible = !getSelf()?.vrm;   // a body owns the hands → no test box
@@ -1212,9 +1215,7 @@ export function updateXR(dtSec = 1 / 72) {
         const panelDist = xrPanelsPick(hand.ray, false);
         if (side === 'right' && panelDist != null && !radialOpen && Math.abs(ry) > 0.3) domQuadsScroll(hand.ray, ry * 900 * (dtSec ?? 1 / 72));   // owner 09-07 22:57: stick Y scrolls the panel under the laser
         const hit = panelDist == null ? rayHitEntity(hand.ray, 40) : null;
-        // a plate counts only if nothing in the world is nearer along the same laser (the beam stops at the first thing)
-        const plateDist = panelDist == null && plate && !(hit && hit.dist < plate.dist) ? plate.dist : null;
-        if (plate && plateDist == null) aimPlate(side, null);
+        const plateDist = panelDist == null && plate ? plate.dist : null;
         // owner 09-07 22:10: short and faint unless it points at something you can act on — porch-old's 1.8 m
         // idle beam; a panel, a nameplate or an entity under the ray draws it out to the hit at full strength
         const target = panelDist ?? plateDist ?? hit?.dist ?? null;

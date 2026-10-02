@@ -130,7 +130,12 @@ function liteDock(entries) {
     b.type = 'button';
     b.dataset.id = e.id;
     b.title = e.title ?? e.id;
-    b.textContent = e.label;
+    // a label is shown only where the dock has room (index.html hides .ld-text on a narrow phone);
+    // the banner's button is the way in that never depends on dock space
+    b.innerHTML = '<span class="ld-icon"></span><span class="ld-text"></span>';
+    b.querySelector('.ld-icon').textContent = e.icon ?? e.label;
+    if (e.text) b.querySelector('.ld-text').textContent = ` ${e.text}`; else b.querySelector('.ld-text').remove();
+    b.setAttribute('aria-label', e.title ?? e.id);
     b.addEventListener('click', e.act);
     dock.appendChild(b);
   }
@@ -144,10 +149,16 @@ function liteDock(entries) {
 // reload-mid-hang from a crash) otherwise looks like it simply booted the wrong client.
 // Only for the reasons we inferred; someone who ASKED for lite (url, saved) already knows.
 const BANNER_TEXT = {
-  crash: "Your last visit to this world didn't finish loading, so you're in the light version: chat, emotes and who's here. Tap \u{1F30D} (bottom right) to try the full world again.",
-  ram: "This device reports too little memory for the full world, so you're in the light version. Tap \u{1F30D} (bottom right) to try it anyway.",
+  crash: "Your last visit to this world didn't finish loading, so you're in the light version: chat, emotes and who's here.",
+  ram: "This device reports too little memory for the full world, so you're in the light version: chat, emotes and who's here.",
   'no-gpu': "This browser has no 3D support, so you're in the light version.",
+  // ASKED for lite (a link, or a saved choice) still gets the card: a saved choice outlives the memory of making
+  // it, and nobody should need to know about ?lite=0 to get back (owner, 10-01: "adding a string to a URL bar?")
+  saved: "You're in the light version: chat, emotes and who's here.",
+  url: "You're in the light version: chat, emotes and who's here.",
 };
+// a reason that rules the 3D world out offers no way into it
+const NO_WAY_IN = new Set(['no-gpu']);
 // The same card as the full client's capability notice (capnotice.js: .panel.capnotice >
 // .cn-item > b, p, .cn-btns) so the two reduced paths read as one family. Built here, not
 // imported: capnotice.js pulls core.js, and core.js is the engine lite exists to avoid.
@@ -160,7 +171,9 @@ export function liteBanner(why) {
   card.setAttribute('role', 'status');
   const item = document.createElement('div');
   item.className = 'cn-item';
-  item.innerHTML = '<b></b><p></p><div class="cn-btns"><button type="button" class="cn-ok">got it</button></div>';
+  item.innerHTML = '<b></b><p></p><div class="cn-btns"><button type="button" class="cn-go">Enter the 3D world</button><button type="button" class="cn-ok">stay here</button></div>';
+  if (NO_WAY_IN.has(why)) { item.querySelector('.cn-go').remove(); item.querySelector('.cn-ok').textContent = 'got it'; }
+  else item.querySelector('.cn-go').addEventListener('click', () => tryFullWorld());
   item.querySelector('b').textContent = 'Light version';
   item.querySelector('p').textContent = text;
   let ro = null;
@@ -295,7 +308,7 @@ async function main() {
   document.body.appendChild(emoteHost);
   initLiteEmotes(emoteHost, emote);
   liteDock([
-    { id: 'full', label: '\u{1F30D}', title: 'try the full world', act: tryFullWorld },
+    { id: 'full', label: '\u{1F30D}', icon: '\u{1F30D}', text: '3D world', title: 'enter the full 3D world', act: tryFullWorld },
   ]);
   globalThis.__ewTryFullWorld = tryFullWorld;   // also reachable from the console
 

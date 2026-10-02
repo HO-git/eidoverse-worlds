@@ -1934,6 +1934,11 @@ html.lite, html.lite body { height: 100%; overflow: hidden; }
   border: 1px solid var(--edge); border-radius: 10px; cursor: pointer;
 }
 #lite-dock button:active { background: var(--act); }
+#lite-dock button[data-id="full"] { padding: 0 12px; font-size: 15px; font-weight: 600; }
+@media (max-width: 380px) { #lite-dock .ld-text { display: none; } #lite-dock button[data-id="full"] { padding: 0; } }
+/* the way into the world is the card's first, filled button - not a glyph to discover */
+#lite-banner .cn-btns button { min-height: 44px; font-size: 15px; }
+#lite-banner .cn-go { background: var(--brand-deep); color: var(--bg); border: 1px solid var(--brand); font-weight: 600; }
 
 /* The key door. A first-time key-gated visitor has no other way in, and the full
    client is not an option for the device this exists for. */

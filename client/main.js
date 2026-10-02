@@ -87,6 +87,7 @@ import { budgetStats } from './lib/framebudget.js';
 import { pending, P, onIdle, laneStats as schedLaneStats } from './lib/scheduler.js';
 import { laneStats as loadLaneStats } from './lib/loadwork.js';
 import { colliderCacheStats } from './lib/colliders.js';
+import { statusChip } from './lib/statuschips.js';
 import { governPerformance, governorDebug, whenCalm, applyPendingPixelRatio } from './lib/governor.js';
 import { registerSystem, startFrame, frameDebug } from './lib/frame.js';
 import { perf } from './lib/perf.js';
@@ -262,9 +263,14 @@ if (CONFIG.params.has('sendlayout')) {
 }
 
 // A desktop whose last full boot never came back is NOT demoted to lite (index.html
-// decideLite, 'retry'): it boots full again, and says so, with the way out if it keeps
-// happening. Shown once the world is calm, so it isn't lost under the arrival.
-if (globalThis.__ewLiteWhy === 'retry') whenCalm().then(() => toast("last time, this world didn't finish loading here — trying the full world again. If it keeps failing, add ?lite=1 to the address for the light version.", 'warn', 15000));
+// decideLite, 'retry'): it boots full again and says so, as a pill on the status strip
+// with the light version one press away. Never "type ?lite=1" (owner, 10-01).
+if (globalThis.__ewLiteWhy === 'retry') statusChip({
+  id: 'lite-retry', level: 'attn', label: 'last load stalled',
+  title: "This world didn't finish loading last time",
+  body: "We're trying the full 3D world again. If it keeps stalling or crashing here, the light version has chat, emotes and who's here, with no 3D.",
+  actions: [{ label: 'switch to the light version', run: () => { const u = new URL(location.href); u.searchParams.set('lite', '1'); location.assign(u); } }, { label: 'stay in 3D', clear: true }],
+});
 
 // A rejected door key re-opens the door with a key field instead of retrying
 // into a wall forever.

@@ -242,6 +242,28 @@ console.log('avatar.js:');
     check('disposeSprite releases each texture once, even when the live map is one of the bakes', counts.get(small) === 1 && counts.get(large) === 1,
       `small ×${counts.get(small) ?? 0}, large ×${counts.get(large) ?? 0}`);
   }
+  // A held reach's limb lengths are measured in the ROOT frame (reachbone.js measureChain), where vrm.scene's size
+  // shows: a live resize — the size slider, or the VR fit changing on entering VR — must re-measure them, or the
+  // solver keeps bending the old arm (and disagrees with the text tier, whose stand-in re-measures: physics.ts).
+  {
+    const { rigMath } = await import('../shared/rig.js');
+    const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+    const P: any = { hips: V(0, 1, 0), spine: V(0, 1.2, 0), chest: V(0, 1.4, 0), neck: V(0, 1.5, 0), head: V(0, 1.7, 0) };
+    for (const [s, x] of [['left', 1], ['right', -1]] as const) {
+      Object.assign(P, { [s + 'UpperArm']: V(.2 * x, 1.5, 0), [s + 'LowerArm']: V(.5 * x, 1.5, 0), [s + 'Hand']: V(.8 * x, 1.5, 0),
+        [s + 'UpperLeg']: V(.1 * x, .9, 0), [s + 'LowerLeg']: V(.1 * x, .5, 0), [s + 'Foot']: V(.1 * x, .1, .1) });
+    }
+    const stand: any = rigMath(THREE).makeAvatar(P);
+    const body: any = Object.assign(Object.create(Avatar.prototype), { root: stand.root, userScale: 1, _puppet: 1,
+      vrm: { scene: stand.pivot, humanoid: { ...stand.vrm.humanoid, update() {} } } });
+    const arm = () => { const c = call(body, '_measureChain', 'rightHand'); return c ? c.L1 + c.L2 : NaN; };
+    const a1 = arm();
+    call(body, 'setUserScale', 2); const a2 = arm();
+    call(body, 'setPuppetScale', 0.5); const a3 = arm();
+    call(body, 'setUserScale', 1); call(body, 'setPuppetScale', 1); const a4 = arm();
+    check('a held reach re-measures its arm when the body is resized (0.6 → 1.2 at 200% → 0.6 under a ½ VR fit → 0.6)',
+      near(a1, .6, 1e-9) && near(a2, 1.2, 1e-9) && near(a3, .6, 1e-9) && near(a4, .6, 1e-9), J({ a1, a2, a3, a4 }));
+  }
   // a pooled VRM that comes back still wearing its last owner's size is reset by the constructor
   const src = String(Avatar.prototype.constructor);
   check('the constructor writes a fresh size before measuring (a pooled VRM carries no stale scale)', /vrm\.scene\.scale\.setScalar\(1\)[\s\S]*_measurePlateRest\(\)/.test(src));

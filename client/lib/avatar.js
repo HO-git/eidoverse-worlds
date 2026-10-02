@@ -1963,6 +1963,9 @@ export class Avatar {
     sc.scale.setScalar(this.bodyScale());
     sc.updateMatrixWorld(true);
     this._ownClear = null;   // the clearance over the plate is in world units: re-measure at the new size
+    // a held reach's limb lengths are measured in the root frame, which sees this size: re-measure them, or a live
+    // resize (the slider, the VR fit) keeps bending the old arm. Eagerly, so _reachOwned never sees a gap.
+    if (this._chains) for (const key of [...this._chains.keys()]) this._chains.set(key, measureChain(this, key));
   }
   /** Metres the nameplate hangs over the measured crown, at the authored size (bodyscale.js plateLift). 0 = auto. */
   setPlateY(m) {

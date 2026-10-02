@@ -412,12 +412,11 @@ a:hover { color: var(--fg); text-decoration-color: var(--brand); }
 .chat-cols.side-left .chat-side-grip { left: auto; right: -5px; }   /* mirror of the right: over the toggler's border line, not the pane's own edge (live, 09-06 23:34: 'the right behaviour is preferred') */
 /* the gear: a settings affordance INSIDE the compose field, at its right end (its popover opens upward, chat.js) */
 .chat-compose > .chat-gear {
-  position: absolute; right: 11px; top: 50%; transform: translateY(-50%);
+  position: absolute; right: 11px; bottom: 10px;   /* on the compose box's last line as it grows */
   width: 24px; height: 24px; padding: 0; display: grid; place-items: center;
   background: none; border: none; color: var(--dim); border-radius: 5px;
 }
 .chat-compose > .chat-gear[aria-expanded="true"] { opacity: 1; color: var(--fg); background: var(--hov); }
-.chat-compose input { padding-right: 32px; text-overflow: ellipsis; }   /* a long placeholder ends in … before the gear, not under it */
 .chat-tabs .chat-who { flex: none; min-width: 0; align-self: center; display: inline-flex; align-items: center; gap: 6px;
   margin-left: 4px; padding: 2px 8px; background: none; border: 1px solid transparent; border-radius: 999px;
   color: var(--dim); font-size: var(--fs-xs); white-space: nowrap; cursor: pointer; }
@@ -578,7 +577,6 @@ a:hover { color: var(--fg); text-decoration-color: var(--brand); }
 .chat-jump.ping { background: var(--accent-dk); border-color: var(--ping); color: var(--ping); }
 
 .chat-compose { position: relative; padding: 6px; flex: none; }
-.chat-compose input { width: 100%; box-sizing: border-box; font-size: var(--fs); }
 /* the compose box is a textarea that grows (chat.js sizeInput); it wears the text input's skin */
 .chat-compose textarea {
   display: block; width: 100%; box-sizing: border-box; resize: none; overflow-y: hidden;
@@ -586,7 +584,6 @@ a:hover { color: var(--fg); text-decoration-color: var(--brand); }
   border: 1px solid var(--edge); border-radius: 5px; padding: 6px 32px 6px 8px;
 }
 .chat-compose textarea::placeholder { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chat-compose > .chat-gear { top: auto; bottom: 10px; transform: none; }   /* the gear stays on the last line as the box grows */
 
 .ac {
   position: absolute; left: 6px; right: 6px; bottom: calc(100% - 4px);
@@ -1828,15 +1825,11 @@ try { const o = JSON.parse(localStorage.getItem('ew-style-tokens') || '{}');
       if (!gpuApi) return { lite: true, why: 'no-gpu' };
       // 4b. A PHONE OR TABLET STARTS IN LITE (owner, 10-01: "why can't phones load the lite client by
       //     default?"). A phone visitor would rather start in chat than watch the world crash, and the
-      //     lite card's "Enter the 3D world" is one press, saved per device (3) so it isn't asked again;
+      //     ∃ logo there ("Tap the ∃ to load the full 3D world") is one press, saved per device (3) so it isn't asked again;
       //     a saved "3D" that then dies is caught by (2), once. Desktops and headsets start full.
       if (mobile) return { lite: true, why: 'phone' };
-      // 5. The one hardware guess, kept deliberately timid. deviceMemory is capped at
-      //    8 and rounded, and plenty of phones that cannot run this still report 4, so
-      //    this catches only the obviously-incapable. Everything else is allowed to
-      //    TRY — which is affordable precisely because (3) means it only ever fails
-      //    once, and never silently.
-      if (mobile && deviceMemory > 0 && deviceMemory <= 2) return { lite: true, why: 'ram' };   // a phone's guess, like (2)
+      // (A low-memory guess once lived here; a phone or tablet now starts in lite at 4b, and a desktop or headset
+      //  that reports little memory is allowed to TRY - the tripwire catches it, and the pill offers lite.)
       return { lite: false, why: 'default' };
     };
     globalThis.__ewDecideLite = decideLite;   // test seam
@@ -1937,7 +1930,7 @@ html.lite, html.lite body { height: 100%; overflow: hidden; }
   background: var(--panel); border-bottom: 1px solid var(--edge); box-shadow: var(--rim);
 }
 .lite-emotes { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
-/* THE PHONE LAYOUT (owner, 10-01). One top bar: emotes scroll sideways on one line, the 3D button at its end. */
+/* THE PHONE LAYOUT (owner, 10-01). One top bar: the ∃ (the way into 3D) first, then the emotes on one line. */
 /* WIDE SCREENS (owner, 10-01: "make sure it's not formatted in an insane way" on a desktop): lite is a column at most
    720 px wide, centred; --lite-x is the margin either side of it (0 on any phone, so the phone layout is unchanged). The
    bar's background still spans the screen; its contents, the card and the chat keep to the column. */
@@ -1962,7 +1955,6 @@ html.lite .frame.chat-frame {
    row floating mid-panel once the box stretched */
 html.lite .frame.chat-frame { display: flex; flex-direction: column; }
 html.lite .frame.chat-frame > .fr-body { height: auto !important; flex: 1 1 auto; min-height: 0; }
-#lite-dock button { display: inline-flex; align-items: center; justify-content: center; }
 /* the ∃ leads the top bar and is the way into the 3D world (lite.js) */
 /* on a screen wider than the column the chat gets its side edges back, so it reads as a pane, not a page */
 @media (min-width: 721px) { html.lite .frame.chat-frame { border-left: 1px solid var(--edge); border-right: 1px solid var(--edge); } }
@@ -1980,18 +1972,7 @@ html.lite #lite-emote-host #hud.emark svg { width: 30px; height: 30px; }   /* ma
 .lite-emote.fired { border-color: var(--brand); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 35%, transparent); }
 .lite-emotes-wait { color: var(--dim); font-size: var(--fs-sm, 12px); padding: 12px; }
 
-#lite-dock { display: flex; gap: 6px; flex: none; }   /* lives at the right end of the top bar (lite.js) */
-#lite-dock button {
-  min-width: 44px; min-height: 44px; font-size: 20px;
-  background: var(--panel); color: var(--fg);
-  border: 1px solid var(--edge); border-radius: 10px; cursor: pointer;
-}
-#lite-dock button:active { background: var(--act); }
-#lite-dock button[data-id="full"] { padding: 0 12px; font-size: 15px; font-weight: 600; }
-@media (max-width: 380px) { #lite-dock .ld-text { display: none; } #lite-dock button[data-id="full"] { padding: 0; } }
-/* the way into the world is the card's first, filled button - not a glyph to discover */
 #lite-banner .cn-btns button { min-height: 44px; font-size: 15px; }
-#lite-banner .cn-go { background: var(--brand-deep); color: var(--bg); border: 1px solid var(--brand); font-weight: 600; }
 
 /* The key door. A first-time key-gated visitor has no other way in, and the full
    client is not an option for the device this exists for. */
@@ -2059,7 +2040,7 @@ html.lite .frame.panel { max-width: 100%; }
        master (notes: logo small/mark-24.svg — 3 px arms and peg on whole pixels, wider doorways than the
        splash's master scaled down), its sphere clip baked into the two hook outlines so the drawing
        carries no ids (the lantern copies this svg, lantern.js EMARK). The splash's #splash .sp-logo is
-       the large master; the favicon (<head>) is the 32/16 px masters. 
+       the large master; the favicon (<head>) is the 32/16 px masters.
        The PEG is scaled straight from the big master (owner, 10-01): as thick as the arms (3.025 units), not the
        whole-pixel 2 it once was, which read thin beside the arms at every size; at 1x it lands on half pixels. -->
   <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" fill="currentColor">

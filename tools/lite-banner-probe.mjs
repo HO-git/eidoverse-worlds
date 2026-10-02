@@ -25,10 +25,15 @@ try {
     userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 4a) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36' };
   const DESK = { viewport: { width: 1100, height: 700 },
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36' };
+  // after a press that chooses a client: the page reloads, lands in that client, and the ADDRESS carries no ?lite
+  // (a ?lite=0 left there would outrank the crash tripwire and reload a phone into the same crash — review #212)
+  // act() is the press; the navigation is awaited from BEFORE it (the address can be unchanged: a plain reload)
+  const landedAfter = async (p, lite, act) => { const nav = p.waitForEvent('framenavigated', { timeout: 15000 }).catch(() => null); await act(); await nav;
+    return p.waitForFunction((want) => globalThis.__ewLite === want && !new URLSearchParams(location.search).has('lite'), lite, { timeout: 30000, polling: 250 }).then(() => true, () => false); };
   const run = async (label, q, seed, dev = PHONE) => {
     const ctx = await b.newContext(dev); const p = await ctx.newPage(); const errs = [];
     p.on('pageerror', e => errs.push(e.message));
-    if (seed) await p.addInitScript(() => localStorage.setItem('ew-boot-attempt:busy', String(Date.now() - 5000)));
+    if (seed) await p.addInitScript(() => { if (sessionStorage.getItem('probe-seeded')) return; sessionStorage.setItem('probe-seeded', '1'); localStorage.setItem('ew-boot-attempt:busy', String(Date.now() - 5000)); })   /* ONE death, not one per navigation */;
     await p.goto(`${O}/?world=busy&name=${label}&key=${K}${q}`);
     await p.waitForFunction(() => globalThis.__ewLite !== undefined && document.querySelector('#lite-emote-host #hud'), null, { timeout: 30000 });
     await p.waitForTimeout(2500);
@@ -59,9 +64,15 @@ try {
   ok('layout: the chat is edge to edge — full width, to the bottom, square corners, no dead gap', L.chatBelowCard && L.chatToBottom && L.chatFullWidth && L.square && L.gap <= 16, JSON.stringify(L));
   ok('layout: the card spans the column; the ∃ shows', L.cardFullWidth && L.hudVisible);
   await p.screenshot({ path: SHOT.replace('.png', '-phone.png') });
-  let nav = p.waitForURL(/lite=0/, { timeout: 10000 }).then(() => true, () => false);
-  await p.locator('#hud').click();
-  ok('tapping the ∃ leaves for the full world (?lite=0)', await nav, p.url());
+  // Enter on a FOCUSED cancel button cancels, not confirms (review #212) — checked here via the ∃ menu later; first the ∃
+  ok('tapping the ∃ lands in the full world, address clean (no ?lite)', await landedAfter(p, false, () => p.locator('#hud').click()), p.url());
+  // THE LOOP the review found: that full boot dies (OOM). The next visit to the SAME address must land in lite, once.
+  // (an OOM runs no pagehide, which a navigation from a live page always fires — so the death is planted at the start
+  //  of the NEXT document, the state an OOM-killed tab leaves behind)
+  await p.addInitScript(() => { if (sessionStorage.getItem('probe-died')) return; sessionStorage.setItem('probe-died', '1'); localStorage.setItem('ew-boot-attempt:busy', String(Date.now())); });
+  await p.goto(p.url()); await p.waitForFunction(() => globalThis.__ewLite !== undefined, null, { timeout: 30000 });
+  const again = await p.evaluate(() => ({ lite: globalThis.__ewLite, why: globalThis.__ewLiteWhy }));
+  ok('…and if the 3D world then kills the phone, reloading that address lands in lite (crash), not the same crash', again.lite === true && again.why === 'crash', JSON.stringify(again));
   ok('no page errors', errs.length === 0, errs.join(' | ').slice(0, 200)); await ctx.close();
 
   { // a FRESH phone (no history) starts in lite; choosing 3D is remembered on that device
@@ -97,9 +108,7 @@ try {
     for (let i = 0; i < 4; i++) { await box.pressSequentially('typing a longer message to show the box growing '); }
     await p.screenshot({ path: SHOT.replace('.png', '-compose-grow.png') });
     await box.fill('');
-    const nav = p.waitForURL(/lite=0/, { timeout: 10000 }).then(() => true, () => false);
-    await p.locator('#hud').click();
-    ok('…the ∃ goes full and remembers it (ew-lite=0)', await nav && await p.evaluate(() => localStorage.getItem('ew-lite') === '0'));
+    ok('…the ∃ goes full and remembers it (ew-lite=0), address clean', await landedAfter(p, false, () => p.locator('#hud').click()) && await p.evaluate(() => localStorage.getItem('ew-lite') === '0'));
     await p.goto(`${O}/?world=busy&name=freshphone&key=${K}`);
     await p.waitForFunction(() => globalThis.__ewLite !== undefined, null, { timeout: 30000 });
     const g = await p.evaluate(() => ({ lite: globalThis.__ewLite, why: globalThis.__ewLiteWhy }));
@@ -121,9 +130,7 @@ try {
   }
   ok('someone who ASKED for lite (a desktop link) gets the card too, naming the way back', r.lite === true && r.why === 'url' && /This link opens the lite client/.test(r.banner ?? '') && /Click the \u2203 Eidoverse logo/.test(r.banner ?? '') /* a mouse clicks */, JSON.stringify(r));
   await p.screenshot({ path: SHOT });
-  nav = p.waitForURL(/lite=0/, { timeout: 10000 }).then(() => true, () => false);
-  await p.locator('#hud').click();
-  ok('the ∃ leaves for the full world at desktop width too', await nav, p.url()); await ctx.close();
+  ok('the ∃ lands in the full world from a ?lite=1 link too (the link param dropped)', await landedAfter(p, false, () => p.locator('#hud').click()), p.url()); await ctx.close();
 
   ({ p, ctx, r, errs } = await run('dismiss', '', true));
   await p.evaluate(() => { globalThis.__roOff = 0; const d = ResizeObserver.prototype.disconnect; ResizeObserver.prototype.disconnect = function () { globalThis.__roOff++; return d.call(this); }; });
@@ -135,7 +142,7 @@ try {
 
   { // a DESKTOP whose last boot died: full client, plus a pill offering the light version
     const ctx = await b.newContext(DESK); const p = await ctx.newPage(); const errs = []; p.on('pageerror', e => errs.push(e.message));
-    await p.addInitScript(() => localStorage.setItem('ew-boot-attempt:busy', String(Date.now() - 5000)));
+    await p.addInitScript(() => { if (sessionStorage.getItem('probe-seeded')) return; sessionStorage.setItem('probe-seeded', '1'); localStorage.setItem('ew-boot-attempt:busy', String(Date.now() - 5000)); })   /* ONE death, not one per navigation */;
     await p.goto(`${O}/?world=busy&name=deskcrash&key=${K}`);
     await p.waitForFunction(() => globalThis.__ewLite !== undefined, null, { timeout: 30000 });
     const d = await p.evaluate(() => ({ lite: globalThis.__ewLite, why: globalThis.__ewLiteWhy }));
@@ -164,10 +171,16 @@ try {
     await p.mouse.move(5, 600); await p.waitForTimeout(300);
     ok('…and goes when the pointer leaves the row', await p.evaluate(() => !document.getElementById('tipchip').classList.contains('show')));
     ok('the bar at the bottom wears the lighthouse (the Panels row\'s icon), not the ∃', await p.evaluate(() => { const g = document.querySelector('#lantern-pill .lp-glyph')?.innerHTML ?? ''; return /M208,80/.test(g) && !/M4\.675 3/.test(g); }));
+    // Enter on the FOCUSED cancel button cancels (review #212: Enter used to mean yes whatever had focus); Tab stays in the card
     await menuRow(); await p.locator('#emenu .mrow[data-item=lite]').click();
-    const nav2 = p.waitForURL(/lite=1/, { timeout: 10000 }).then(() => true, () => false);
-    await p.locator('#confirm-center .cc-ok').click();
-    ok('…Switch goes to the lite client', await nav2 && await p.waitForFunction(() => globalThis.__ewLite === true, null, { timeout: 30000 }).then(() => true, () => false));
+    await p.keyboard.press('Tab');
+    const onNo = await p.evaluate(() => document.activeElement?.classList.contains('cc-no'));
+    await p.keyboard.press('Tab');
+    const backOk = await p.evaluate(() => document.activeElement?.classList.contains('cc-ok'));
+    await p.keyboard.press('Tab'); await p.keyboard.press('Enter'); await p.waitForTimeout(500);
+    ok('confirm: Tab cycles OK ↔ Cancel inside the card; Enter on Cancel cancels', onNo && backOk && await p.evaluate(() => !document.getElementById('confirm-center') && globalThis.__ewLite === false));
+    await menuRow(); await p.locator('#emenu .mrow[data-item=lite]').click();
+    ok('…Switch lands in the lite client and REMEMBERS it (ew-lite=1), address clean', await landedAfter(p, true, () => p.locator('#confirm-center .cc-ok').click()) && await p.evaluate(() => localStorage.getItem('ew-lite') === '1'));
     ok('no page errors on the desktop retry', errs.length === 0, errs.join(' | ').slice(0, 200)); await ctx.close();
   }
 } catch (e) { fail++; console.log('PROBE FAILED', e.message); } finally { await b.close(); await world.close(); }

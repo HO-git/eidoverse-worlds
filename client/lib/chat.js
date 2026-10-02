@@ -1059,7 +1059,7 @@ export function initChat({ send, whisper, typing, people }) {
       }
       return;
     }
-    if (e.key === 'ArrowDown' && historyIdx >= 0) {
+    if (e.key === 'ArrowDown' && historyIdx >= 0 && !inputEl.value.slice(inputEl.selectionEnd ?? inputEl.value.length).includes('\n')) {
       e.preventDefault();
       historyIdx--;
       setInput(historyIdx < 0 ? '' : sentHistory[sentHistory.length - 1 - historyIdx]);

@@ -2,6 +2,7 @@
 // Toasts, the loading tray, the HUD, the hint bar, the panel frames, the dock,
 // and the two overlays (help, front door).
 
+import { chooseClient } from './litechoice.js';
 import { confirmCenter } from './confirmcenter.js';
 import { bus, CONFIG, setName, setToken, setErrorSink, report } from './base.js';
 import { resizeZoneAt, fitTabStrip } from './frames.js';
@@ -963,7 +964,7 @@ function topItems() {
       title: 'Switch to the lite client?',
       body: "Chat, emotes and who's here, with no 3D world. Useful on a slow or struggling machine. Click the \u2203 logo there to come back.",
       ok: 'Switch', cancel: 'Stay in 3D',
-    }).then((yes) => { if (!yes) return; const u = new URL(location.href); u.searchParams.set('lite', '1'); location.assign(u); }) },
+    }).then((yes) => { if (yes) chooseClient(true); }) },
     'sep',
     loginItem(),
     { id: 'help', icon: 'question', label: 'Help', key: 'H', away: true, run: () => toggleHelp() },

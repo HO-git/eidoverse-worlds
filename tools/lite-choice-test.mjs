@@ -99,7 +99,7 @@ check('a crash runs no handler, so the flag survives to the next visit', store.h
 
 console.log('  -- hardware --');
 check('no 3D API at all → lite', d('', { gpuApi: false }).lite === true && d('', { gpuApi: false }).why === 'no-gpu');
-check('2GB or less → lite', d('', { deviceMemory: 2 }).lite === true && d('', { deviceMemory: 1 }).lite === true);
+check('a 2GB phone is lite (it starts there anyway: 4b)', d('', { deviceMemory: 2 }).lite === true && d('', { deviceMemory: 1 }).lite === true);
 check('a 4GB desktop is allowed to TRY', desk('', { deviceMemory: 4 }).lite === false);
 check('absent deviceMemory is not read as 0GB', desk('', { deviceMemory: 0 }).lite === false);
 

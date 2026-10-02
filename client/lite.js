@@ -15,6 +15,7 @@
 // It runs the REAL net.js. The wire protocol is not forked — net.js takes its
 // participant registry, asset ledger and snapshot renderer by injection now, so this
 // file supplies renderer-free ones and the protocol has exactly one implementation.
+import { chooseClient } from './lib/litechoice.js';
 import { CONFIG, bus, report, setToken } from './lib/base.js';
 // NOT ui.js. That module is the DESKTOP shell: since #185 it imports videopanel.js and
 // profile.js, which reach the engine through core.js, mybody.js and colliders.js, and it
@@ -49,33 +50,12 @@ globalThis.__ewEngineUp = true;
 // back, is worse than the crash was.
 const WHY = globalThis.__ewLiteWhy ?? 'url';
 const WHY_TEXT = {
-  crash: "last time this device opened the full world it didn't come back \u2014 this is the lite client",
-  ram: 'this device reports too little memory for the full world \u2014 this is the lite client',
-  'no-gpu': 'this browser has no 3D support \u2014 this is the lite client',
-  saved: 'lite mode \u2014 chat, emotes, and who\u2019s here',
-  url: 'lite mode \u2014 chat, emotes, and who\u2019s here',
-  default: 'lite mode \u2014 chat, emotes, and who\u2019s here',
+  // the card (liteBanner) says why for every reason now; this line is only for a reason with no card
+  default: 'lite client \u2014 chat, emotes, and who\u2019s here',
 };
 
-/** The way out. A URL and not a saved preference on purpose: ?lite=0 is rule (1) in the
- *  decision script, so it wins for THIS load only. If the full client dies again, the
- *  tripwire it arms sends the next plain visit straight back here — one attempt, not a
- *  loop, and the escape stays a link the person can keep. */
-export function tryFullWorld() {
-  // Saved, now that a phone STARTS in lite: the person chose 3D on this device and shouldn't be asked every
-  // visit. Safe, because a proven crash outranks a saved choice in the decision script, so a saved '0' on a
-  // device the world kills costs one crash, not a loop. ?lite=0 makes this load full even if storage is blocked.
-  try { localStorage.setItem('ew-lite', '0'); } catch { /* storage blocked: the URL still carries it */ }
-  const u = new URL(location.href);
-  u.searchParams.set('lite', '0');
-  location.assign(u);
-}
-
-/** Stay here and stop asking. Saved, because this one IS a preference — and a proven
- *  crash still overrides it, which is what keeps a saved 'full' from being a trap. */
-export function stayLite() {
-  try { localStorage.setItem('ew-lite', '1'); } catch { /* best effort */ }
-}
+/** The way into the 3D world: the person's choice, saved, the address left clean (litechoice.js says why). */
+export function tryFullWorld() { chooseClient(false); }
 
 // A lite client still ARRIVES: the server announces it and everyone else builds a body
 // for it, whether or not we ever say where that body is. So the choice was never "appear
@@ -125,40 +105,19 @@ function toast(message, kind = 'info', ttl = 5000) {
   setTimeout(() => t.remove(), ttl);
 }
 
-function liteDock(entries, parent = document.body) {
-  const dock = document.createElement('nav');
-  dock.id = 'lite-dock';
-  for (const e of entries) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.dataset.id = e.id;
-    b.title = e.title ?? e.id;
-    // a label is shown only where the dock has room (index.html hides .ld-text on a narrow phone);
-    // the banner's button is the way in that never depends on dock space
-    b.innerHTML = '<span class="ld-icon"></span><span class="ld-text"></span>';
-    b.querySelector('.ld-icon').textContent = e.icon ?? e.label;
-    if (e.text) b.querySelector('.ld-text').textContent = ` ${e.text}`; else b.querySelector('.ld-text').remove();
-    b.setAttribute('aria-label', e.title ?? e.id);
-    b.addEventListener('click', e.act);
-    dock.appendChild(b);
-  }
-  parent.appendChild(dock);
-  return dock;
-}
 
 // A DEMOTION says so where it can't scroll away. The chat line above is logged before the
 // join snapshot replays the room's history, so on a busy world it is gone before anyone
 // reads it — and a desktop that lands here after a hung load (the tripwire can't tell a
 // reload-mid-hang from a crash) otherwise looks like it simply booted the wrong client.
-// Only for the reasons we inferred; someone who ASKED for lite (url, saved) already knows.
+// For every reason, including a link or a saved choice: a choice outlives the memory of making it.
 // a phone taps, a mouse clicks
 const TAP = globalThis.matchMedia?.('(pointer: coarse)').matches ? 'Tap' : 'Click';
 const BANNER_TEXT = {
   // WHY, plainly, then the one way in (owner, 10-01: "make sure the notice correctly tells them why").
   phone: `You're on a phone, so you're in the lite client: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
   crash: `This world didn't finish loading on this device last time, so you're in the lite client: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
-  ram: `This device reports low memory, so you're in the lite client: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
-  'no-gpu': "This browser has no 3D support, so you're in the lite client: chat, emotes and who's here.",
+    'no-gpu': "This browser has no 3D support, so you're in the lite client: chat, emotes and who's here.",
   saved: `You chose the lite client on this device: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
   url: `This link opens the lite client: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
 };

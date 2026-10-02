@@ -6,7 +6,8 @@
 // matches xrpanels' 900 px/m; (2) inline <svg> drawn via serialise→Image (the icon system);
 // (3) `pause`/`resume` + a per-instance min interval so live panels don't re-rasterise at 60 Hz;
 // (4) events are NOT re-dispatched on window (three's did — it tripped desktop handlers);
-// (8) wrapped text nodes draw word by word; (9) unpainted elements (opacity 0, CSS display/visibility) are skipped; (10) colour inputs are swatches; (11) a native <select> draws its label; (12) partial opacity composites as a group, like the browser; (5) elementAt/scrollAt for trigger-scroll; (7) a pick targets ONE element and bubbles; (6) `suspend`/`unsuspend` — the DOM observer off while a
+// (8) wrapped text nodes draw word by word; (9) unpainted elements (opacity 0, CSS display/visibility) are skipped; (10) colour inputs are swatches;
+// (13) a <textarea> draws its value wrapped (by word, then by character) from its scroll position, and a press focuses it;(11) a native <select> draws its label; (12) partial opacity composites as a group, like the browser; (5) elementAt/scrollAt for trigger-scroll; (7) a pick targets ONE element and bubbles; (6) `suspend`/`unsuspend` — the DOM observer off while a
 // kept quad's element is back on the desktop (domquad's soft swap).
 import {
 	CanvasTexture,
@@ -623,12 +624,12 @@ function html2canvas( element, scale = 1 ) {   // EIDO (1)
 		context.strokeRect( x - 0.5, y - 0.5, width + 1, height + 1 );
 		*/
 
-		// EIDO (12): a <textarea> (the chat's compose box grows to several lines, 2026-10-01) draws its value WRAPPED to
+		// EIDO (13): a <textarea> (the chat's compose box grows to several lines, 2026-10-01) draws its value WRAPPED to
 		// its box from its scroll position, as the browser lays it out; without this a headset showed an empty box while
-		// you typed. A press on it focuses it, as a text input's does (handleEvent, below).
+		// you typed. A press on it focuses it, as a text input's does (htmlevent, below).
 		if ( element instanceof HTMLTextAreaElement ) {
 
-			const pl = parseFloat( style.paddingLeft ) || 0, pr = parseFloat( style.paddingRight ) || 0, pt = parseFloat( style.paddingTop ) || 0;
+			const pl = ( parseFloat( style.paddingLeft ) || 0 ) + ( parseFloat( style.borderLeftWidth ) || 0 ), pr = ( parseFloat( style.paddingRight ) || 0 ) + ( parseFloat( style.borderRightWidth ) || 0 ), pt = ( parseFloat( style.paddingTop ) || 0 ) + ( parseFloat( style.borderTopWidth ) || 0 );
 			const lh = parseFloat( style.lineHeight ) || parseFloat( style.fontSize ) * 1.2;
 			context.font = style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily;
 			const maxW = width - pl - pr, rows = [];
@@ -639,6 +640,14 @@ function html2canvas( element, scale = 1 ) {   // EIDO (1)
 
 					const t = line + word;
 					if ( line && context.measureText( t ).width > maxW ) { rows.push( line ); line = word.trimStart(); } else line = t;
+					// a word wider than the box breaks by character, as the browser wraps it (a pasted URL)
+					while ( context.measureText( line ).width > maxW && line.length > 1 ) {
+
+						let k = line.length - 1;
+						while ( k > 1 && context.measureText( line.slice( 0, k ) ).width > maxW ) k --;
+						rows.push( line.slice( 0, k ) ); line = line.slice( k );
+
+					}
 
 				}
 

@@ -25,9 +25,13 @@ export function confirmCenter({ title, body = '', ok = 'OK', cancel = 'Cancel' }
     root.querySelector('.cc-ok').textContent = ok;
     root.querySelector('.cc-no').textContent = cancel;
     const before = document.activeElement;
+    const okB = root.querySelector('.cc-ok'), noB = root.querySelector('.cc-no');
     const onKey = (e) => {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); settle(false); }
-      else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); e.stopPropagation(); settle(true); }
+      // Enter on a focused button presses THAT button (Cancel included) — not "yes" whatever has focus (review #212)
+      else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); e.stopPropagation(); settle(!e.target?.classList?.contains('cc-no')); }
+      // Tab stays between the two buttons: focus that wandered off the card would leave Enter meaning yes out of sight
+      else if (e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); (e.target === okB ? noB : okB).focus(); }
       else e.stopPropagation();   // typing here is never walking or a hotkey
     };
     function settle(v) {

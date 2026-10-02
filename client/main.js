@@ -7,6 +7,7 @@
 // handle in mybody.js, my body's physics in localbody.js, consent in
 // consent.js, voice mouths in voicemouths.js, /commands in lib/commands/.
 
+import { chooseClient } from './lib/litechoice.js';
 import { THREE, scene, camera, renderer, canvas } from './lib/core.js';
 import { releaseBodyGate, armBodyGate } from './lib/bodygate.js';
 import { CONFIG, bus, report, tee, colorFor } from './lib/base.js';
@@ -269,7 +270,7 @@ if (globalThis.__ewLiteWhy === 'retry') statusChip({
   id: 'lite-retry', level: 'attn', label: 'last load stalled',
   title: "This world didn't finish loading last time",
   body: "We're trying the full 3D world again. If it keeps stalling or crashing here, the lite client has chat, emotes and who's here, with no 3D.",
-  actions: [{ label: 'switch to the lite client', run: () => { const u = new URL(location.href); u.searchParams.set('lite', '1'); location.assign(u); } }, { label: 'stay in 3D', clear: true }],
+  actions: [{ label: 'switch to the lite client', run: () => chooseClient(true) }, { label: 'stay in 3D', clear: true }],
 });
 
 // A rejected door key re-opens the door with a key field instead of retrying

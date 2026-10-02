@@ -6,7 +6,8 @@
 //
 // What must hold:
 //   the menu hangs from the ∃, to its right, OVER the mic/ear glyphs (on top of them); its top level reads
-//     Save world · Load world | Panels ▸ | Log in · Help · Keys · About ▸; Save/Load greyed for now and a press says why;
+//     Save world · Load world | Panels ▸ · Lite client | Log in · Help · Keys · About ▸; Save/Load greyed for now and a
+//     press says why; Lite client asks first in a centred dialog (Esc: nothing happens), and yes lands in lite, saved;
 //   Panels ▸ opens on hover beside its row, inside the viewport; every enabled pin there goes on → off → on under a
 //     real mouse with the menu and the flyout open throughout, its highlight and its stored choice agreeing; the rail
 //     follows; after a reload every pin's highlight still matches what was stored;
@@ -90,7 +91,7 @@ try {
     && await pg.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('#emenu'), [mic.cx, mic.cy]), JSON.stringify({ m, mic }));
   check('…and opening it is not HUD layout mode', !(await state(pg)).arranging);
   const items = await pg.evaluate(() => [...document.getElementById('emenu').children].map((c) => c.dataset.item ?? (c.className === 'msep' ? '|' : '?')).join(' '));
-  check('top level: save load | panels | login help keys about', items === 'save load | panels | login help keys about', items);
+  check('top level: save load | panels lite | login help keys about', items === 'save load | panels lite | login help keys about', items);
   await shot(pg, '02-open-1280x720.png');
   { const b = await box(pg, '#emenu .mrow[data-item="save"]'); await pg.mouse.click(b.cx, b.cy); await sleep(300); }   // a real mouse press: Playwright's click() refuses an aria-disabled element
   const saveToast = await pg.evaluate(() => [...document.querySelectorAll('#toasts .toast')].map((t) => t.textContent).join(' / '));
@@ -204,6 +205,22 @@ try {
     JSON.stringify({ bad, pins: s.pins, ls: s.ls }));
   for (const id of ['world', 'glyph:ear', 'lantern']) { await pg.click(`#emenu-sub .mpin[data-pin="${id}"]`); await sleep(150); }
   check('no page errors on the desktop run', errs.length === 0, errs.slice(0, 3).join(' | '));
+
+  // LITE CLIENT: the row this PR added. Each step opens the menu through the real ∃ (openMenu clicks #hud when shut).
+  await pg.keyboard.press('Escape'); await sleep(200); await pg.keyboard.press('Escape'); await sleep(200);
+  await openMenu(pg);
+  await pg.click('#emenu .mrow[data-item="lite"]'); await sleep(300);
+  const cc = await box(pg, '#confirm-center .cc-card');
+  const ccText = await pg.evaluate(() => ({ t: document.querySelector('#cc-title')?.textContent, ok: document.querySelector('#confirm-center .cc-ok')?.textContent, focus: document.activeElement?.className }));
+  check('Lite client asks first: a dialog centred on screen, "Switch" focused', !!cc && Math.abs(cc.cx - 640) <= 2 && Math.abs(cc.cy - 360) <= 2 && /lite client/i.test(ccText.t ?? '') && ccText.ok === 'Switch' && ccText.focus === 'cc-ok', JSON.stringify({ cc, ccText }));
+  await pg.keyboard.press('Escape'); await sleep(300);
+  check('…Esc says no: the dialog goes, nothing navigates, nothing is saved', await pg.evaluate(() => !document.getElementById('confirm-center') && globalThis.__ewLite === false && !new URLSearchParams(location.search).has('lite') && localStorage.getItem('ew-lite') === null));
+  await openMenu(pg);
+  check('…the menu reopens through the ∃ and offers the row again', await pg.locator('#emenu .mrow[data-item="lite"]').isVisible());
+  await pg.click('#emenu .mrow[data-item="lite"]'); await sleep(300);
+  const nav = pg.waitForEvent('framenavigated', { timeout: 15000 }).catch(() => null);
+  await pg.click('#confirm-center .cc-ok'); await nav;
+  check('…Switch lands in the lite client, the choice saved and the address clean', await pg.waitForFunction(() => globalThis.__ewLite === true && localStorage.getItem('ew-lite') === '1' && !new URLSearchParams(location.search).has('lite'), null, { timeout: 30000, polling: 250 }).then(() => true, () => false));
   await ctx.close();
 
   // ------------------------------------------------------------ phone 390x844, touch

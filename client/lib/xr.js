@@ -421,7 +421,7 @@ let ringLevel = 'root';   // 'root' | 'emotes' — the sub-wheel in view
 const SPACER = { spacer: true, has: false, label: '', on: () => false, act: () => {} };
 const BACK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="52" height="52" viewBox="0 0 26 26" fill="none" stroke="#f2f7f5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-7 7 7 7"/></svg>';
 // THE WHEEL IS THE DOCK, plus what VR needs (owner, 09-07 22:08): 12 o'clock = the panels menu (the rail's reverse-E),
-// 6 o'clock = leave VR; the dock's pins fill the right half, mic / ears / recentre the left; a dim spacer keeps the
+// 6 o'clock = leave VR; the dock's pins fill the right half, mic / headphones / recentre the left; a dim spacer keeps the
 // count even so the two fixed slots sit exactly on the vertical. 'emotes' is a sub-wheel (VRC's shape): the nine
 // plus a back slot at 6 o'clock. Toggles stay open and show state; everything else closes on activation.
 export function radialEntries() {   // exported with makeRadial for the headless ring screenshot
@@ -445,7 +445,7 @@ export function radialEntries() {   // exported with makeRadial for the headless
   }
   const left = [
     { svg: RECENTRE_SVG, label: 'recentre', on: () => false, close: true, act: () => recentreXR('ring') },
-    { svg: () => earGlyph(52), label: 'ears', on: earOn, act: () => flipEar() },   // svg as a FUNCTION: the slash follows the live state on every repaint (a toggle from the ring used to keep the open-time glyph)
+    { svg: () => earGlyph(52), label: 'headphones', on: earOn, act: () => flipEar() },   // svg as a FUNCTION: the slash follows the live state on every repaint (a toggle from the ring used to keep the open-time glyph)
     { svg: () => micGlyph(52), label: 'mic', on: micLive, act: () => bus.emit('xr:mic') },
   ];
   // balance: the same count each side (move dock pins over, then pad) so 'leave' lands on 6 o'clock
@@ -1123,7 +1123,7 @@ export function updateXR(dtSec = 1 / 72) {
     //     09-04 click-toggle stuck open — every close path here tees its cause so a stuck ring is diagnosable);
     //   · AIM latches: deflect > 0.5 picks the sector and the pick STAYS when the stick springs back — a choice is
     //     a state, not a held pose (the stick is exhausting to hold; a lit slot costs nothing);
-    //   · TRIGGER activates the latched slot. Toggles (mic, ears, panels) stay open and repaint their state;
+    //   · TRIGGER activates the latched slot. Toggles (mic, headphones, panels) stay open and repaint their state;
     //     one-shots (recentre, opening a panel) close on activation — Resonite's CloseMenuOnPress, per item;
     //   · FLICK: deflect and return to centre within 220 ms activates without the trigger;
     //   · compat: release the CLICK while still deflected within 700 ms of opening → commit + close (the old

@@ -1087,9 +1087,9 @@ function buildPanels(s) {
   lay.onclick = () => setLayoutMode(!isLayoutMode());
   s.appendChild(lay);
   s.appendChild(sep());
-  // voice first: mic + ears lead in their own section — they matter more than any window, and they wear the SAME
+  // voice first: mic + headphones lead in their own section — they matter more than any window, and they wear the SAME
   // glyphs as the floating pair
-  const voiceRows = [['mic', 'mic', micGlyph, flipMic], ['ears', 'ear', earGlyph, flipEar], ['VR', 'xr', xrGlyph, flipXr]];
+  const voiceRows = [['mic', 'mic', micGlyph, flipMic], ['headphones', 'ear', earGlyph, flipEar], ['VR', 'xr', xrGlyph, flipXr]];
   for (const [nm, key, glyph, flip] of voiceRows) {
     // VR: the row is always LISTED, but greyed with an explainer when no headset
     // can present — and its pin is dead, so an absent glyph cannot be pinned to

@@ -1928,18 +1928,22 @@ html.lite, html.lite body { height: 100%; overflow: hidden; }
 }
 .lite-emotes { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
 /* THE PHONE LAYOUT (owner, 10-01). One top bar: emotes scroll sideways on one line, the 3D button at its end. */
-#lite-emote-host { display: flex; align-items: center; gap: 8px; padding-left: 8px; padding-right: 8px; }
+/* WIDE SCREENS (owner, 10-01: "make sure it's not formatted in an insane way" on a desktop): lite is a column at most
+   720 px wide, centred; --lite-x is the margin either side of it (0 on any phone, so the phone layout is unchanged). The
+   bar's background still spans the screen; its contents, the card and the chat keep to the column. */
+html.lite { --lite-x: max(0px, calc((100vw - 720px) / 2)); }
+#lite-emote-host { display: flex; align-items: center; gap: 8px; padding-left: calc(var(--lite-x) + 8px); padding-right: calc(var(--lite-x) + 8px); }
 /* the emotes share the row in equal cells (owner, 10-01: "can they all sit comfortably on that top row?"): six fit a
    360 px phone beside the ∃ at ~44 px each; if more are ever added, a cell won't go under 40 px and the row scrolls */
-#lite-emote-host .lite-emotes { flex: 1; min-width: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(40px, 1fr); gap: 6px; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+#lite-emote-host .lite-emotes { flex: 1; min-width: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(40px, 52px); justify-content: start; gap: 6px; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
 #lite-emote-host .lite-emotes::-webkit-scrollbar { display: none; }
 #lite-emote-host .lite-emote { width: 100%; min-width: 0; height: 44px; padding: 0; display: grid; place-items: center; font-size: 24px; line-height: 1; border-radius: 10px; }
 /* the card spans the column under the bar, not the full client's narrow top-centre notice */
-html.lite #lite-banner { left: 8px; right: 8px; transform: none; max-width: none; }
+html.lite #lite-banner { left: calc(var(--lite-x) + 8px); right: calc(var(--lite-x) + 8px); transform: none; max-width: none; }
 /* the chat fills everything below the bar (and the card while it's up): frames.js sizes frames inline, so these win with !important */
 html.lite .frame.chat-frame {
   /* edge to edge (owner, 10-01: "seems silly to have a panel at all if that's all there is") */
-  position: fixed !important; left: 0 !important; right: 0 !important; width: auto !important; max-width: none;
+  position: fixed !important; left: var(--lite-x) !important; right: var(--lite-x) !important; width: auto !important; max-width: none;
   top: var(--lite-top, 72px) !important; height: auto !important; bottom: 0 !important;
   border-radius: 0; border-left: none; border-right: none; border-bottom: none; box-shadow: none;
   padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -1950,6 +1954,8 @@ html.lite .frame.chat-frame { display: flex; flex-direction: column; }
 html.lite .frame.chat-frame > .fr-body { height: auto !important; flex: 1 1 auto; min-height: 0; }
 #lite-dock button { display: inline-flex; align-items: center; justify-content: center; }
 /* the ∃ leads the top bar and is the way into the 3D world (lite.js) */
+/* on a screen wider than the column the chat gets its side edges back, so it reads as a pane, not a page */
+@media (min-width: 721px) { html.lite .frame.chat-frame { border-left: 1px solid var(--edge); border-right: 1px solid var(--edge); } }
 html.lite #lite-emote-host #hud.emark { position: static; flex: none; width: 44px; height: 44px; border-radius: 10px; color: var(--brand); background: var(--chip); border: 1px solid var(--edge); }
 html.lite #lite-emote-host #hud.emark:active { background: var(--act); }
 html.lite #lite-emote-host #hud.emark:disabled { color: var(--dim); cursor: default; }

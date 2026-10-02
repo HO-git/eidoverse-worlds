@@ -44,7 +44,7 @@ try {
   ok('a phone whose last boot died is lite (why=crash)', r.lite === true && r.why === 'crash');
   ok('…and SAYS so in a pinned card, on screen after the history replay', !!r.banner && /didn't finish loading/.test(r.banner) && r.onScreen, r.chatTail);
   ok('…below the emote row, not over it (360 px wide, the row wraps)', r.clearOfEmotes === true);
-  ok('…it names the way in (the ∃ logo), and its one button is got it', /Tap the \u2203 Eidoverse logo/.test(r.banner) && await p.evaluate(() => { const c = document.getElementById('lite-banner'); return c.classList.contains('capnotice') && [...c.querySelectorAll('button')].map(b => b.textContent).join('|') === 'got it'; }));
+  ok('…it names the way in (the ∃ logo), and its one button is got it', /Tap the \u2203 Eidoverse logo/.test(r.banner) /* a touch phone taps */ && await p.evaluate(() => { const c = document.getElementById('lite-banner'); return c.classList.contains('capnotice') && [...c.querySelectorAll('button')].map(b => b.textContent).join('|') === 'got it'; }));
   ok('…the ∃ is a real tap target (≥ 44 px) leading the top bar', await p.evaluate(() => { const h = document.getElementById('hud'); const r = h.getBoundingClientRect(); return h.parentElement.id === 'lite-emote-host' && h.parentElement.firstElementChild === h && r.height >= 44 && r.width >= 44 && !h.disabled; }));
   const L = await p.evaluate(() => { const R = (q) => document.querySelector(q)?.getBoundingClientRect(); const ov = (a, b) => !!a && !!b && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
     const bar = R('#lite-emote-host'), card = R('#lite-banner'), chat = R('.frame.chat-frame'), dock = R('#hud'), gear = R('.chat-gear'), input = R('#chatline'), hud = document.getElementById('hud');
@@ -107,7 +107,18 @@ try {
   }
 
   ({ p, ctx, r, errs } = await run('asked', '&lite=1', false, DESK));
-  ok('someone who ASKED for lite (a desktop link) gets the card too, naming the way back', r.lite === true && r.why === 'url' && /This link opens the light version/.test(r.banner ?? '') && /Eidoverse logo/.test(r.banner ?? ''), JSON.stringify(r));
+  { // a WIDE desktop window: lite keeps to a centred column; tiles stay tiles, packed against the ∃
+    await p.setViewportSize({ width: 2000, height: 1000 }); await p.waitForTimeout(400);
+    const W = await p.evaluate(() => { const R = (q) => document.querySelector(q)?.getBoundingClientRect(); const t = [...document.querySelectorAll('.lite-emote')].map((b) => b.getBoundingClientRect());
+      const card = R('#lite-banner'), chat = R('.frame.chat-frame'), hud = R('#hud');
+      return { tileMax: Math.round(Math.max(...t.map((r) => r.width))), packed: t.length > 0 && t[0].left - hud.right < 20 && t.every((r, i) => !i || r.left - t[i - 1].right < 12),
+        card: Math.round(card.width), chat: Math.round(chat.width), centred: Math.abs((chat.left + chat.right) / 2 - innerWidth / 2) <= 2 && Math.abs((card.left + card.right) / 2 - innerWidth / 2) <= 2 }; });
+    ok('wide desktop: emote tiles stay ≤ 52 px and pack against the ∃', W.tileMax <= 52 && W.packed, JSON.stringify(W));
+    ok('wide desktop: the card and the chat keep to a centred column ≤ 720 px', W.card <= 720 && W.chat <= 720 && W.centred, JSON.stringify(W));
+    await p.screenshot({ path: SHOT.replace('.png', '-wide.png') });
+    await p.setViewportSize({ width: 1100, height: 700 });
+  }
+  ok('someone who ASKED for lite (a desktop link) gets the card too, naming the way back', r.lite === true && r.why === 'url' && /This link opens the light version/.test(r.banner ?? '') && /Click the \u2203 Eidoverse logo/.test(r.banner ?? '') /* a mouse clicks */, JSON.stringify(r));
   await p.screenshot({ path: SHOT });
   nav = p.waitForURL(/lite=0/, { timeout: 10000 }).then(() => true, () => false);
   await p.locator('#hud').click();

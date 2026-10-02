@@ -151,14 +151,16 @@ function liteDock(entries, parent = document.body) {
 // reads it — and a desktop that lands here after a hung load (the tripwire can't tell a
 // reload-mid-hang from a crash) otherwise looks like it simply booted the wrong client.
 // Only for the reasons we inferred; someone who ASKED for lite (url, saved) already knows.
+// a phone taps, a mouse clicks
+const TAP = globalThis.matchMedia?.('(pointer: coarse)').matches ? 'Tap' : 'Click';
 const BANNER_TEXT = {
   // WHY, plainly, then the one way in (owner, 10-01: "make sure the notice correctly tells them why").
-  phone: "You're on a phone, so you're in the light version: chat, emotes and who's here. Tap the \u2203 Eidoverse logo (top left) to load the full 3D world.",
-  crash: "This world didn't finish loading on this device last time, so you're in the light version: chat, emotes and who's here. Tap the \u2203 Eidoverse logo (top left) to load the full 3D world.",
-  ram: "This device reports low memory, so you're in the light version: chat, emotes and who's here. Tap the \u2203 Eidoverse logo (top left) to load the full 3D world.",
+  phone: `You're on a phone, so you're in the light version: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
+  crash: `This world didn't finish loading on this device last time, so you're in the light version: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
+  ram: `This device reports low memory, so you're in the light version: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
   'no-gpu': "This browser has no 3D support, so you're in the light version: chat, emotes and who's here.",
-  saved: "You chose the light version on this device: chat, emotes and who's here. Tap the \u2203 Eidoverse logo (top left) to load the full 3D world.",
-  url: "This link opens the light version: chat, emotes and who's here. Tap the \u2203 Eidoverse logo (top left) to load the full 3D world.",
+  saved: `You chose the light version on this device: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
+  url: `This link opens the light version: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
 };
 const NO_WAY_IN = new Set(['no-gpu']);
 // The same card as the full client's capability notice (capnotice.js: .panel.capnotice >

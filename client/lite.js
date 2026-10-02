@@ -152,16 +152,14 @@ function liteDock(entries, parent = document.body) {
 // reload-mid-hang from a crash) otherwise looks like it simply booted the wrong client.
 // Only for the reasons we inferred; someone who ASKED for lite (url, saved) already knows.
 const BANNER_TEXT = {
-  crash: "Your last visit to this world didn't finish loading, so you're in the light version: chat, emotes and who's here.",
-  ram: "This device reports too little memory for the full world, so you're in the light version: chat, emotes and who's here.",
-  'no-gpu': "This browser has no 3D support, so you're in the light version.",
-  phone: "On phones we start in the light version: chat, emotes and who's here. The 3D world can be heavy for a phone; try it if you like.",
-  // ASKED for lite (a link, or a saved choice) still gets the card: a saved choice outlives the memory of making
-  // it, and nobody should need to know about ?lite=0 to get back (owner, 10-01: "adding a string to a URL bar?")
-  saved: "You're in the light version: chat, emotes and who's here.",
-  url: "You're in the light version: chat, emotes and who's here.",
+  // WHY, plainly, then the one way in (owner, 10-01: "make sure the notice correctly tells them why").
+  phone: "You're on a phone, so you're in the light version: chat, emotes and who's here. Tap the \u2203 Eidoverse logo (top left) to load the full 3D world.",
+  crash: "This world didn't finish loading on this device last time, so you're in the light version: chat, emotes and who's here. Tap the \u2203 Eidoverse logo (top left) to load the full 3D world.",
+  ram: "This device reports low memory, so you're in the light version: chat, emotes and who's here. Tap the \u2203 Eidoverse logo (top left) to load the full 3D world.",
+  'no-gpu': "This browser has no 3D support, so you're in the light version: chat, emotes and who's here.",
+  saved: "You chose the light version on this device: chat, emotes and who's here. Tap the \u2203 Eidoverse logo (top left) to load the full 3D world.",
+  url: "This link opens the light version: chat, emotes and who's here. Tap the \u2203 Eidoverse logo (top left) to load the full 3D world.",
 };
-// a reason that rules the 3D world out offers no way into it
 const NO_WAY_IN = new Set(['no-gpu']);
 // The same card as the full client's capability notice (capnotice.js: .panel.capnotice >
 // .cn-item > b, p, .cn-btns) so the two reduced paths read as one family. Built here, not
@@ -174,8 +172,9 @@ export function liteLayout() {
   if (typeof document === 'undefined') return;
   const bar = document.getElementById('lite-emote-host');
   const card = document.getElementById('lite-banner');
-  const below = (card ?? bar)?.getBoundingClientRect().bottom ?? 0;
-  document.documentElement.style.setProperty('--lite-top', `${Math.round(below + 8)}px`);
+  // flush under the bar; a breath under the card while it's up
+  const below = card ? card.getBoundingClientRect().bottom + 8 : (bar?.getBoundingClientRect().bottom ?? 0);
+  document.documentElement.style.setProperty('--lite-top', `${Math.round(below)}px`);
 }
 
 export function liteBanner(why) {
@@ -187,9 +186,8 @@ export function liteBanner(why) {
   card.setAttribute('role', 'status');
   const item = document.createElement('div');
   item.className = 'cn-item';
-  item.innerHTML = '<b></b><p></p><div class="cn-btns"><button type="button" class="cn-go">Enter the 3D world</button><button type="button" class="cn-ok">stay here</button></div>';
-  if (NO_WAY_IN.has(why)) { item.querySelector('.cn-go').remove(); item.querySelector('.cn-ok').textContent = 'got it'; }
-  else item.querySelector('.cn-go').addEventListener('click', () => tryFullWorld());
+  // one button: dismiss, and the chat takes the room. The way in is the logo, which the text names.
+  item.innerHTML = '<b></b><p></p><div class="cn-btns"><button type="button" class="cn-ok">got it</button></div>';
   item.querySelector('b').textContent = 'Light version';
   item.querySelector('p').textContent = text;
   let ro = null;
@@ -323,9 +321,15 @@ async function main() {
   emoteHost.id = 'lite-emote-host';
   document.body.appendChild(emoteHost);
   initLiteEmotes(emoteHost, emote);
-  liteDock([
-    { id: 'full', label: '\u{1F30D}', icon: '\u{1F30D}', text: '3D world', title: 'enter the full 3D world', act: tryFullWorld },
-  ], emoteHost);   // in the top bar, never over the chat's compose row
+  // THE LOGO IS THE WAY IN (owner, 10-01): the ∃ leads the top bar and loads the full 3D world. In the full
+  // client it opens the menu; lite has no menu, so here it does the one thing lite can't. Not where the
+  // browser has no 3D at all: there it is just the mark.
+  const mark = document.getElementById('hud');
+  if (mark) {
+    emoteHost.prepend(mark);
+    if (NO_WAY_IN.has(WHY)) { mark.disabled = true; mark.title = 'eidoverse'; }
+    else { mark.title = 'load the full 3D world'; mark.setAttribute('aria-label', 'load the full 3D world'); mark.addEventListener('click', tryFullWorld); }
+  }
   liteLayout();
   if (globalThis.ResizeObserver) new ResizeObserver(liteLayout).observe(emoteHost);
   addEventListener('resize', liteLayout);

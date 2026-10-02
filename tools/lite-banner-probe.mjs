@@ -30,7 +30,7 @@ try {
     p.on('pageerror', e => errs.push(e.message));
     if (seed) await p.addInitScript(() => localStorage.setItem('ew-boot-attempt:busy', String(Date.now() - 5000)));
     await p.goto(`${O}/?world=busy&name=${label}&key=${K}${q}`);
-    await p.waitForFunction(() => globalThis.__ewLite !== undefined && document.getElementById('lite-dock'), null, { timeout: 30000 });
+    await p.waitForFunction(() => globalThis.__ewLite !== undefined && document.querySelector('#lite-emote-host #hud'), null, { timeout: 30000 });
     await p.waitForTimeout(2500);
     const r = await p.evaluate(() => { const bn = document.getElementById('lite-banner'); const rc = bn?.getBoundingClientRect();
       return { lite: globalThis.__ewLite, why: globalThis.__ewLiteWhy, banner: bn?.textContent ?? null, onScreen: !!rc && rc.top >= 0 && rc.bottom <= innerHeight && rc.width > 0,
@@ -44,35 +44,35 @@ try {
   ok('a phone whose last boot died is lite (why=crash)', r.lite === true && r.why === 'crash');
   ok('…and SAYS so in a pinned card, on screen after the history replay', !!r.banner && /didn't finish loading/.test(r.banner) && r.onScreen, r.chatTail);
   ok('…below the emote row, not over it (360 px wide, the row wraps)', r.clearOfEmotes === true);
-  ok('…its buttons: Enter the 3D world first, then stay here', await p.evaluate(() => { const c = document.getElementById('lite-banner'); return c.classList.contains('capnotice') && [...c.querySelectorAll('button')].map(b => b.textContent).join('|') === 'Enter the 3D world|stay here'; }));
-  ok('…the 3D-world button is a real tap target (≥ 44 px tall)', await p.evaluate(() => document.querySelector('#lite-banner .cn-go').getBoundingClientRect().height >= 44));
-  ok('…at 360 px the dock is the bare glyph (no room for its label)', await p.evaluate(() => { const t = document.querySelector('#lite-dock button[data-id=full] .ld-text'); return !t || getComputedStyle(t).display === 'none'; }));
-  ok('…and the dock button stays inside the screen', await p.evaluate(() => { const r = document.querySelector('#lite-dock button[data-id=full]').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight; }));
+  ok('…it names the way in (the ∃ logo), and its one button is got it', /Tap the \u2203 Eidoverse logo/.test(r.banner) && await p.evaluate(() => { const c = document.getElementById('lite-banner'); return c.classList.contains('capnotice') && [...c.querySelectorAll('button')].map(b => b.textContent).join('|') === 'got it'; }));
+  ok('…the ∃ is a real tap target (≥ 44 px) leading the top bar', await p.evaluate(() => { const h = document.getElementById('hud'); const r = h.getBoundingClientRect(); return h.parentElement.id === 'lite-emote-host' && h.parentElement.firstElementChild === h && r.height >= 44 && r.width >= 44 && !h.disabled; }));
   const L = await p.evaluate(() => { const R = (q) => document.querySelector(q)?.getBoundingClientRect(); const ov = (a, b) => !!a && !!b && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
-    const bar = R('#lite-emote-host'), card = R('#lite-banner'), chat = R('.frame.chat-frame'), dock = R('#lite-dock button[data-id=full]'), gear = R('.chat-gear'), input = R('#chatline'), hud = document.getElementById('hud');
+    const bar = R('#lite-emote-host'), card = R('#lite-banner'), chat = R('.frame.chat-frame'), dock = R('#hud'), gear = R('.chat-gear'), input = R('#chatline'), hud = document.getElementById('hud');
+    const cs = getComputedStyle(document.querySelector('.frame.chat-frame'));
     return { dockInBar: !!dock && dock.top >= bar.top && dock.bottom <= bar.bottom, dockClearOfCompose: !ov(dock, gear) && !ov(dock, input),
-      chatBelowCard: chat.top >= card.bottom, chatToBottom: innerHeight - chat.bottom <= 16, chatFullWidth: chat.left <= 12 && innerWidth - chat.right <= 12,
-      gap: Math.round(chat.top - card.bottom), cardFullWidth: card.left <= 12 && innerWidth - card.right <= 12, hudHidden: !hud || getComputedStyle(hud).display === 'none' }; });
+      chatBelowCard: chat.top >= card.bottom, chatToBottom: Math.abs(innerHeight - chat.bottom) <= 1, chatFullWidth: chat.left <= 0.5 && Math.abs(innerWidth - chat.right) <= 0.5,
+      square: parseFloat(cs.borderTopLeftRadius) === 0 && parseFloat(cs.borderBottomRightRadius) === 0,
+      gap: Math.round(chat.top - card.bottom), cardFullWidth: card.left <= 12 && innerWidth - card.right <= 12, hudVisible: !!hud && getComputedStyle(hud).display !== 'none' }; });
   console.log('phone layout:', JSON.stringify(L));
-  ok('layout: the 3D button lives in the top bar, clear of the chat compose row', L.dockInBar && L.dockClearOfCompose);
-  ok('layout: the chat fills the column from under the card to the bottom (no dead gap)', L.chatBelowCard && L.chatToBottom && L.chatFullWidth && L.gap <= 16, JSON.stringify(L));
-  ok('layout: the card spans the column; the unwired ∃ is hidden', L.cardFullWidth && L.hudHidden);
+  ok('layout: the ∃ lives in the top bar, clear of the chat compose row', L.dockInBar && L.dockClearOfCompose);
+  ok('layout: the chat is edge to edge — full width, to the bottom, square corners, no dead gap', L.chatBelowCard && L.chatToBottom && L.chatFullWidth && L.square && L.gap <= 16, JSON.stringify(L));
+  ok('layout: the card spans the column; the ∃ shows', L.cardFullWidth && L.hudVisible);
   await p.screenshot({ path: SHOT.replace('.png', '-phone.png') });
   let nav = p.waitForURL(/lite=0/, { timeout: 10000 }).then(() => true, () => false);
-  await p.locator('#lite-banner .cn-go').click();
-  ok('Enter the 3D world leaves for the full world (?lite=0)', await nav, p.url());
+  await p.locator('#hud').click();
+  ok('tapping the ∃ leaves for the full world (?lite=0)', await nav, p.url());
   ok('no page errors', errs.length === 0, errs.join(' | ').slice(0, 200)); await ctx.close();
 
   { // a FRESH phone (no history) starts in lite; choosing 3D is remembered on that device
     const ctx = await b.newContext(PHONE); const p = await ctx.newPage(); const errs = []; p.on('pageerror', e => errs.push(e.message));
     await p.goto(`${O}/?world=busy&name=freshphone&key=${K}`);
-    await p.waitForFunction(() => globalThis.__ewLite !== undefined && document.getElementById('lite-dock'), null, { timeout: 30000 });
+    await p.waitForFunction(() => globalThis.__ewLite !== undefined && document.querySelector('#lite-emote-host #hud'), null, { timeout: 30000 });
     await p.waitForTimeout(1500);
     const f = await p.evaluate(() => ({ lite: globalThis.__ewLite, why: globalThis.__ewLiteWhy, banner: document.getElementById('lite-banner')?.textContent ?? '' }));
-    ok('a fresh phone starts in lite (why=phone), and the card says so', f.lite === true && f.why === 'phone' && /On phones we start in the light version/.test(f.banner), JSON.stringify(f));
+    ok('a fresh phone starts in lite (why=phone), and the card says why: on a phone', f.lite === true && f.why === 'phone' && /You're on a phone/.test(f.banner), JSON.stringify(f));
     const nav = p.waitForURL(/lite=0/, { timeout: 10000 }).then(() => true, () => false);
-    await p.locator('#lite-banner .cn-go').click();
-    ok('…Enter the 3D world goes full and remembers it (ew-lite=0)', await nav && await p.evaluate(() => localStorage.getItem('ew-lite') === '0'));
+    await p.locator('#hud').click();
+    ok('…the ∃ goes full and remembers it (ew-lite=0)', await nav && await p.evaluate(() => localStorage.getItem('ew-lite') === '0'));
     await p.goto(`${O}/?world=busy&name=freshphone&key=${K}`);
     await p.waitForFunction(() => globalThis.__ewLite !== undefined, null, { timeout: 30000 });
     const g = await p.evaluate(() => ({ lite: globalThis.__ewLite, why: globalThis.__ewLiteWhy }));
@@ -81,19 +81,18 @@ try {
   }
 
   ({ p, ctx, r, errs } = await run('asked', '&lite=1', false, DESK));
-  ok('someone who ASKED for lite (a desktop link) gets the card too, with the way back', r.lite === true && r.why === 'url' && /light version/.test(r.banner ?? '') && await p.evaluate(() => !!document.querySelector('#lite-banner .cn-go')), JSON.stringify(r));
-  ok('…and at desktop width the dock button carries its label', await p.evaluate(() => getComputedStyle(document.querySelector('#lite-dock .ld-text')).display !== 'none'));
+  ok('someone who ASKED for lite (a desktop link) gets the card too, naming the way back', r.lite === true && r.why === 'url' && /This link opens the light version/.test(r.banner ?? '') && /Eidoverse logo/.test(r.banner ?? ''), JSON.stringify(r));
   await p.screenshot({ path: SHOT });
   nav = p.waitForURL(/lite=0/, { timeout: 10000 }).then(() => true, () => false);
-  await p.locator('#lite-dock button[data-id=full]').click();
-  ok('the labelled dock button leaves for the full world too', await nav, p.url()); await ctx.close();
+  await p.locator('#hud').click();
+  ok('the ∃ leaves for the full world at desktop width too', await nav, p.url()); await ctx.close();
 
   ({ p, ctx, r, errs } = await run('dismiss', '', true));
   await p.evaluate(() => { globalThis.__roOff = 0; const d = ResizeObserver.prototype.disconnect; ResizeObserver.prototype.disconnect = function () { globalThis.__roOff++; return d.call(this); }; });
   await p.locator('#lite-banner .cn-ok').click();
-  ok('stay here dismisses it', await p.evaluate(() => !document.getElementById('lite-banner')));
+  ok('got it dismisses it', await p.evaluate(() => !document.getElementById('lite-banner')));
   await p.waitForTimeout(200);
-  ok('…and the chat grows up to the bar', await p.evaluate(() => document.querySelector('.frame.chat-frame').getBoundingClientRect().top - document.getElementById('lite-emote-host').getBoundingClientRect().bottom <= 16));
+  ok('…and the chat grows flush up to the bar', await p.evaluate(() => Math.abs(document.querySelector('.frame.chat-frame').getBoundingClientRect().top - document.getElementById('lite-emote-host').getBoundingClientRect().bottom) <= 1));
   ok('…and stops following the emote row (its ResizeObserver disconnects)', await p.evaluate(() => globalThis.__roOff === 1)); await ctx.close();
 
   { // a DESKTOP whose last boot died: full client, plus a pill offering the light version

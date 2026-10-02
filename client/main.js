@@ -583,7 +583,7 @@ registerSystem('physobj', (dt, t, now) => tickPhysObj(dt, now)); // entity lease
 registerSystem('mods', (dt, t, now) => tickMods(dt, now));       // 🧩 runtime scripts
 registerSystem('remotes', (dt, t, now) => updateRemotes(dt, now));
 registerSystem('gaze', (dt, t, now) => updateGaze(myState.pos, getMe(), CONFIG.name, now));
-// the nameplate ear (who cannot hear you, near) and the hover card beside a plate — after gaze, before render
+// the hover card beside a nameplate (desktop pointer, touch tap, VR laser) — after gaze, before render
 initPlates({ camera, canvas, scene, remotes, myPos: () => (getMe() ? myState.pos : null), presenting: () => isPresenting(),
   openConvo, colorFor });
 registerSystem('plates', (dt, t, now) => updatePlates(now));

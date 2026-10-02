@@ -62,7 +62,10 @@ const WHY_TEXT = {
  *  tripwire it arms sends the next plain visit straight back here — one attempt, not a
  *  loop, and the escape stays a link the person can keep. */
 export function tryFullWorld() {
-  try { localStorage.removeItem('ew-lite'); } catch { /* nothing to clear */ }
+  // Saved, now that a phone STARTS in lite: the person chose 3D on this device and shouldn't be asked every
+  // visit. Safe, because a proven crash outranks a saved choice in the decision script, so a saved '0' on a
+  // device the world kills costs one crash, not a loop. ?lite=0 makes this load full even if storage is blocked.
+  try { localStorage.setItem('ew-lite', '0'); } catch { /* storage blocked: the URL still carries it */ }
   const u = new URL(location.href);
   u.searchParams.set('lite', '0');
   location.assign(u);
@@ -152,6 +155,7 @@ const BANNER_TEXT = {
   crash: "Your last visit to this world didn't finish loading, so you're in the light version: chat, emotes and who's here.",
   ram: "This device reports too little memory for the full world, so you're in the light version: chat, emotes and who's here.",
   'no-gpu': "This browser has no 3D support, so you're in the light version.",
+  phone: "On phones we start in the light version: chat, emotes and who's here. The 3D world can be heavy for a phone; try it if you like.",
   // ASKED for lite (a link, or a saved choice) still gets the card: a saved choice outlives the memory of making
   // it, and nobody should need to know about ?lite=0 to get back (owner, 10-01: "adding a string to a URL bar?")
   saved: "You're in the light version: chat, emotes and who's here.",

@@ -54,6 +54,23 @@ try {
   ok('Enter the 3D world leaves for the full world (?lite=0)', await nav, p.url());
   ok('no page errors', errs.length === 0, errs.join(' | ').slice(0, 200)); await ctx.close();
 
+  { // a FRESH phone (no history) starts in lite; choosing 3D is remembered on that device
+    const ctx = await b.newContext(PHONE); const p = await ctx.newPage(); const errs = []; p.on('pageerror', e => errs.push(e.message));
+    await p.goto(`${O}/?world=busy&name=freshphone&key=${K}`);
+    await p.waitForFunction(() => globalThis.__ewLite !== undefined && document.getElementById('lite-dock'), null, { timeout: 30000 });
+    await p.waitForTimeout(1500);
+    const f = await p.evaluate(() => ({ lite: globalThis.__ewLite, why: globalThis.__ewLiteWhy, banner: document.getElementById('lite-banner')?.textContent ?? '' }));
+    ok('a fresh phone starts in lite (why=phone), and the card says so', f.lite === true && f.why === 'phone' && /On phones we start in the light version/.test(f.banner), JSON.stringify(f));
+    const nav = p.waitForURL(/lite=0/, { timeout: 10000 }).then(() => true, () => false);
+    await p.locator('#lite-banner .cn-go').click();
+    ok('…Enter the 3D world goes full and remembers it (ew-lite=0)', await nav && await p.evaluate(() => localStorage.getItem('ew-lite') === '0'));
+    await p.goto(`${O}/?world=busy&name=freshphone&key=${K}`);
+    await p.waitForFunction(() => globalThis.__ewLite !== undefined, null, { timeout: 30000 });
+    const g = await p.evaluate(() => ({ lite: globalThis.__ewLite, why: globalThis.__ewLiteWhy }));
+    ok('…so the next plain visit on that phone is full (why=saved)', g.lite === false && g.why === 'saved', JSON.stringify(g));
+    ok('no page errors on the fresh phone', errs.length === 0, errs.join(' | ').slice(0, 200)); await ctx.close();
+  }
+
   ({ p, ctx, r, errs } = await run('asked', '&lite=1', false, DESK));
   ok('someone who ASKED for lite (a desktop link) gets the card too, with the way back', r.lite === true && r.why === 'url' && /light version/.test(r.banner ?? '') && await p.evaluate(() => !!document.querySelector('#lite-banner .cn-go')), JSON.stringify(r));
   ok('…and at desktop width the dock button carries its label', await p.evaluate(() => getComputedStyle(document.querySelector('#lite-dock .ld-text')).display !== 'none'));

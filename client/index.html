@@ -1817,6 +1817,11 @@ try { const o = JSON.parse(localStorage.getItem('ew-style-tokens') || '{}');
       if (stored === '1' || stored === '0') return { lite: stored === '1', why: 'saved' };
       // 4. No rendering API at all. Not a heuristic — a fact.
       if (!gpuApi) return { lite: true, why: 'no-gpu' };
+      // 4b. A PHONE OR TABLET STARTS IN LITE (owner, 10-01: "why can't phones load the lite client by
+      //     default?"). A phone visitor would rather start in chat than watch the world crash, and the
+      //     lite card's "Enter the 3D world" is one press, saved per device (3) so it isn't asked again;
+      //     a saved "3D" that then dies is caught by (2), once. Desktops and headsets start full.
+      if (mobile) return { lite: true, why: 'phone' };
       // 5. The one hardware guess, kept deliberately timid. deviceMemory is capped at
       //    8 and rounded, and plenty of phones that cannot run this still report 4, so
       //    this catches only the obviously-incapable. Everything else is allowed to

@@ -41,10 +41,14 @@ const d = (q, o = {}) => decide({
   params: new URLSearchParams(q), stored: null, lastBootDied: false,
   deviceMemory: 8, gpuApi: true, mobile: true, ...o,
 });
-const desk = (q, o = {}) => d(q, { mobile: false, ...o });
 
+const desk = (q, o = {}) => d(q, { mobile: false, ...o });
 console.log('LITE CHOICE');
-check('a capable device gets the full world', d('').lite === false && d('').why === 'default');
+check('a capable desktop gets the full world', desk('').lite === false && desk('').why === 'default');
+check('a phone starts in lite (owner, 10-01)', d('').lite === true && d('').why === 'phone');
+check('a phone that chose 3D (saved) gets the full world', d('', { stored: '0' }).lite === false && d('', { stored: '0' }).why === 'saved');
+check('…and a saved 3D that then dies is caught once (crash outranks saved)', d('', { stored: '0', lastBootDied: true }).why === 'crash');
+check('?lite=0 gives a phone the full world this load', d('lite=0').lite === false);
 check('?lite=1 forces lite', d('lite=1').lite === true && d('lite=1').why === 'url');
 check('bare ?lite forces lite', d('lite').lite === true);
 check('?lite=0 forces full', d('lite=0').lite === false && d('lite=0').why === 'url');
@@ -96,8 +100,8 @@ check('a crash runs no handler, so the flag survives to the next visit', store.h
 console.log('  -- hardware --');
 check('no 3D API at all → lite', d('', { gpuApi: false }).lite === true && d('', { gpuApi: false }).why === 'no-gpu');
 check('2GB or less → lite', d('', { deviceMemory: 2 }).lite === true && d('', { deviceMemory: 1 }).lite === true);
-check('4GB is allowed to TRY (the tripwire catches it if it cannot)', d('', { deviceMemory: 4 }).lite === false);
-check('absent deviceMemory is not read as 0GB', d('', { deviceMemory: 0 }).lite === false);
+check('a 4GB desktop is allowed to TRY', desk('', { deviceMemory: 4 }).lite === false);
+check('absent deviceMemory is not read as 0GB', desk('', { deviceMemory: 0 }).lite === false);
 
 console.log('  -- saved preference --');
 check('saved lite is honoured', d('', { stored: '1' }).lite === true && d('', { stored: '1' }).why === 'saved');

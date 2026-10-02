@@ -365,7 +365,14 @@ const RAW = `
   await page.goto(`${world.origin}/?world=alpha&name=trip&key=${world.key}`, { waitUntil: 'load' });
   const alpha = await page.evaluate(() => ({ lite: globalThis.__ewLite, why: globalThis.__ewLiteWhy }));
   console.log(`\n  tripwire: world alpha (died) -> lite=${alpha.lite} why=${alpha.why}`);
-  check('a world whose last boot died opens lite', alpha.lite === true && alpha.why === 'crash');
+  // This page is a DESKTOP, and since 2026-10-01 only a phone or tablet is demoted by a died boot (owner: lite is
+  // default only on mobile): a desktop retries the full world and says so. The phone half - died boot -> lite 'crash'
+  // - is lite-banner-probe's, in a real 360 px Android context; lite-choice-test pins the rule itself.
+  check('a desktop whose last boot died RETRIES the full world (why=retry), not lite', alpha.lite === false && alpha.why === 'retry');
+  // The retry boot armed alpha's flag itself and leaving it is a clean exit that clears it, so re-plant the death
+  // (from a page that arms nothing) before checking that surviving ANOTHER world leaves alpha's flag alone.
+  await page.goto(`${world.origin}/?world=gamma&name=trip&key=${world.key}&lite=1`, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => localStorage.setItem('ew-boot-attempt:alpha', String(Date.now())));
 
   // 2. A DIFFERENT world on the same device is untouched. This is the one the phone
   //    report forced: an empty instance runs the full client fine on hardware the

@@ -70,6 +70,32 @@ try {
     await p.waitForTimeout(1500);
     const f = await p.evaluate(() => ({ lite: globalThis.__ewLite, why: globalThis.__ewLiteWhy, banner: document.getElementById('lite-banner')?.textContent ?? '' }));
     ok('a fresh phone starts in lite (why=phone), and the card says why: on a phone', f.lite === true && f.why === 'phone' && /You're on a phone/.test(f.banner), JSON.stringify(f));
+    const E = await p.evaluate(() => { const row = document.querySelector('#lite-emote-host .lite-emotes'); const t = [...row.querySelectorAll('.lite-emote')].map((b) => b.getBoundingClientRect());
+      return { n: t.length, fits: row.scrollWidth <= row.clientWidth + 1, inView: t.every((r) => r.left >= 0 && r.right <= innerWidth), w: Math.round(t[0]?.width ?? 0), h: Math.round(t[0]?.height ?? 0) }; });
+    ok('emotes: every one sits on the top row at 360 px, none scrolled off, tiles ≥ 40 px', E.n > 0 && E.fits && E.inView && E.w >= 40 && E.h >= 40, JSON.stringify(E));
+    // the compose box grows with what you type, to a cap, then scrolls; Enter sends and it shrinks back
+    await p.locator('#lite-banner .cn-ok').click();
+    const box = p.locator('#chatline');
+    const h0 = await box.evaluate((el) => el.getBoundingClientRect().height);
+    await box.click(); await box.pressSequentially('one');
+    for (let i = 0; i < 2; i++) { await box.press('Shift+Enter'); await box.pressSequentially('more'); }
+    const h3 = await box.evaluate((el) => el.getBoundingClientRect().height);
+    for (let i = 0; i < 12; i++) { await box.press('Shift+Enter'); await box.pressSequentially('line'); }
+    const G = await box.evaluate((el) => { const cs = getComputedStyle(el); const lh = parseFloat(cs.lineHeight); const pane = el.closest('.fr-body').clientHeight;
+      return { h: el.getBoundingClientRect().height, lh, pane, ov: cs.overflowY, scrolls: el.scrollHeight > el.clientHeight, val: el.value.split('\n').length }; });
+    ok('compose: one line at rest, three lines when three are typed (Shift+Enter is a new line)', h3 > h0 * 2 && h3 < h0 * 4, JSON.stringify({ h0, h3 }));
+    ok('compose: past the cap it stops at ≤ 6 lines and ≤ 40% of the pane, and scrolls', G.val === 15 && G.h <= G.lh * 6 + 20 && G.h <= G.pane * 0.4 + 1 && G.ov === 'auto' && G.scrolls, JSON.stringify(G));
+    await box.press('Enter');
+    const after = await box.evaluate((el) => ({ v: el.value, h: el.getBoundingClientRect().height }));
+    ok('compose: Enter sends, and the box is empty and one line again', after.v === '' && Math.abs(after.h - h0) <= 1, JSON.stringify({ ...after, h0 }));
+    const sent = await p.waitForFunction(() => [...document.querySelectorAll('#chatlog .line')].some((l) => /one\s*more\s*more/.test(l.textContent)), null, { timeout: 8000 }).then(() => true, () => false);
+    ok('compose: the multi-line message arrived in the log', sent);
+    ok('compose: …and keeps its line breaks in the log', await p.evaluate(() => { const l = [...document.querySelectorAll('#chatlog .line')].find((x) => /one/.test(x.textContent) && /more/.test(x.textContent)); const b = l?.querySelector('.body'); return !!b && getComputedStyle(b).whiteSpace === 'pre-line' && b.getBoundingClientRect().height > parseFloat(getComputedStyle(b).lineHeight) * 10; }));
+    await p.screenshot({ path: SHOT.replace('.png', '-compose.png') });
+    await box.click();
+    for (let i = 0; i < 4; i++) { await box.pressSequentially('typing a longer message to show the box growing '); }
+    await p.screenshot({ path: SHOT.replace('.png', '-compose-grow.png') });
+    await box.fill('');
     const nav = p.waitForURL(/lite=0/, { timeout: 10000 }).then(() => true, () => false);
     await p.locator('#hud').click();
     ok('…the ∃ goes full and remembers it (ew-lite=0)', await nav && await p.evaluate(() => localStorage.getItem('ew-lite') === '0'));

@@ -623,6 +623,36 @@ function html2canvas( element, scale = 1 ) {   // EIDO (1)
 		context.strokeRect( x - 0.5, y - 0.5, width + 1, height + 1 );
 		*/
 
+		// EIDO (12): a <textarea> (the chat's compose box grows to several lines, 2026-10-01) draws its value WRAPPED to
+		// its box from its scroll position, as the browser lays it out; without this a headset showed an empty box while
+		// you typed. A press on it focuses it, as a text input's does (handleEvent, below).
+		if ( element instanceof HTMLTextAreaElement ) {
+
+			const pl = parseFloat( style.paddingLeft ) || 0, pr = parseFloat( style.paddingRight ) || 0, pt = parseFloat( style.paddingTop ) || 0;
+			const lh = parseFloat( style.lineHeight ) || parseFloat( style.fontSize ) * 1.2;
+			context.font = style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily;
+			const maxW = width - pl - pr, rows = [];
+			for ( const para of element.value.split( '\n' ) ) {
+
+				let line = '';
+				for ( const word of para.split( /(\s+)/ ) ) {
+
+					const t = line + word;
+					if ( line && context.measureText( t ).width > maxW ) { rows.push( line ); line = word.trimStart(); } else line = t;
+
+				}
+
+				rows.push( line );
+
+			}
+
+			clipper.add( { x: x, y: y, width: width, height: height } );
+			rows.forEach( ( r, i ) => drawText( style, x + pl, y + pt + i * lh - element.scrollTop, r ) );
+			clipper.remove();
+			return;
+
+		}
+
 		// EIDO (11): a VISIBLE native <select> (data-native opts out of the house skin) shows its chosen label; its <option>
 		// children are a closed popup's rows, never laid out, and walking them stacked every label in one place.
 		if ( element instanceof HTMLSelectElement ) {
@@ -781,7 +811,7 @@ function htmlevent( element, event, x, y ) {
 
 	}
 
-	if ( target instanceof HTMLInputElement && ( target.type === 'text' || target.type === 'number' || target.type === 'email' || target.type === 'password' ) && ( event === 'mousedown' || event === 'click' ) ) {
+	if ( ( target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement && ( target.type === 'text' || target.type === 'number' || target.type === 'email' || target.type === 'password' ) ) && ( event === 'mousedown' || event === 'click' ) ) {
 
 		target.focus();
 

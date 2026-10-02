@@ -417,7 +417,7 @@ function paintUnread() {
 
 function insertAtCursor(str) {
   const s = inputEl.selectionStart ?? inputEl.value.length;
-  inputEl.value = inputEl.value.slice(0, s) + str + inputEl.value.slice(inputEl.selectionEnd ?? s);
+  setInput(inputEl.value.slice(0, s) + str + inputEl.value.slice(inputEl.selectionEnd ?? s));
   const p = s + str.length;
   inputEl.setSelectionRange(p, p);
   inputEl.focus();
@@ -493,7 +493,7 @@ function acceptAC() {
   if (!it) return;
   const v = inputEl.value;
   const caret = inputEl.selectionStart ?? v.length;
-  inputEl.value = v.slice(0, acStart) + it.value + ' ' + v.slice(caret);
+  setInput(v.slice(0, acStart) + it.value + ' ' + v.slice(caret));
   const p = acStart + it.value.length + 1;
   inputEl.setSelectionRange(p, p);
   closeAC();
@@ -690,7 +690,7 @@ export const chat = {
     inputEl.focus();
     scrollToEnd();
   },
-  close() { inputEl.value = ''; closeAC(); inputEl.blur(); },
+  close() { setInput(''); closeAC(); inputEl.blur(); },
   get isOpen() { return document.activeElement === inputEl; },
   toggle() { frame.toggle(); },
   submit: (text) => { const v = String(text ?? '').trim(); if (v) submitLine(v); },
@@ -914,6 +914,25 @@ function initChatGear() {
   applyChatPrefs();
 }
 
+// THE COMPOSE BOX GROWS (owner, 10-01: "it never expands to multiple lines… no matter how much you type"). The
+// convention (Discord, Slack, iMessage): one line at rest, growing with what you type up to a cap, then scrolling.
+// The cap here is six lines or 40% of the chat pane, whichever is less, so the log is never pushed out of sight.
+const INPUT_MAX_LINES = 6, INPUT_MAX_SHARE = 0.4;
+function sizeInput() {
+  if (!inputEl) return;
+  const cs = getComputedStyle(inputEl);
+  const line = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.35;
+  const chrome = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0) + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+  const pane = inputEl.closest('.fr-body')?.clientHeight || innerHeight;
+  const max = Math.max(line + chrome, Math.min(line * INPUT_MAX_LINES + chrome, pane * INPUT_MAX_SHARE));
+  inputEl.style.height = 'auto';
+  // empty: exactly one line (a long placeholder must not wrap the box taller)
+  const want = inputEl.value ? inputEl.scrollHeight + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0) : line + chrome;
+  inputEl.style.height = `${Math.min(want, max)}px`;
+  inputEl.style.overflowY = want > max + 1 ? 'auto' : 'hidden';
+}
+function setInput(v) { if (!inputEl) return; inputEl.value = v; sizeInput(); }
+
 export function initChat({ send, whisper, typing, people }) {
   onSend = send;
   onWhisper = whisper ?? (() => {});
@@ -944,7 +963,7 @@ export function initChat({ send, whisper, typing, people }) {
         <div class="chat-typing"></div>
         <div class="chat-compose">
           <div id="chat-ac" class="ac panel"></div>
-          <input id="chatline" placeholder="say something…  @ to mention · / for commands">
+          <textarea id="chatline" rows="1" enterkeyhint="send" placeholder="say something…  @ to mention · / for commands"></textarea>
           <button type="button" class="chat-gear" title="chat options" aria-expanded="false" aria-haspopup="dialog"></button>
         </div>
       </div>
@@ -986,6 +1005,8 @@ export function initChat({ send, whisper, typing, people }) {
   initChatGear();
 
   inputEl = frame.body.querySelector('#chatline');
+  inputEl.addEventListener('focus', () => requestAnimationFrame(sizeInput));
+  if (globalThis.ResizeObserver) new ResizeObserver(() => sizeInput()).observe(frame.body);
   acBox = frame.body.querySelector('#chat-ac');
   closeAC();
 
@@ -1006,6 +1027,7 @@ export function initChat({ send, whisper, typing, people }) {
   });
 
   inputEl.addEventListener('input', () => {
+    sizeInput();
     updateAC();
     // throttle: presence, not a keystroke log
     const now = performance.now();
@@ -1028,11 +1050,11 @@ export function initChat({ send, whisper, typing, people }) {
     if (e.key === 'Escape') { chat.close(); return; }
 
     // shell-style recall of what you last said
-    if (e.key === 'ArrowUp' && !inputEl.value.trim() || (e.key === 'ArrowUp' && historyIdx >= 0)) {
+    if (e.key === 'ArrowUp' && !inputEl.value.trim() || (e.key === 'ArrowUp' && historyIdx >= 0 && !inputEl.value.slice(0, inputEl.selectionStart ?? 0).includes('\n'))) {
       if (sentHistory.length) {
         e.preventDefault();
         historyIdx = Math.min(historyIdx + 1, sentHistory.length - 1);
-        inputEl.value = sentHistory[sentHistory.length - 1 - historyIdx];
+        setInput(sentHistory[sentHistory.length - 1 - historyIdx]);
         inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
       }
       return;
@@ -1040,13 +1062,14 @@ export function initChat({ send, whisper, typing, people }) {
     if (e.key === 'ArrowDown' && historyIdx >= 0) {
       e.preventDefault();
       historyIdx--;
-      inputEl.value = historyIdx < 0 ? '' : sentHistory[sentHistory.length - 1 - historyIdx];
+      setInput(historyIdx < 0 ? '' : sentHistory[sentHistory.length - 1 - historyIdx]);
       return;
     }
 
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();                      // a textarea now: Enter sends, Shift+Enter is a new line
       const v = inputEl.value.trim();
-      inputEl.value = '';
+      setInput('');
       historyIdx = -1;
       closeAC();
       if (!v) { inputEl.blur(); return; }
@@ -1140,7 +1163,7 @@ const drafts = new Map();
 function setFilter(f) {
   if (inputEl) {
     if (inputEl.value) drafts.set(filter, inputEl.value); else drafts.delete(filter);
-    inputEl.value = drafts.get(f) ?? '';
+    setInput(drafts.get(f) ?? '');
   }
   filter = f;
   if (f.startsWith('w:')) { const c = convos.get(f.slice(2)); if (c) c.unread = 0; }
@@ -1224,7 +1247,7 @@ function paintTabs() {
         // called B3 verified — the hand-probe closed the tab it was looking at, so it
         // structurally could not reach this branch. (antra-tess #185 B3)
         drafts.delete(key);
-        if (filter === key && inputEl) inputEl.value = '';
+        if (filter === key && inputEl) setInput('');
         convos.delete(key.slice(2));
         if (filter === key) setFilter('all'); else paintTabs();
       };
@@ -1239,7 +1262,7 @@ function paintTabs() {
       // called B3 verified — the hand-probe closed the tab it was looking at, so it
       // structurally could not reach this branch. (antra-tess #185 B3)
       drafts.delete(key);
-      if (filter === key && inputEl) inputEl.value = '';
+      if (filter === key && inputEl) setInput('');
       convos.delete(key.slice(2));
       if (filter === key) setFilter('all'); else { paintTabs(); }
     };

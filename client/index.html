@@ -541,6 +541,7 @@ a:hover { color: var(--fg); text-decoration-color: var(--brand); }
   user-select: text; -webkit-user-select: text;
 }
 .chat-log .line { padding: 1px 0; word-wrap: break-word; overflow-wrap: anywhere; }
+.chat-log .line .body { white-space: pre-line; }   /* a message typed on several lines (Shift+Enter) keeps its breaks; runs of spaces still collapse */
 .chat-log .line.filtered { display: none; }
 .chat-log .line .t { color: var(--dim); font-size: var(--fs-xs); margin-right: 6px; opacity: .6; }
 .chat-log .line .who { color: var(--fg); font-weight: 600; }
@@ -578,6 +579,14 @@ a:hover { color: var(--fg); text-decoration-color: var(--brand); }
 
 .chat-compose { position: relative; padding: 6px; flex: none; }
 .chat-compose input { width: 100%; box-sizing: border-box; font-size: var(--fs); }
+/* the compose box is a textarea that grows (chat.js sizeInput); it wears the text input's skin */
+.chat-compose textarea {
+  display: block; width: 100%; box-sizing: border-box; resize: none; overflow-y: hidden;
+  font: var(--fs) var(--font); line-height: 1.35; color: var(--fg); background: var(--well);
+  border: 1px solid var(--edge); border-radius: 5px; padding: 6px 32px 6px 8px;
+}
+.chat-compose textarea::placeholder { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-compose > .chat-gear { top: auto; bottom: 10px; transform: none; }   /* the gear stays on the last line as the box grows */
 
 .ac {
   position: absolute; left: 6px; right: 6px; bottom: calc(100% - 4px);
@@ -1920,9 +1929,11 @@ html.lite, html.lite body { height: 100%; overflow: hidden; }
 .lite-emotes { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
 /* THE PHONE LAYOUT (owner, 10-01). One top bar: emotes scroll sideways on one line, the 3D button at its end. */
 #lite-emote-host { display: flex; align-items: center; gap: 8px; padding-left: 8px; padding-right: 8px; }
-#lite-emote-host .lite-emotes { flex: 1; min-width: 0; flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+/* the emotes share the row in equal cells (owner, 10-01: "can they all sit comfortably on that top row?"): six fit a
+   360 px phone beside the ∃ at ~44 px each; if more are ever added, a cell won't go under 40 px and the row scrolls */
+#lite-emote-host .lite-emotes { flex: 1; min-width: 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(40px, 1fr); gap: 6px; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
 #lite-emote-host .lite-emotes::-webkit-scrollbar { display: none; }
-#lite-emote-host .lite-emote { flex: none; }
+#lite-emote-host .lite-emote { width: 100%; min-width: 0; height: 44px; padding: 0; display: grid; place-items: center; font-size: 24px; line-height: 1; border-radius: 10px; }
 /* the card spans the column under the bar, not the full client's narrow top-centre notice */
 html.lite #lite-banner { left: 8px; right: 8px; transform: none; max-width: none; }
 /* the chat fills everything below the bar (and the card while it's up): frames.js sizes frames inline, so these win with !important */

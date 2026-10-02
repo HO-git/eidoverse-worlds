@@ -18,7 +18,11 @@ export function chooseClient(lite) {
   try {
     localStorage.setItem('ew-lite', lite ? '1' : '0');
     saved = localStorage.getItem('ew-lite') === (lite ? '1' : '0');
-    if (!lite) localStorage.removeItem(globalThis.__ewTripKey?.(new URLSearchParams(location.search)) ?? 'ew-boot-attempt');
+    if (!lite) {
+      const q = new URLSearchParams(location.search);
+      localStorage.removeItem(globalThis.__ewTripKey?.(q) ?? 'ew-boot-attempt');
+      localStorage.removeItem(globalThis.__ewRetryKey?.(q) ?? 'ew-boot-retried');   // a fresh try gets its own retry
+    }
   } catch { /* storage blocked: the URL carries it below */ }
   if (!saved) u.searchParams.set('lite', lite ? '1' : '0');
   location.assign(u);

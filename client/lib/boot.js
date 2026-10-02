@@ -276,7 +276,10 @@ function disarmTripwire() {
   // and a guard like "already cleared once" would then leave that re-armed flag set forever.
   setTimeout(() => {
     globalThis.__ewTripDisarmed = true;
-    try { localStorage.removeItem(key); } catch { /* storage blocked; never armed either */ }
+    try {
+      localStorage.removeItem(key);
+      localStorage.removeItem(globalThis.__ewRetryKey?.(new URLSearchParams(location.search)) ?? 'ew-boot-retried');   // the retry worked
+    } catch { /* storage blocked; never armed either */ }
   }, DWELL_MS);
 }
 

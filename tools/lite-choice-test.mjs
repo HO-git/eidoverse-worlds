@@ -64,6 +64,8 @@ check('a died boot reaches iOS, where deviceMemory is absent',
 
 console.log('  -- desktops and headsets are never demoted by inference (owner, 10-01) --');
 check('a desktop whose last boot died boots FULL again, told why', desk('', { lastBootDied: true }).lite === false && desk('', { lastBootDied: true }).why === 'retry');
+check('a desktop whose RETRY died too lands in lite (crash): the pill never loaded to offer it (review #212)', desk('', { lastBootDied: true, retried: true }).lite === true && desk('', { lastBootDied: true, retried: true }).why === 'crash');
+check('a died boot on a desktop with no 3D API says no-gpu, not retry', desk('', { lastBootDied: true, gpuApi: false }).why === 'no-gpu');
 check('a desktop reporting 2GB still gets the full world', desk('', { deviceMemory: 2 }).lite === false);
 check('a desktop with no 3D API still gets lite (a fact, not a guess)', desk('', { gpuApi: false }).lite === true);
 check('a desktop that chose lite keeps it', desk('', { stored: '1' }).lite === true);
@@ -121,7 +123,16 @@ const boot = (nav, tripped) => {
 };
 const winUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36';
 const phoneUA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36';
-{ const r = boot({ userAgent: winUA, deviceMemory: 8 }, true); check('page: a Windows desktop after a died boot loads FULL (retry)', r.lite === false && r.why === 'retry', JSON.stringify(r)); }
+{ // the page spends the retry when it takes it, so a second death in a row lands in lite
+  const st = new Map([['ew-boot-attempt:default', '1']]);
+  const run2 = () => { const h = { ...g, navigator: { gpu: {}, userAgent: winUA, deviceMemory: 8 }, localStorage: { getItem: (k) => (st.has(k) ? st.get(k) : null), setItem: (k, v) => st.set(k, String(v)), removeItem: (k) => st.delete(k) }, addEventListener: () => {} };
+    h.globalThis = h; new Function('globalThis', 'navigator', 'location', 'localStorage', 'document', 'console', 'URLSearchParams', 'addEventListener', src)
+      .call(h, h, h.navigator, h.location, h.localStorage, h.document, h.console, URLSearchParams, h.addEventListener); return { lite: h.__ewLite, why: h.__ewLiteWhy }; };
+  const a1 = run2();
+  check('page: a Windows desktop after a died boot loads FULL (retry), and spends its retry', a1.lite === false && a1.why === 'retry' && st.has('ew-boot-retried:default'), JSON.stringify(a1));
+  const a2 = run2();   // that retry died too (no handler ran): the trip key is still set
+  check('page: …and if the retry dies too, the next visit is lite (crash)', a2.lite === true && a2.why === 'crash', JSON.stringify(a2));
+}
 { const r = boot({ userAgent: phoneUA, deviceMemory: 4 }, true); check('page: an Android phone after a died boot loads lite (crash)', r.lite === true && r.why === 'crash', JSON.stringify(r)); }
 { const r = boot({ userAgent: winUA, deviceMemory: 8 }, false); check('page: a healthy desktop loads full (default)', r.lite === false && r.why === 'default', JSON.stringify(r)); }
 

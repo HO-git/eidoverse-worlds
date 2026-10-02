@@ -898,11 +898,14 @@ function placeSub() {
     x = (el.dock.dataset.edge === 'right' ? fitsL || !fitsR : !fitsR) ? left : right;
     y = Math.max(4, Math.min(innerHeight - r.height - 4, rr.top - 6));   // its first row level with its parent row
   } else {
-    // a phone: no room on either side — it drops BELOW its row, indented, so the row that opened it stays in view,
-    // and scrolls inside what is left of the screen rather than covering the row
+    // a phone: no room on either side — it hangs off its row, indented, so the row that opened it stays in view, on
+    // whichever side has more screen (a rail docked low leaves little below), and scrolls inside exactly what is
+    // left there: never a floor taller than the room, which pushed the last rows off-screen (review of #212)
     x = Math.max(4, Math.min(innerWidth - r.width - 4, mr.left + 16));
-    y = rr.bottom + 2;
-    s.style.maxHeight = `${Math.max(120, innerHeight - y - 4)}px`;
+    const below = innerHeight - rr.bottom - 6, above = rr.top - 6;
+    const h = Math.min(r.height, Math.max(below, above));
+    y = below >= Math.min(r.height, 120) || below >= above ? rr.bottom + 2 : rr.top - 2 - h;
+    s.style.maxHeight = `${Math.max(0, Math.round(h))}px`;
   }
   s.style.left = `${Math.round(x)}px`; s.style.top = `${Math.round(y)}px`;
 }

@@ -1794,9 +1794,11 @@ try { const o = JSON.parse(localStorage.getItem('ew-style-tokens') || '{}');
     // "this device cannot hold THAT world", and would strand a phone in lite on worlds
     // it handles comfortably.
     const tripKey = (params) => `ew-boot-attempt:${params.get('world') || 'default'}`;
+    const retryKey = (params) => `ew-boot-retried:${params.get('world') || 'default'}`;   // a desktop's one retry (rule 2)
+    globalThis.__ewRetryKey = retryKey;   // boot.js and litechoice.js clear it with the trip key
     globalThis.__ewTripKey = tripKey;   // boot.js disarms the same key
 
-    const decideLite = ({ params, stored, lastBootDied, deviceMemory, gpuApi, mobile }) => {
+    const decideLite = ({ params, stored, lastBootDied, retried, deviceMemory, gpuApi, mobile }) => {
       // 1. An explicit ask wins, both directions, and is shareable — the reliable
       //    way back for someone whose device just died mid-boot.
       if (params.has('lite')) return { lite: params.get('lite') !== '0', why: 'url' };
@@ -1817,8 +1819,14 @@ try { const o = JSON.parse(localStorage.getItem('ew-style-tokens') || '{}');
       //    update mid-load) say nothing about whether it fits. Demoting a desktop
       //    stranded people in the chat-only client with no idea how to get into the
       //    world (owner, 2026-10-01: "should only be default *on mobile*"). A desktop
-      //    whose last boot died boots full again and is told so ('retry').
-      if (lastBootDied) return mobile ? { lite: true, why: 'crash' } : { lite: false, why: 'retry' };
+      //    whose last boot died boots full again and is told so ('retry') - ONCE. If the retry dies too it never
+      //    reaches main.js, where the pill offering lite lives, so a second death in a row lands in lite after all
+      //    (review of #212: "the visitor has no in-page way out of the failed-boot cycle"), and lite's ∃ offers 3D
+      //    again. A browser with no 3D API at all is told that, not retried.
+      if (lastBootDied) {
+        if (mobile || retried) return { lite: true, why: 'crash' };
+        return gpuApi ? { lite: false, why: 'retry' } : { lite: true, why: 'no-gpu' };
+      }
       // 3. A deliberate past choice outranks anything we merely infer below.
       if (stored === '1' || stored === '0') return { lite: stored === '1', why: 'saved' };
       // 4. No rendering API at all. Not a heuristic — a fact.
@@ -1850,21 +1858,26 @@ try { const o = JSON.parse(localStorage.getItem('ew-style-tokens') || '{}');
     globalThis.__ewIsMobile = isMobile;   // test seam
 
     const params = new URLSearchParams(location.search);
-    let stored = null, lastBootDied = false;
+    let stored = null, lastBootDied = false, retried = false;
     try {
       stored = localStorage.getItem('ew-lite');
       lastBootDied = localStorage.getItem(tripKey(params)) !== null;
+      retried = localStorage.getItem(retryKey(params)) !== null;
     } catch { /* storage blocked (private window) — every signal below still applies */ }
 
     const { lite, why } = decideLite({
       params,
       stored,
       lastBootDied,
+      retried,
       deviceMemory: navigator.deviceMemory ?? 0,
       gpuApi: ('gpu' in navigator) || !!globalThis.WebGL2RenderingContext,
       mobile: isMobile(navigator),
     });
     globalThis.__ewLite = lite;
+    // the one retry is spent the moment it is taken; a boot that survives (boot.js), a deliberate exit (pagehide) or a
+    // chosen 3D (litechoice.js) gives it back
+    try { if (why === 'retry') localStorage.setItem(retryKey(params), String(Date.now())); } catch { /* storage blocked */ }
     globalThis.__ewLiteWhy = why;
     document.documentElement.classList.toggle('lite', lite);
     console.log(`[lite] ${lite ? 'LITE' : 'full'} client (${why})`);
@@ -1887,7 +1900,7 @@ try { const o = JSON.parse(localStorage.getItem('ew-style-tokens') || '{}');
     const armKey = tripKey(params);
     const arm = () => { try { localStorage.setItem(armKey, String(Date.now())); } catch { /* as above */ } };
     arm();
-    addEventListener('pagehide', () => { try { localStorage.removeItem(armKey); } catch { /* as above */ } });
+    addEventListener('pagehide', () => { try { localStorage.removeItem(armKey); localStorage.removeItem(retryKey(params)); } catch { /* as above */ } });
     addEventListener('pageshow', (e) => { if (e.persisted && !globalThis.__ewTripDisarmed) arm(); });
 
     for (const href of [

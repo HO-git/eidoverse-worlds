@@ -39,8 +39,9 @@ let pass = 0, fail = 0;
 const check = (name, ok, note = '') => { if (ok) { pass++; console.log(`  ok    ${name}`); } else { fail++; console.log(`  FAIL  ${name}${note ? `  -- ${note}` : ''}`); } };
 const d = (q, o = {}) => decide({
   params: new URLSearchParams(q), stored: null, lastBootDied: false,
-  deviceMemory: 8, gpuApi: true, ...o,
+  deviceMemory: 8, gpuApi: true, mobile: true, ...o,
 });
+const desk = (q, o = {}) => d(q, { mobile: false, ...o });
 
 console.log('LITE CHOICE');
 check('a capable device gets the full world', d('').lite === false && d('').why === 'default');
@@ -56,6 +57,27 @@ check('?lite=0 still overrides a died boot (the manual way back in)',
   d('lite=0', { lastBootDied: true }).lite === false);
 check('a died boot reaches iOS, where deviceMemory is absent',
   d('', { lastBootDied: true, deviceMemory: 0 }).lite === true);
+
+console.log('  -- desktops and headsets are never demoted by inference (owner, 10-01) --');
+check('a desktop whose last boot died boots FULL again, told why', desk('', { lastBootDied: true }).lite === false && desk('', { lastBootDied: true }).why === 'retry');
+check('a desktop reporting 2GB still gets the full world', desk('', { deviceMemory: 2 }).lite === false);
+check('a desktop with no 3D API still gets lite (a fact, not a guess)', desk('', { gpuApi: false }).lite === true);
+check('a desktop that chose lite keeps it', desk('', { stored: '1' }).lite === true);
+check('?lite=1 still works on a desktop', desk('lite=1').lite === true);
+const mob = g.__ewIsMobile;
+const ua = (s, extra = {}) => mob({ userAgent: s, ...extra });
+check('isMobile: Android phone', ua('Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36'));
+check('isMobile: Android tablet (no "Mobile" token)', ua('Mozilla/5.0 (Linux; Android 14; SM-X710) AppleWebKit/537.36 Chrome/130 Safari/537.36'));
+check('isMobile: iPhone', ua('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148'));
+check('isMobile: iPadOS (reports a Mac, has touch)', ua('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15', { maxTouchPoints: 5 }));
+check('isMobile: a real Mac is not', !ua('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15', { maxTouchPoints: 0 }));
+check('isMobile: Windows Chrome is not', !ua('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36'));
+check('isMobile: Linux Firefox is not', !ua('Mozilla/5.0 (X11; Linux x86_64; rv:131.0) Gecko/20100101 Firefox/131.0'));
+check('isMobile: a Quest headset is not (it needs the full client for VR)', !ua('Mozilla/5.0 (X11; Linux x86_64; Quest 3) AppleWebKit/537.36 OculusBrowser/35.0 Chrome/130 VR Safari/537.36'));
+check('isMobile: an older Quest that says Android and Mobile is not', !ua('Mozilla/5.0 (Linux; Android 10; Quest 2) AppleWebKit/537.36 OculusBrowser/23.0 SamsungBrowser/4.0 Chrome/110 Mobile VR Safari/537.36'));
+check('isMobile: a Pico headset is not', !ua('Mozilla/5.0 (Linux; Android 10; Pico Neo3 Link) AppleWebKit/537.36 Chrome/105 Mobile VR Safari/537.36'));
+check('isMobile: Client Hints mobile:true wins', mob({ userAgent: 'Mozilla/5.0 (X11; Linux x86_64)', userAgentData: { mobile: true } }));
+check('isMobile: an unknown browser is not (the cheap wrong guess)', !mob({}));
 
 console.log('  -- the tripwire lifecycle (armed by the page itself) --');
 const K = 'ew-boot-attempt:default';
@@ -83,6 +105,21 @@ check('saved full is honoured on a healthy device', d('', { stored: '0' }).lite 
 check('saved full still loses to no-GPU? no — an explicit choice outranks inference',
   d('', { stored: '0', gpuApi: false }).lite === false);
 check('?lite=1 overrides saved full', d('lite=1', { stored: '0' }).lite === true);
+
+console.log('  -- the page itself, end to end (the call site, not just the function) --');
+const boot = (nav, tripped) => {
+  const st = new Map(tripped ? [['ew-boot-attempt:default', '1']] : []);
+  const h = { ...g, navigator: { gpu: {}, ...nav }, localStorage: { getItem: (k) => (st.has(k) ? st.get(k) : null), setItem: (k, v) => st.set(k, String(v)), removeItem: (k) => st.delete(k) }, addEventListener: () => {} };
+  h.globalThis = h;
+  new Function('globalThis', 'navigator', 'location', 'localStorage', 'document', 'console', 'URLSearchParams', 'addEventListener', src)
+    .call(h, h, h.navigator, h.location, h.localStorage, h.document, h.console, URLSearchParams, h.addEventListener);
+  return { lite: h.__ewLite, why: h.__ewLiteWhy };
+};
+const winUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36';
+const phoneUA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/130 Mobile Safari/537.36';
+{ const r = boot({ userAgent: winUA, deviceMemory: 8 }, true); check('page: a Windows desktop after a died boot loads FULL (retry)', r.lite === false && r.why === 'retry', JSON.stringify(r)); }
+{ const r = boot({ userAgent: phoneUA, deviceMemory: 4 }, true); check('page: an Android phone after a died boot loads lite (crash)', r.lite === true && r.why === 'crash', JSON.stringify(r)); }
+{ const r = boot({ userAgent: winUA, deviceMemory: 8 }, false); check('page: a healthy desktop loads full (default)', r.lite === false && r.why === 'default', JSON.stringify(r)); }
 
 console.log(`\n${fail === 0 ? 'PASS' : 'FAIL'} — ${pass} ok, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

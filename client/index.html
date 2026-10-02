@@ -1790,7 +1790,7 @@ try { const o = JSON.parse(localStorage.getItem('ew-style-tokens') || '{}');
     const tripKey = (params) => `ew-boot-attempt:${params.get('world') || 'default'}`;
     globalThis.__ewTripKey = tripKey;   // boot.js disarms the same key
 
-    const decideLite = ({ params, stored, lastBootDied, deviceMemory, gpuApi }) => {
+    const decideLite = ({ params, stored, lastBootDied, deviceMemory, gpuApi, mobile }) => {
       // 1. An explicit ask wins, both directions, and is shareable — the reliable
       //    way back for someone whose device just died mid-boot.
       if (params.has('lite')) return { lite: params.get('lite') !== '0', why: 'url' };
@@ -1804,7 +1804,15 @@ try { const o = JSON.parse(localStorage.getItem('ew-style-tokens') || '{}');
       //    the page never finishes loading to offer one. Evidence outranks a stale
       //    preference; (1) is still the override, and it is a URL, so it survives a
       //    browser that never got far enough to run any of our code.
-      if (lastBootDied) return { lite: true, why: 'crash' };
+      //
+      //    PHONES AND TABLETS ONLY. Lite exists for a device that cannot hold the engine
+      //    in RAM; a desktop or a headset can, and the things that leave this flag behind
+      //    on one (a tab killed while a shader compiled, a browser force-quit, an OS
+      //    update mid-load) say nothing about whether it fits. Demoting a desktop
+      //    stranded people in the chat-only client with no idea how to get into the
+      //    world (owner, 2026-10-01: "should only be default *on mobile*"). A desktop
+      //    whose last boot died boots full again and is told so ('retry').
+      if (lastBootDied) return mobile ? { lite: true, why: 'crash' } : { lite: false, why: 'retry' };
       // 3. A deliberate past choice outranks anything we merely infer below.
       if (stored === '1' || stored === '0') return { lite: stored === '1', why: 'saved' };
       // 4. No rendering API at all. Not a heuristic — a fact.
@@ -1814,10 +1822,25 @@ try { const o = JSON.parse(localStorage.getItem('ew-style-tokens') || '{}');
       //    this catches only the obviously-incapable. Everything else is allowed to
       //    TRY — which is affordable precisely because (3) means it only ever fails
       //    once, and never silently.
-      if (deviceMemory > 0 && deviceMemory <= 2) return { lite: true, why: 'ram' };
+      if (mobile && deviceMemory > 0 && deviceMemory <= 2) return { lite: true, why: 'ram' };   // a phone's guess, like (2)
       return { lite: false, why: 'default' };
     };
     globalThis.__ewDecideLite = decideLite;   // test seam
+
+    // A phone or tablet, by what the browser says about itself. Client Hints first
+    // (Chromium: mobile is false on a desktop AND on a Quest), then the user agent:
+    // Android (tablets omit "Mobile"), iPhone/iPod/iPad, and iPadOS, which reports a
+    // Mac but has touch. A headset's browser can say Android and even Mobile (older Quest builds, Pico:
+    // "Mobile VR Safari"), so a headset is excluded by name - it is
+    // not a phone here - it needs the full client for VR. Unknown → not mobile: the
+    // wrong guess in that direction costs a slow load, the other costs the world.
+    const isMobile = (nav) => {
+      if (nav.userAgentData && typeof nav.userAgentData.mobile === 'boolean' && nav.userAgentData.mobile) return true;
+      const ua = String(nav.userAgent || '');
+      if (/Android|iPhone|iPod|iPad|Mobile|Silk|Kindle/i.test(ua) && !/Quest|OculusBrowser|Pico|\bVR\b/i.test(ua)) return true;
+      return /Macintosh/.test(ua) && (nav.maxTouchPoints || 0) > 1;
+    };
+    globalThis.__ewIsMobile = isMobile;   // test seam
 
     const params = new URLSearchParams(location.search);
     let stored = null, lastBootDied = false;
@@ -1832,6 +1855,7 @@ try { const o = JSON.parse(localStorage.getItem('ew-style-tokens') || '{}');
       lastBootDied,
       deviceMemory: navigator.deviceMemory ?? 0,
       gpuApi: ('gpu' in navigator) || !!globalThis.WebGL2RenderingContext,
+      mobile: isMobile(navigator),
     });
     globalThis.__ewLite = lite;
     globalThis.__ewLiteWhy = why;

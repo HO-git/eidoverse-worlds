@@ -84,6 +84,9 @@ await everyoneHas(x, "first voice frame");
 check("a browser peer 1 km away reads mic on, hearing off", both(peer.last, true, false), JSON.stringify(peer.last));
 check("a spectator reads the same", both(spectator.last, true, false), JSON.stringify(spectator.last));
 check("an agent's socket reads the same (raw pose in agent.people)", both(agentPose(), true, false), JSON.stringify(agentPose()));
+const ownerLine = () => (agent.look() as string).split("\n").find((l: string) => l.includes(`- ${OWNER}:`)) ?? "";
+check("the agent's look says it in words: headphones off, still sees chat text; mic on",
+  /headphones off: they won't hear anything spoken aloud, yours included, but they still see chat text/.test(ownerLine()) && /mic on/.test(ownerLine()), ownerLine());
 
 console.log("latest wins:");
 x = ownerSends({ mic: false, hear: true });
@@ -104,6 +107,7 @@ x = ownerSends(null);
 await everyoneHas(x, "voiceless frame");
 check("a sender that says nothing leaves no mic/hear key at the peer", !("mic" in peer.last!) && !("hear" in peer.last!), JSON.stringify(peer.last));
 check("...nor at the agent", !("mic" in agentPose()) && !("hear" in agentPose()));
+check("...and the agent's look makes no voice claim for it", !/headphones|mic /.test(ownerLine()), ownerLine());
 
 console.log("live only, not remembered:");
 x = ownerSends({ mic: true, hear: false });

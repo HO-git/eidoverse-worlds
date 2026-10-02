@@ -162,6 +162,21 @@ const DOWNED_POSE: Record<string, number[]> = {
   leftLowerLeg: [-0.7, 0, 0, 0.71], rightLowerLeg: [-0.7, 0, 0, 0.71],
 };
 
+/** What a person's voice state means for YOU, in words (owner, 10-02: "something more understandable — their headphones
+ *  are off, but they can still receive text"). Read from the live pose (shared/presencewire.js voiceWire, shared with
+ *  everyone in the world: docs/pose-wire.md). The headphones gate spoken voice only (people's mics and synthesized
+ *  speech, an agent's included); chat text always arrives. Absent = the client didn't say: no claim is made. */
+export function voiceNote(pose: unknown): string {
+  const v = (pose ?? {}) as { mic?: unknown; hear?: unknown; xr?: unknown };
+  const parts: string[] = [];
+  if (v.hear === false) parts.push("headphones off: they won't hear anything spoken aloud, yours included, but they still see chat text");
+  else if (v.hear === true) parts.push("headphones on: they hear spoken voices");
+  if (v.mic === true) parts.push("mic on: they may be talking aloud");
+  else if (v.mic === false) parts.push("mic off");
+  if (v.xr) parts.push("in VR");
+  return parts.length ? `; ${parts.join("; ")}` : "";
+}
+
 export class WorldAgent {
   url: string; name: string; world: string; avatar: string; agentToken = "";
   ws: WebSocket | null = null;
@@ -3094,7 +3109,7 @@ export class WorldAgent {
       const winged = p.pose.wingsFolded === true ? ", wings folded" : "";
       const ride = this.mounts.get(p.id);
       const riding = ride ? ` — on ${ride.to}${ride.slot ? ` (${ride.slot})` : ""}${this.seatSuffix(p.id, ride)}` : "";
-      L.push(`  - ${p.id}: ${meKnown ? `${Math.hypot(dx, dz).toFixed(1)}m ${this.bearing(dx, dz)} ` : ""}at (${x.toFixed(1)}, ${z.toFixed(1)}), ${doing}${posed}${winged}${riding}`);
+      L.push(`  - ${p.id}: ${meKnown ? `${Math.hypot(dx, dz).toFixed(1)}m ${this.bearing(dx, dz)} ` : ""}at (${x.toFixed(1)}, ${z.toFixed(1)}), ${doing}${posed}${winged}${riding}${voiceNote(p.pose)}`);
     }
 
     const ents = [...this.entities.values()];

@@ -18,6 +18,9 @@ const cases = [
     from: "const { emote: _emote, mic: _mic, hear: _hear, ...still } = pose as Record<string, unknown>;",
     to: "const { emote: _emote, ...still } = pose as Record<string, unknown>;",
     witness: "without mic or hear (the next live frame brings them)" },
+  { name: "look drops the voice note", file: "mcpl/agent.ts",
+    from: "${winged}${riding}${voiceNote(p.pose)}`);", to: "${winged}${riding}`);",
+    witness: "the agent's look says it in words" },
 ];
 async function run(m?: object) {
   const p = Bun.spawn([process.execPath, ...(m ? ["--preload", join(import.meta.dir, "contact-mutation-preload.ts")] : []), join(import.meta.dir, TEST)],

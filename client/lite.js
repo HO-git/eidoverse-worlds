@@ -125,7 +125,7 @@ function toast(message, kind = 'info', ttl = 5000) {
   setTimeout(() => t.remove(), ttl);
 }
 
-function liteDock(entries) {
+function liteDock(entries, parent = document.body) {
   const dock = document.createElement('nav');
   dock.id = 'lite-dock';
   for (const e of entries) {
@@ -142,7 +142,7 @@ function liteDock(entries) {
     b.addEventListener('click', e.act);
     dock.appendChild(b);
   }
-  document.body.appendChild(dock);
+  parent.appendChild(dock);
   return dock;
 }
 
@@ -166,6 +166,18 @@ const NO_WAY_IN = new Set(['no-gpu']);
 // The same card as the full client's capability notice (capnotice.js: .panel.capnotice >
 // .cn-item > b, p, .cn-btns) so the two reduced paths read as one family. Built here, not
 // imported: capnotice.js pulls core.js, and core.js is the engine lite exists to avoid.
+// THE PHONE LAYOUT, one column (owner, 10-01: "the lite client UI is a bit of a hot mess"): the top bar
+// (emotes, scrolling sideways, and the way into the 3D world at its end), then the card if it's up, then the
+// chat filling everything below it. The chat frame keeps its own machinery (tabs, people, compose); only its
+// box is set here, through --lite-top, which index.html's html.lite rules read.
+export function liteLayout() {
+  if (typeof document === 'undefined') return;
+  const bar = document.getElementById('lite-emote-host');
+  const card = document.getElementById('lite-banner');
+  const below = (card ?? bar)?.getBoundingClientRect().bottom ?? 0;
+  document.documentElement.style.setProperty('--lite-top', `${Math.round(below + 8)}px`);
+}
+
 export function liteBanner(why) {
   const text = BANNER_TEXT[why];
   if (!text || document.getElementById('lite-banner')) return null;
@@ -181,13 +193,13 @@ export function liteBanner(why) {
   item.querySelector('b').textContent = 'Light version';
   item.querySelector('p').textContent = text;
   let ro = null;
-  item.querySelector('.cn-ok').addEventListener('click', () => { ro?.disconnect(); card.remove(); });
+  item.querySelector('.cn-ok').addEventListener('click', () => { ro?.disconnect(); card.remove(); liteLayout(); });
   card.appendChild(item);
   document.body.appendChild(card);
   // Under the emote row, never over it: that row is fixed to the top and its height
   // depends on how many emotes wrap, so follow it instead of guessing a number.
   const host = document.getElementById('lite-emote-host');
-  const place = () => { card.style.top = `${Math.round((host?.getBoundingClientRect().bottom ?? 0) + 8)}px`; };
+  const place = () => { card.style.top = `${Math.round((host?.getBoundingClientRect().bottom ?? 0) + 8)}px`; liteLayout(); };
   place();
   if (host && globalThis.ResizeObserver) (ro = new ResizeObserver(place)).observe(host);
   return card;
@@ -313,11 +325,14 @@ async function main() {
   initLiteEmotes(emoteHost, emote);
   liteDock([
     { id: 'full', label: '\u{1F30D}', icon: '\u{1F30D}', text: '3D world', title: 'enter the full 3D world', act: tryFullWorld },
-  ]);
+  ], emoteHost);   // in the top bar, never over the chat's compose row
+  liteLayout();
+  if (globalThis.ResizeObserver) new ResizeObserver(liteLayout).observe(emoteHost);
+  addEventListener('resize', liteLayout);
   globalThis.__ewTryFullWorld = tryFullWorld;   // also reachable from the console
 
-  logChat('', WHY_TEXT[WHY] ?? WHY_TEXT.default, 'sys');
-  liteBanner(WHY);
+  // the card says why now, for every reason; the chat line only where there is no card (it repeated it)
+  if (!liteBanner(WHY)) logChat('', WHY_TEXT[WHY] ?? WHY_TEXT.default, 'sys');
 
   // No door screen: openDoor lives in ui.js, and the door's job (pick a body, see who is
   // here before you commit) is mostly about a world this client does not render, so a

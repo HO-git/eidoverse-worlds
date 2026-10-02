@@ -48,6 +48,15 @@ try {
   ok('…the 3D-world button is a real tap target (≥ 44 px tall)', await p.evaluate(() => document.querySelector('#lite-banner .cn-go').getBoundingClientRect().height >= 44));
   ok('…at 360 px the dock is the bare glyph (no room for its label)', await p.evaluate(() => { const t = document.querySelector('#lite-dock button[data-id=full] .ld-text'); return !t || getComputedStyle(t).display === 'none'; }));
   ok('…and the dock button stays inside the screen', await p.evaluate(() => { const r = document.querySelector('#lite-dock button[data-id=full]').getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight; }));
+  const L = await p.evaluate(() => { const R = (q) => document.querySelector(q)?.getBoundingClientRect(); const ov = (a, b) => !!a && !!b && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+    const bar = R('#lite-emote-host'), card = R('#lite-banner'), chat = R('.frame.chat-frame'), dock = R('#lite-dock button[data-id=full]'), gear = R('.chat-gear'), input = R('#chatline'), hud = document.getElementById('hud');
+    return { dockInBar: !!dock && dock.top >= bar.top && dock.bottom <= bar.bottom, dockClearOfCompose: !ov(dock, gear) && !ov(dock, input),
+      chatBelowCard: chat.top >= card.bottom, chatToBottom: innerHeight - chat.bottom <= 16, chatFullWidth: chat.left <= 12 && innerWidth - chat.right <= 12,
+      gap: Math.round(chat.top - card.bottom), cardFullWidth: card.left <= 12 && innerWidth - card.right <= 12, hudHidden: !hud || getComputedStyle(hud).display === 'none' }; });
+  console.log('phone layout:', JSON.stringify(L));
+  ok('layout: the 3D button lives in the top bar, clear of the chat compose row', L.dockInBar && L.dockClearOfCompose);
+  ok('layout: the chat fills the column from under the card to the bottom (no dead gap)', L.chatBelowCard && L.chatToBottom && L.chatFullWidth && L.gap <= 16, JSON.stringify(L));
+  ok('layout: the card spans the column; the unwired ∃ is hidden', L.cardFullWidth && L.hudHidden);
   await p.screenshot({ path: SHOT.replace('.png', '-phone.png') });
   let nav = p.waitForURL(/lite=0/, { timeout: 10000 }).then(() => true, () => false);
   await p.locator('#lite-banner .cn-go').click();
@@ -83,6 +92,8 @@ try {
   await p.evaluate(() => { globalThis.__roOff = 0; const d = ResizeObserver.prototype.disconnect; ResizeObserver.prototype.disconnect = function () { globalThis.__roOff++; return d.call(this); }; });
   await p.locator('#lite-banner .cn-ok').click();
   ok('stay here dismisses it', await p.evaluate(() => !document.getElementById('lite-banner')));
+  await p.waitForTimeout(200);
+  ok('…and the chat grows up to the bar', await p.evaluate(() => document.querySelector('.frame.chat-frame').getBoundingClientRect().top - document.getElementById('lite-emote-host').getBoundingClientRect().bottom <= 16));
   ok('…and stops following the emote row (its ResizeObserver disconnects)', await p.evaluate(() => globalThis.__roOff === 1)); await ctx.close();
 
   { // a DESKTOP whose last boot died: full client, plus a pill offering the light version

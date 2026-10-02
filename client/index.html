@@ -1918,6 +1918,26 @@ html.lite, html.lite body { height: 100%; overflow: hidden; }
   background: var(--panel); border-bottom: 1px solid var(--edge); box-shadow: var(--rim);
 }
 .lite-emotes { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+/* THE PHONE LAYOUT (owner, 10-01). One top bar: emotes scroll sideways on one line, the 3D button at its end. */
+#lite-emote-host { display: flex; align-items: center; gap: 8px; padding-left: 8px; padding-right: 8px; }
+#lite-emote-host .lite-emotes { flex: 1; min-width: 0; flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+#lite-emote-host .lite-emotes::-webkit-scrollbar { display: none; }
+#lite-emote-host .lite-emote { flex: none; }
+/* the card spans the column under the bar, not the full client's narrow top-centre notice */
+html.lite #lite-banner { left: 8px; right: 8px; transform: none; max-width: none; }
+/* the chat fills everything below the bar (and the card while it's up): frames.js sizes frames inline, so these win with !important */
+html.lite .frame.chat-frame {
+  position: fixed !important; left: 8px !important; right: 8px !important; width: auto !important; max-width: none;
+  top: var(--lite-top, 72px) !important; height: auto !important;
+  bottom: calc(8px + env(safe-area-inset-bottom, 0px)) !important;
+}
+/* …and its insides follow: frames.js pins the body to the frame's stored height inline, which left the compose
+   row floating mid-panel once the box stretched */
+html.lite .frame.chat-frame { display: flex; flex-direction: column; }
+html.lite .frame.chat-frame > .fr-body { height: auto !important; flex: 1 1 auto; min-height: 0; }
+#lite-dock button { display: inline-flex; align-items: center; justify-content: center; }
+/* the ∃ menu is the full client's; lite doesn't wire it, so it only sat buried under the emote row */
+html.lite #hud { display: none; }
 .lite-emote {
   min-width: 44px; min-height: 44px; font-size: 22px; line-height: 1;
   background: var(--chip); color: var(--fg);
@@ -1928,11 +1948,7 @@ html.lite, html.lite body { height: 100%; overflow: hidden; }
 .lite-emote.fired { border-color: var(--brand); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 35%, transparent); }
 .lite-emotes-wait { color: var(--dim); font-size: var(--fs-sm, 12px); padding: 12px; }
 
-#lite-dock {
-  position: fixed; right: 8px; z-index: 30;
-  bottom: calc(8px + env(safe-area-inset-bottom, 0px));
-  display: flex; gap: 6px;
-}
+#lite-dock { display: flex; gap: 6px; flex: none; }   /* lives at the right end of the top bar (lite.js) */
 #lite-dock button {
   min-width: 44px; min-height: 44px; font-size: 20px;
   background: var(--panel); color: var(--fg);

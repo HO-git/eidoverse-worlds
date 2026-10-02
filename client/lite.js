@@ -329,6 +329,11 @@ async function main() {
   const mark = document.getElementById('hud');
   if (mark) {
     emoteHost.prepend(mark);
+    // At 30 px the 24 px master's whole-pixel peg (2 units against 3-unit arms) reads thin (owner, 10-01: "compare it
+    // to the big icon"). The big master's peg is exactly as thick as its arms, so here it is scaled straight from it
+    // (sphere (48,50) r40 → (11,12) r11, ×0.275): 3.025 units, the arms' own weight. Nothing at this size snaps anyway.
+    const peg = mark.querySelectorAll('svg path')[2];
+    peg?.setAttribute('d', 'M7.080 10.488 L21.896 10.488 A11 11 0 0 1 21.896 13.512 L7.080 13.512 A4.202 4.202 0 0 1 7.080 10.488 Z');
     if (NO_WAY_IN.has(WHY)) { mark.disabled = true; mark.title = 'eidoverse'; }
     else { mark.title = 'load the full 3D world'; mark.setAttribute('aria-label', 'load the full 3D world'); mark.addEventListener('click', tryFullWorld); }
   }

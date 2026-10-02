@@ -17,6 +17,7 @@
 // 'layers' dropped from optionalFeatures (MSAA via classic XRWebGLLayer),
 // foveation 1 standalone / 0 PC (Basis split; ?fov=), local-floor, and the settled law: NEVER navigate mid-session.
 
+import { confirmCenter } from './confirmcenter.js';
 import { installRenderListTolerance, THREE, renderer, camera, scene, XR_BOOT, PREF_HEADSET_SEEN, xrPixelRatio } from './core.js';
 import { decideEntryFailure } from './xr_entry_policy.js';   // what a failed session request MEANS (#197 B1)
 import { withXREyes } from './xrpass.js';   // a warm needs THREE'S two eyes: xr.getCamera() has none before a session
@@ -1372,12 +1373,20 @@ export async function initXR() {
     if (XR_BOOT) { enterVR(); return; }
     // Already on WebGL? Nothing to swap — enter in place, no page reload (owner, 09-07: kill the reload tax).
     if (!renderer.backend?.isWebGPUBackend) { tee('[xr] visor: enter in place (WebGL, no reload)'); enterVR(); return; }
-    const swap = !!renderer.backend?.isWebGPUBackend;
-    const why = swap ? 'vr-webgl' : 'vr';
-    toast(swap ? 'restarting on WebGL 2 for VR — this browser can\'t present VR from WebGPU yet' : 'restarting in VR mode', 'info', 4000);
-    tee(`[xr] visor: reload (${why})`);
-    const u = new URL(location.href); u.searchParams.set('xr', '1'); u.searchParams.set('why', why);
-    setTimeout(() => { location.href = u; }, 700);
+    // On WebGPU, entering VR means RELOADING the page onto WebGL 2 - which used to just happen 0.7 s after the press,
+    // and caught the owner by surprise more than once (10-01). Ask first, in the middle of the screen.
+    tee('[xr] visor: WebGPU backend — asking before the reload onto WebGL');
+    confirmCenter({
+      title: 'Restart the page for VR?',
+      body: "This browser can't show VR from its WebGPU renderer yet, so entering VR reloads the page on WebGL 2. Unsaved typing in panels is lost.",
+      ok: 'Restart in VR', cancel: 'Not now',
+    }).then((yes) => {
+      if (!yes) { tee('[xr] visor: reload declined'); return; }
+      toast('restarting on WebGL 2 for VR', 'info', 4000);
+      tee('[xr] visor: reload (vr-webgl)');
+      const u = new URL(location.href); u.searchParams.set('xr', '1'); u.searchParams.set('why', 'vr-webgl');
+      setTimeout(() => { location.href = u; }, 300);
+    });
   }
   setXrProbe(() => presenting);
 }

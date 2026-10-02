@@ -45,6 +45,7 @@ try {
   ok('…and SAYS so in a pinned card, on screen after the history replay', !!r.banner && /didn't finish loading/.test(r.banner) && r.onScreen, r.chatTail);
   ok('…below the emote row, not over it (360 px wide, the row wraps)', r.clearOfEmotes === true);
   ok('…it names the way in (the ∃ logo), and its one button is got it', /Tap the \u2203 Eidoverse logo/.test(r.banner) /* a touch phone taps */ && await p.evaluate(() => { const c = document.getElementById('lite-banner'); return c.classList.contains('capnotice') && [...c.querySelectorAll('button')].map(b => b.textContent).join('|') === 'got it'; }));
+  ok('…the ∃ mark is centred in its tile (within 1 px)', await p.evaluate(() => { const b = document.getElementById('hud').getBoundingClientRect(), g = document.querySelector('#hud svg').getBoundingClientRect(); return Math.abs((b.left + b.right) / 2 - (g.left + g.right) / 2) <= 1 && Math.abs((b.top + b.bottom) / 2 - (g.top + g.bottom) / 2) <= 1; }));
   ok('…the ∃ is a real tap target (≥ 44 px) leading the top bar', await p.evaluate(() => { const h = document.getElementById('hud'); const r = h.getBoundingClientRect(); return h.parentElement.id === 'lite-emote-host' && h.parentElement.firstElementChild === h && r.height >= 44 && r.width >= 44 && !h.disabled; }));
   const L = await p.evaluate(() => { const R = (q) => document.querySelector(q)?.getBoundingClientRect(); const ov = (a, b) => !!a && !!b && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
     const bar = R('#lite-emote-host'), card = R('#lite-banner'), chat = R('.frame.chat-frame'), dock = R('#hud'), gear = R('.chat-gear'), input = R('#chatline'), hud = document.getElementById('hud');
@@ -146,6 +147,19 @@ try {
       ok('…which offers the light version as a button', await p.evaluate(() => [...document.querySelectorAll('#stpop button')].some(b => /light version/.test(b.textContent))));
       await p.screenshot({ path: SHOT.replace('.png', '-desktop-retry.png') });
     }
+    // the ∃ menu offers the light version, behind a centred confirmation (owner, 10-01)
+    await p.keyboard.press('Escape'); await p.waitForTimeout(200);
+    const menuRow = async () => { if (!await p.locator('#emenu .mrow[data-item=lite]').isVisible().catch(() => false)) await p.locator('#hud').click(); return p.waitForSelector('#emenu .mrow[data-item=lite]', { timeout: 5000 }).then(() => true, () => false); };
+    ok('∃ menu: a "Light version" item', await menuRow());
+    await p.locator('#emenu .mrow[data-item=lite]').click();
+    const C = await p.evaluate(() => { const c = document.querySelector('#confirm-center .cc-card')?.getBoundingClientRect(); return c && { cx: Math.round((c.left + c.right) / 2 - innerWidth / 2), cy: Math.round((c.top + c.bottom) / 2 - innerHeight / 2), ok: document.querySelector('#confirm-center .cc-ok').textContent, focus: document.activeElement?.className }; });
+    ok('…asks first, in the middle of the screen, Switch focused', !!C && Math.abs(C.cx) <= 2 && Math.abs(C.cy) <= 2 && C.ok === 'Switch' && C.focus === 'cc-ok', JSON.stringify(C));
+    await p.keyboard.press('Escape'); await p.waitForTimeout(300);
+    ok('…Esc says no: the dialog closes and nothing navigates', await p.evaluate(() => !document.getElementById('confirm-center') && !/lite=1/.test(location.search)));
+    await menuRow(); await p.locator('#emenu .mrow[data-item=lite]').click();
+    const nav2 = p.waitForURL(/lite=1/, { timeout: 10000 }).then(() => true, () => false);
+    await p.locator('#confirm-center .cc-ok').click();
+    ok('…Switch goes to the light version', await nav2 && await p.waitForFunction(() => globalThis.__ewLite === true, null, { timeout: 30000 }).then(() => true, () => false));
     ok('no page errors on the desktop retry', errs.length === 0, errs.join(' | ').slice(0, 200)); await ctx.close();
   }
 } catch (e) { fail++; console.log('PROBE FAILED', e.message); } finally { await b.close(); await world.close(); }

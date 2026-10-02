@@ -1914,6 +1914,16 @@ try { const o = JSON.parse(localStorage.getItem('ew-style-tokens') || '{}');
   })();
 </script>
 <style>
+/* confirmcenter.js: a yes/no in the middle of the screen, over everything */
+#confirm-center { position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 16px; background: rgb(0 0 0 / .55); }
+#confirm-center .cc-card { width: min(420px, 100%); padding: 16px 18px; border-radius: 10px; border: 1px solid var(--edge-hi); box-shadow: var(--rim); display: flex; flex-direction: column; gap: 10px; }
+#confirm-center b { color: var(--fg); font-size: 15px; font-weight: 600; }
+#confirm-center p { margin: 0; color: var(--dim); font-size: var(--fs-sm, 12px); line-height: 1.45; }
+#confirm-center .cc-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+#confirm-center .cc-btns button { min-height: 34px; padding: 0 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+#confirm-center .cc-no { background: var(--chip); color: var(--fg); border: 1px solid var(--edge); }
+#confirm-center .cc-ok { background: var(--brand-deep); color: var(--ink-on-brand, var(--bg)); border: 1px solid var(--brand); font-weight: 600; }
+
 /* ---------------------------------------------------------------- lite client
    The renderer-free surface (client/lite.js). It shares the token sheet above and
    hexes nothing, per docs/MODDING-UI.md: a restyle reaches this the same as it
@@ -1956,7 +1966,7 @@ html.lite .frame.chat-frame > .fr-body { height: auto !important; flex: 1 1 auto
 /* the ∃ leads the top bar and is the way into the 3D world (lite.js) */
 /* on a screen wider than the column the chat gets its side edges back, so it reads as a pane, not a page */
 @media (min-width: 721px) { html.lite .frame.chat-frame { border-left: 1px solid var(--edge); border-right: 1px solid var(--edge); } }
-html.lite #lite-emote-host #hud.emark { position: static; flex: none; width: 44px; height: 44px; border-radius: 10px; color: var(--brand); background: var(--chip); border: 1px solid var(--edge); }
+html.lite #lite-emote-host #hud.emark { position: static; flex: none; width: 44px; height: 44px; padding: 0;   /* the house 9 px side padding left a 24 px box the 30 px mark overflowed to the right (measured 3 px off-centre, owner 10-01) */ border-radius: 10px; color: var(--brand); background: var(--chip); border: 1px solid var(--edge); }
 html.lite #lite-emote-host #hud.emark:active { background: var(--act); }
 html.lite #lite-emote-host #hud.emark:disabled { color: var(--dim); cursor: default; }
 html.lite #lite-emote-host #hud.emark svg { width: 30px; height: 30px; }   /* matched to the emoji glyphs beside it (owner, 10-01) */

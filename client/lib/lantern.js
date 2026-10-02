@@ -190,7 +190,7 @@ function onEnter() {
 // One horizontal axis for the resting line, the hint bar that borrows its spot,
 // and the open panel: the viewport's centre, unless that would sit on the chat
 // frame's compose box — then the centre of the free span beside the frame.
-// A pill MOVED in HUD layout mode (R, 10-01) sits where it was put instead: --ln-x
+// A pill MOVED in HUD layout mode (owner, 10-01) sits where it was put instead: --ln-x
 // and --ln-b carry its centre and bottom to the hint bar too, and the open panel
 // takes its own clamped centre (--ln-px) and hangs DOWN from a pill in the top half.
 // Phones keep the corner glyph (index.html's ≤600px rules); the spot is a desktop one.
@@ -280,7 +280,7 @@ function initPillDrag() {
 
 // ---------------------------------------------------------------- boot
 
-// THE RESTING LINE'S TWO SWITCHES (R, 10-01: "add it as a pin feature for the reverse-E menu … and have it obey
+// THE RESTING LINE'S TWO SWITCHES (owner, 10-01: "add it as a pin feature for the reverse-E menu … and have it obey
 // the 'esc to hide' feature"). PINNED (the default, so nobody who leaves it alone sees a change) = the pill rests
 // bottom-centre; unpinned = no resting pill, but Ctrl/Cmd+K and the rail's search entry still open the lantern —
 // unpinning puts away its resting place, not the command line. QUIET = Esc put the panels away (frames.js

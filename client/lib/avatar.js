@@ -339,7 +339,7 @@ const makeLabel = (name) => {
   labelFont(ctx);
   ctx.textAlign = 'center';
   ctx.fillStyle = tokv('--pill-bg', 'rgba(6,16,22,0.62)');
-  ctx.beginPath(); ctx.roundRect((box.w - box.pillW) / 2, box.top, box.pillW, box.pillH, box.pillH / 2); ctx.fill();   // pill (R, 15:12)
+  ctx.beginPath(); ctx.roundRect((box.w - box.pillW) / 2, box.top, box.pillW, box.pillH, box.pillH / 2); ctx.fill();   // pill (owner, 10-01)
   ctx.fillStyle = tokv('--pill-name', '#8fe8c8');
   ctx.fillText(text, box.w / 2, box.baseline);
   }, box.w, box.h, PLATE_W, true);

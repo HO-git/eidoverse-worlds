@@ -136,7 +136,7 @@ L.openLantern('');
 key('k', { code: 'KeyK', ctrlKey: true });
 check('Ctrl+K in the line closes it (the window\'s capture handler owns the chord)', !L.isLanternOpen());
 
-console.log('LANTERN — the resting line pins from the ∃ menu, and goes quiet with the panels (R, 10-01)');
+console.log('LANTERN — the resting line pins from the ∃ menu, and goes quiet with the panels (owner, 10-01)');
 { const pill = document.getElementById('lantern-pill')!;
   // hidden = a class the sheet turns into display:none (index.html) — the pill's own `display:flex` beats [hidden]
   const resting = () => !pill.classList.contains('unpinned') && !pill.classList.contains('quiet');
@@ -166,7 +166,7 @@ console.log('LANTERN — the resting line pins from the ∃ menu, and goes quiet
   L.setPillPinned(true);
 }
 
-console.log('LANTERN — the resting line moves in HUD layout mode (R, 10-01: "enable grabbing and moving the lantern")');
+console.log('LANTERN — the resting line moves in HUD layout mode (owner, 10-01: "enable grabbing and moving the lantern")');
 { const pill = document.getElementById('lantern-pill')!;
   const root = document.documentElement;
   const v = (k: string) => root.style.getPropertyValue(k);

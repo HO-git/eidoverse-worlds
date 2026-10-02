@@ -247,7 +247,7 @@ try {
     check('…and the hint bar says "panels hidden · Esc to bring back" in the resting line’s place', hid.hint?.shown && /^panels hidden · Esc to bring back$/.test(hid.hintText.trim()) && !hid.pill?.shown,
       JSON.stringify(hid));
     await shot(pg, '15-esc-hidden.png');
-    // the resting line went WITH the panels (R, 10-01: "have it obey the 'esc to hide' feature") — so it stays away
+    // the resting line went WITH the panels (owner, 10-01: "have it obey the 'esc to hide' feature") — so it stays away
     // after the flash is done too, not only while the hint bar borrows its spot
     await sleep(4300);
     const later = { frames: await shown(), hintGone: await pg.evaluate(() => document.getElementById('hintbar').classList.contains('gone')),
@@ -280,7 +280,7 @@ try {
     await sleep(200);
   }
 
-  // UNPIN (R, 10-01: "add it as a pin feature for the reverse-E menu (might need its own logo to differentiate)"): the
+  // UNPIN (owner, 10-01: "add it as a pin feature for the reverse-E menu (might need its own logo to differentiate)"): the
   // ∃ menu's lantern row, in a group of its own after the voice rows, pins the resting line. Unpinned: no pill, but
   // Ctrl+K still opens it.
   { const menuRow = () => pg.evaluate(() => { const r = document.querySelector('#emenu-sub .mrow[data-row="lantern"]');
@@ -428,7 +428,7 @@ try {
     tab: document.getElementById('sec-audio-tab')?.classList.contains('on') ?? null,
     others: [...document.querySelectorAll('.frame[data-frame="settings"] .sec.open')].map((x) => x.id) }));
   check('clicking the "audio" row opens settings on its audio TAB', audio.settings !== 'none' && audio.open === true && audio.tab === true && audio.others.join() === 'sec-audio', JSON.stringify(audio));
-  // MOVE (R, 10-01: "enable grabbing and moving the lantern … in menu-moving mode"): in HUD layout mode the resting line
+  // MOVE (owner, 10-01: "enable grabbing and moving the lantern … in menu-moving mode"): in HUD layout mode the resting line
   // drags like a frame; the hint bar that borrows its spot follows it, the open panel stays on screen (hanging down from
   // a pill in the top half), the spot survives a reload, and reset layout puts it back
   { await pg.mouse.click(900, 300); await sleep(300);   // (not Esc: with nothing open to close, Esc puts the resting line away)

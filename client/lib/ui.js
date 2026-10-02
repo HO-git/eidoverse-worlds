@@ -1050,7 +1050,7 @@ function paintEMenu() {
 /** Every window back where it started, and the lantern's resting line too (it is not a frame, but it moves in
  *  HUD layout mode). The rail's own edge is NOT reset — where you put the rail is your decision (loadDockEdge). */
 export function resetHudLayout() { resetLayout(); resetPillPlace(); }
-// THE LANTERN'S RESTING LINE (R, 10-01: "add it as a pin feature for the reverse-E menu (might need its own logo to
+// THE LANTERN'S RESTING LINE (owner, 10-01: "add it as a pin feature for the reverse-E menu (might need its own logo to
 // differentiate)"). A group of its own between the voice rows and the windows ("It's not *quite* a conventional panel
 // so it can't get docked"): the row opens the lantern, and its pin keeps the pill bottom-centre (lantern.js
 // setPillPinned — its own key, ew-lantern-pinned, like the glyphs'). Unpinned, the lantern is still one chord away.
@@ -1123,7 +1123,7 @@ function buildPanels(s) {
       const row = document.createElement('button');
       row.className = `mrow${open ? '' : ' dead'}`; row.dataset.row = id;
       if (id === SEARCH_ENTRY.id) row.dataset.lanternToggle = '';
-      row.innerHTML = `${fsvgOr(icon, 15)}<span class="mname">${id}</span>`;
+      row.innerHTML = `${fsvgOr(icon, 15)}<span class="mname">${escapeHtml(id)}</span>`;
       if (!open) { row.disabled = true; row.title = `${id} — needs build rights in this world`; }
       else row.onclick = () => { action(); paintDock(); paintEMenu(); };
       // a pin, like any window: pinned = the wrench stays on the rail (live, 09-05). Dead row, dead pin: the CSS
@@ -1138,7 +1138,7 @@ function buildPanels(s) {
     if (!getFrame(id)) continue;   // an entry with no frame behind it (a caller's stale id) gets no row
     const row = document.createElement('button');
     row.className = 'mrow'; row.dataset.row = id;
-    row.innerHTML = `${fsvgOr(icon, 15)}<span class="mname">${id}</span>`;
+    row.innerHTML = `${fsvgOr(icon, 15)}<span class="mname">${escapeHtml(id)}</span>`;
     // click = toggle; the row's brightness IS the open state
     row.onclick = () => { const f = getFrame(id); if (!f) return; f.toggle(); paintDock(); paintEMenu(); };
     row.appendChild(pinButton(id, flipPin(id)));

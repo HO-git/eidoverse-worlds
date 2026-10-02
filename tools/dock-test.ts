@@ -226,7 +226,7 @@ check("voice rows lead: mic, ears, VR", ["glyph:mic", "glyph:ear", "glyph:xr"].e
 check("VR row is dead when no headset is sensed (disabled row + disabled pin)", row("glyph:xr")!.disabled && pin("glyph:xr")!.disabled);
 check("every window with a frame has a row; a frameless entry has none", ["chat", "world", "emotes", "debug", "modx"].every((id) => !!row(id)) && !row("nofrx"));
 check("the wrench has a row while gated open", !!row("edit"));
-{ // THE LANTERN'S RESTING LINE pins from here too (R, 10-01: "add it as a pin feature for the reverse-E menu (might
+{ // THE LANTERN'S RESTING LINE pins from here too (owner, 10-01: "add it as a pin feature for the reverse-E menu (might
   // need its own logo to differentiate), and have it obey the 'esc to hide' feature")
   const L = await import("../client/lib/lantern.js");
   const r = row("lantern"), p = pin("lantern");
@@ -437,8 +437,8 @@ check("...pin it back", btn("chat")!.hidden === false && savedPins().includes("c
 console.log("DOCK — the waterfall: its top level (owner, 10-01)");
 { toggleEMenu(false); toggleEMenu(true);
   const items = [...menu().children].map((c) => (c as HTMLElement).dataset.item ?? (c.className === "msep" ? "|" : "?")).join(" ");
-  check("top level: Save world · Load world | Panels ▸ | Log in · Help · Keys · About ▸ (Settings and Profile stay on the rail)",
-    items === "save load | panels | login help keys about", items);
+  check("top level: Save world · Load world | Panels ▸ · Lite client | Log in · Help · Keys · About ▸ (Settings and Profile stay on the rail)",
+    items === "save load | panels lite | login help keys about", items);
   check("…Panels and About carry a caret and open a flyout; the rest are plain items", top("panels")!.getAttribute("aria-haspopup") === "menu" && top("about")!.getAttribute("aria-haspopup") === "menu" && !top("help")!.hasAttribute("aria-haspopup"));
   check("…the menu is a menu to assistive tech", menu().getAttribute("role") === "menu" && top("help")!.getAttribute("role") === "menuitem");
   // SAVE / LOAD: honest stubs — listed, greyed, and a press says why (no server save points exist; grep, 10-01)

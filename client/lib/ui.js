@@ -228,6 +228,15 @@ document.addEventListener('mouseover', (e) => {
       y = Math.round(r.top + r.height / 2 - th / 2);
       x = Math.round(edge === 'left' ? r.right + 10 : r.left - tw - 10);
     }
+    // a WATERFALL row (the ∃ menu and its flyout) says it beside the menus, level with the row — under the row it
+    // covered the very rows you were moving to (owner, 10-01). Past the rightmost open menu, so a flyout stays clear;
+    // the left side if the right has no room.
+    if (host.closest?.('#emenu, #emenu-sub')) {
+      const menus = ['#emenu', '#emenu-sub'].map((q) => document.querySelector(q)).filter((m) => m && !m.hidden && getComputedStyle(m).display !== 'none')   /* not offsetParent: it is null for any fixed element */.map((m) => m.getBoundingClientRect());
+      const right = Math.max(...menus.map((m) => m.right)), left = Math.min(...menus.map((m) => m.left));
+      y = Math.round(Math.max(4, Math.min(r.top + r.height / 2 - th / 2, innerHeight - th - 4)));
+      x = right + 10 + tw <= innerWidth - 4 ? Math.round(right + 10) : Math.round(left - tw - 10);
+    }
     x = Math.max(4, Math.min(x, innerWidth - tw - 4));
     tip.style.left = `${x}px`; tip.style.top = `${y}px`;
   }, 450);
@@ -950,8 +959,8 @@ function topItems() {
     'sep',
     { id: 'panels', icon: 'layout', label: 'Panels', sub: true },
     // the way down to the light version, asked first (owner, 10-01); back up is the ∃ there
-    { id: 'lite', icon: 'chat-circle', label: 'Light version', detail: 'chat only, no 3D', run: () => confirmCenter({
-      title: 'Switch to the light version?',
+    { id: 'lite', icon: 'chat-circle', label: 'Lite client', title: "the lite client: chat, emotes and who's here, with no 3D world", run: () => confirmCenter({
+      title: 'Switch to the lite client?',
       body: "Chat, emotes and who's here, with no 3D world. Useful on a slow or struggling machine. Click the \u2203 logo there to come back.",
       ok: 'Switch', cancel: 'Stay in 3D',
     }).then((yes) => { if (!yes) return; const u = new URL(location.href); u.searchParams.set('lite', '1'); location.assign(u); }) },
@@ -1028,7 +1037,7 @@ function paintEMenu() {
     pin.setAttribute('aria-pressed', String(on));
     if (pin.disabled) continue;
     pin.title = id === 'lantern'
-      ? (on ? `hide the resting line — ${CHORD} and the rail's search still open the lantern` : 'rest the line bottom-centre again')
+      ? (on ? `hide the resting line — ${CHORD} and the rail's search still open the lighthouse` : 'rest the line bottom-centre again')
       : id.startsWith('glyph:')
       ? (on ? `detach ${pin.dataset.nm} from the rail` : `attach ${pin.dataset.nm} to the rail`)
       : (on ? 'unpin from rail' : 'pin to rail');
@@ -1056,8 +1065,8 @@ function pinButton(id, onclick) {
 function lanternRow() {
   const row = document.createElement('button');
   row.className = 'mrow'; row.dataset.row = 'lantern'; row.dataset.lanternToggle = '';
-  row.innerHTML = `${fsvg(LANTERN_GLYPH, 15)}<span class="mname">lantern</span>`;
-  row.title = `the lantern — type or say anything (${CHORD}). Its pin keeps the resting line bottom-centre; unpinned, ${CHORD} and the rail's search still open it`;
+  row.innerHTML = `${fsvg(LANTERN_GLYPH, 15)}<span class="mname">lighthouse</span>`;
+  row.title = `the lighthouse — type or say anything (${CHORD}). Its pin keeps the resting line bottom-centre; unpinned, ${CHORD} and the rail's search still open it`;
   row.onclick = () => { isLanternOpen() ? closeLantern() : openLantern(); paintEMenu(); };
   row.appendChild(pinButton('lantern', () => setPillPinned(!pillPinned())));
   return row;
@@ -1070,7 +1079,7 @@ function buildPanels(s) {
   const lay = document.createElement('button');
   lay.className = 'mrow'; lay.dataset.layout = ''; lay.setAttribute('role', 'menuitemcheckbox');
   lay.innerHTML = `${fsvg('arrows-out-cardinal', 15)}<span class="mname">HUD layout mode</span>`;
-  lay.title = 'move panels, the rail (its grip) and the lantern\'s resting line — Esc or a click out in the world ends it';
+  lay.title = 'move panels, the rail (its grip) and the lighthouse\'s resting line — Esc or a click out in the world ends it';
   lay.onclick = () => setLayoutMode(!isLayoutMode());
   s.appendChild(lay);
   s.appendChild(sep());
@@ -1143,7 +1152,7 @@ function buildPanels(s) {
   const reset = document.createElement('button');
   reset.className = 'mrow'; reset.dataset.reset = '';
   reset.innerHTML = `${fsvg('sparkle', 15)}<span class="mname">reset layout</span>`;
-  reset.title = 'put every window back where it started, and the lantern\'s resting line';
+  reset.title = 'put every window back where it started, and the lighthouse\'s resting line';
   reset.onclick = () => { resetHudLayout(); paintDock(); paintEMenu(); };
   s.appendChild(reset);
 }

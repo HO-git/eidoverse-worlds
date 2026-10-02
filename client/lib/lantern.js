@@ -303,7 +303,9 @@ function paintRest() {
   pill?.classList.toggle('quiet', quiet);
 }
 
-const EMARK = () => document.querySelector('#hud svg')?.outerHTML.replace(/width="\d+" height="\d+"/, 'width="20" height="20"') ?? '∃';
+// the bar wears the same lighthouse its Panels row does, so the two read as one thing (owner, 10-01: "make sure the
+// icon actually makes it down to the bar"); the ∃ stays the menu's
+const EMARK = () => fsvg('lighthouse', 20) || '∃';
 
 function paintPill() {
   const fresh = pill.classList.contains('fresh');

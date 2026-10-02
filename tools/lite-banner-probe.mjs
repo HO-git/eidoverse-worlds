@@ -119,7 +119,7 @@ try {
     await p.screenshot({ path: SHOT.replace('.png', '-wide.png') });
     await p.setViewportSize({ width: 1100, height: 700 });
   }
-  ok('someone who ASKED for lite (a desktop link) gets the card too, naming the way back', r.lite === true && r.why === 'url' && /This link opens the light version/.test(r.banner ?? '') && /Click the \u2203 Eidoverse logo/.test(r.banner ?? '') /* a mouse clicks */, JSON.stringify(r));
+  ok('someone who ASKED for lite (a desktop link) gets the card too, naming the way back', r.lite === true && r.why === 'url' && /This link opens the lite client/.test(r.banner ?? '') && /Click the \u2203 Eidoverse logo/.test(r.banner ?? '') /* a mouse clicks */, JSON.stringify(r));
   await p.screenshot({ path: SHOT });
   nav = p.waitForURL(/lite=0/, { timeout: 10000 }).then(() => true, () => false);
   await p.locator('#hud').click();
@@ -144,22 +144,30 @@ try {
     ok('…and gets the "last load stalled" pill', chip);
     if (chip) {
       await p.locator('#stchip-lite-retry').click();
-      ok('…which offers the light version as a button', await p.evaluate(() => [...document.querySelectorAll('#stpop button')].some(b => /light version/.test(b.textContent))));
+      ok('…which offers the lite client as a button', await p.evaluate(() => [...document.querySelectorAll('#stpop button')].some(b => /lite client/.test(b.textContent))));
       await p.screenshot({ path: SHOT.replace('.png', '-desktop-retry.png') });
     }
     // the ∃ menu offers the light version, behind a centred confirmation (owner, 10-01)
     await p.keyboard.press('Escape'); await p.waitForTimeout(200);
     const menuRow = async () => { if (!await p.locator('#emenu .mrow[data-item=lite]').isVisible().catch(() => false)) await p.locator('#hud').click(); return p.waitForSelector('#emenu .mrow[data-item=lite]', { timeout: 5000 }).then(() => true, () => false); };
-    ok('∃ menu: a "Light version" item', await menuRow());
+    ok('∃ menu: a "Lite client" item', await menuRow());
     await p.locator('#emenu .mrow[data-item=lite]').click();
     const C = await p.evaluate(() => { const c = document.querySelector('#confirm-center .cc-card')?.getBoundingClientRect(); return c && { cx: Math.round((c.left + c.right) / 2 - innerWidth / 2), cy: Math.round((c.top + c.bottom) / 2 - innerHeight / 2), ok: document.querySelector('#confirm-center .cc-ok').textContent, focus: document.activeElement?.className }; });
     ok('…asks first, in the middle of the screen, Switch focused', !!C && Math.abs(C.cx) <= 2 && Math.abs(C.cy) <= 2 && C.ok === 'Switch' && C.focus === 'cc-ok', JSON.stringify(C));
     await p.keyboard.press('Escape'); await p.waitForTimeout(300);
     ok('…Esc says no: the dialog closes and nothing navigates', await p.evaluate(() => !document.getElementById('confirm-center') && !/lite=1/.test(location.search)));
+    // a waterfall row's tooltip sits BESIDE the menus, never over the rows below it (owner, 10-01)
+    await menuRow(); await p.locator('#emenu .mrow[data-item=save]').hover(); await p.waitForTimeout(800);
+    const T = await p.evaluate(() => { const t = document.getElementById('tipchip'), m = document.getElementById('emenu').getBoundingClientRect(), r = document.querySelector('#emenu .mrow[data-item=save]').getBoundingClientRect(), tr = t.getBoundingClientRect();
+      return { show: t.classList.contains('show'), clear: tr.left >= m.right || tr.right <= m.left, level: Math.abs((tr.top + tr.bottom) / 2 - (r.top + r.bottom) / 2) <= 2 || tr.top <= 6 /* the top row's tall tip is held on screen */, tipTop: Math.round(tr.top) }; });
+    ok('∃ menu: a row\'s tooltip shows beside the menu, level with its row, off the rows', T.show && T.clear && T.level, JSON.stringify(T));
+    await p.mouse.move(5, 600); await p.waitForTimeout(300);
+    ok('…and goes when the pointer leaves the row', await p.evaluate(() => !document.getElementById('tipchip').classList.contains('show')));
+    ok('the bar at the bottom wears the lighthouse (the Panels row\'s icon), not the ∃', await p.evaluate(() => { const g = document.querySelector('#lantern-pill .lp-glyph')?.innerHTML ?? ''; return /M208,80/.test(g) && !/M4\.675 3/.test(g); }));
     await menuRow(); await p.locator('#emenu .mrow[data-item=lite]').click();
     const nav2 = p.waitForURL(/lite=1/, { timeout: 10000 }).then(() => true, () => false);
     await p.locator('#confirm-center .cc-ok').click();
-    ok('…Switch goes to the light version', await nav2 && await p.waitForFunction(() => globalThis.__ewLite === true, null, { timeout: 30000 }).then(() => true, () => false));
+    ok('…Switch goes to the lite client', await nav2 && await p.waitForFunction(() => globalThis.__ewLite === true, null, { timeout: 30000 }).then(() => true, () => false));
     ok('no page errors on the desktop retry', errs.length === 0, errs.join(' | ').slice(0, 200)); await ctx.close();
   }
 } catch (e) { fail++; console.log('PROBE FAILED', e.message); } finally { await b.close(); await world.close(); }

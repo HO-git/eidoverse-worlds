@@ -49,9 +49,9 @@ globalThis.__ewEngineUp = true;
 // back, is worse than the crash was.
 const WHY = globalThis.__ewLiteWhy ?? 'url';
 const WHY_TEXT = {
-  crash: "last time this device opened the full world it didn't come back \u2014 this is the light version",
-  ram: 'this device reports too little memory for the full world \u2014 this is the light version',
-  'no-gpu': 'this browser has no 3D support \u2014 this is the light version',
+  crash: "last time this device opened the full world it didn't come back \u2014 this is the lite client",
+  ram: 'this device reports too little memory for the full world \u2014 this is the lite client',
+  'no-gpu': 'this browser has no 3D support \u2014 this is the lite client',
   saved: 'lite mode \u2014 chat, emotes, and who\u2019s here',
   url: 'lite mode \u2014 chat, emotes, and who\u2019s here',
   default: 'lite mode \u2014 chat, emotes, and who\u2019s here',
@@ -155,12 +155,12 @@ function liteDock(entries, parent = document.body) {
 const TAP = globalThis.matchMedia?.('(pointer: coarse)').matches ? 'Tap' : 'Click';
 const BANNER_TEXT = {
   // WHY, plainly, then the one way in (owner, 10-01: "make sure the notice correctly tells them why").
-  phone: `You're on a phone, so you're in the light version: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
-  crash: `This world didn't finish loading on this device last time, so you're in the light version: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
-  ram: `This device reports low memory, so you're in the light version: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
-  'no-gpu': "This browser has no 3D support, so you're in the light version: chat, emotes and who's here.",
-  saved: `You chose the light version on this device: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
-  url: `This link opens the light version: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
+  phone: `You're on a phone, so you're in the lite client: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
+  crash: `This world didn't finish loading on this device last time, so you're in the lite client: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
+  ram: `This device reports low memory, so you're in the lite client: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
+  'no-gpu': "This browser has no 3D support, so you're in the lite client: chat, emotes and who's here.",
+  saved: `You chose the lite client on this device: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
+  url: `This link opens the lite client: chat, emotes and who's here. ${TAP} the \u2203 Eidoverse logo (top left) to load the full 3D world.`,
 };
 const NO_WAY_IN = new Set(['no-gpu']);
 // The same card as the full client's capability notice (capnotice.js: .panel.capnotice >
@@ -190,7 +190,7 @@ export function liteBanner(why) {
   item.className = 'cn-item';
   // one button: dismiss, and the chat takes the room. The way in is the logo, which the text names.
   item.innerHTML = '<b></b><p></p><div class="cn-btns"><button type="button" class="cn-ok">got it</button></div>';
-  item.querySelector('b').textContent = 'Light version';
+  item.querySelector('b').textContent = 'Lite client';
   item.querySelector('p').textContent = text;
   let ro = null;
   item.querySelector('.cn-ok').addEventListener('click', () => { ro?.disconnect(); card.remove(); liteLayout(); });
@@ -329,11 +329,6 @@ async function main() {
   const mark = document.getElementById('hud');
   if (mark) {
     emoteHost.prepend(mark);
-    // At 30 px the 24 px master's whole-pixel peg (2 units against 3-unit arms) reads thin (owner, 10-01: "compare it
-    // to the big icon"). The big master's peg is exactly as thick as its arms, so here it is scaled straight from it
-    // (sphere (48,50) r40 → (11,12) r11, ×0.275): 3.025 units, the arms' own weight. Nothing at this size snaps anyway.
-    const peg = mark.querySelectorAll('svg path')[2];
-    peg?.setAttribute('d', 'M7.080 10.488 L21.896 10.488 A11 11 0 0 1 21.896 13.512 L7.080 13.512 A4.202 4.202 0 0 1 7.080 10.488 Z');
     if (NO_WAY_IN.has(WHY)) { mark.disabled = true; mark.title = 'eidoverse'; }
     else { mark.title = 'load the full 3D world'; mark.setAttribute('aria-label', 'load the full 3D world'); mark.addEventListener('click', tryFullWorld); }
   }

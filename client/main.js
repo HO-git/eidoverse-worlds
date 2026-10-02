@@ -584,7 +584,7 @@ registerSystem('mods', (dt, t, now) => tickMods(dt, now));       // 🧩 runtime
 registerSystem('remotes', (dt, t, now) => updateRemotes(dt, now));
 registerSystem('gaze', (dt, t, now) => updateGaze(myState.pos, getMe(), CONFIG.name, now));
 // the nameplate ear (who cannot hear you, near) and the hover card beside a plate — after gaze, before render
-initPlates({ camera, canvas, remotes, myPos: () => (getMe() ? myState.pos : null), presenting: () => isPresenting(),
+initPlates({ camera, canvas, scene, remotes, myPos: () => (getMe() ? myState.pos : null), presenting: () => isPresenting(),
   openConvo, colorFor });
 registerSystem('plates', (dt, t, now) => updatePlates(now));
 registerSystem('build', () => updateBuild());

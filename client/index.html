@@ -1464,6 +1464,11 @@ body.photo #hudstatus, body.photo #stpop, body.photo #platecard { display: none 
 #platecard .pc-where { margin-left: auto; padding-left: 8px; font-size: var(--fs-xs); color: var(--dim); flex: none; }
 #platecard .pc-btns { display: flex; gap: 6px; margin-top: 4px; }
 #platecard .pc-btns button { padding: 4px 10px; font-size: var(--fs-xs); }
+/* VR: the same card rasterised onto a quad beside the plate (platecard.js). The quad has no world behind it to blur or
+   see through, so it is opaque like the VR panels; no fade-in (a raster taken mid-fade would keep it); the "message"
+   button opens a desktop tab, so it is not drawn there. */
+#platecard[data-xr] { animation: none; backdrop-filter: none; -webkit-backdrop-filter: none; background: rgb(var(--panel-rgb)); }
+#platecard[data-xr] .pc-btns { display: none; }
 
 #touch { position: fixed; inset: 0; z-index: 3; display: none; pointer-events: none; }
 body.touch #touch { display: block; }

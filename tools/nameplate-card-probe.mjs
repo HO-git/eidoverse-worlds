@@ -362,7 +362,19 @@ try {
     && muteRow.includes('M5.25 3 18.75 21'), muteRow.slice(0, 200));
   check('…it says who, mic off, and can’t hear you (and not the default "present")', /nearmute/.test(k.text) && /mic off/.test(k.text)
     && /can’t hear you/.test(k.text) && !/present/.test(k.text), k.text);
-  check('…beside the plate (right of it, clear of the ear), inside the viewport',
+  // the visor row (owner, 10-02): the HUD's VR glyph, and a peer that starts streaming a tracked body flips it live
+  const xrRow = () => pg.evaluate(() => { const e = document.querySelector('#platecard [data-k="xr"]');
+    return e && { on: e.dataset.on, text: e.textContent, glyph: (e.querySelector('svg')?.innerHTML ?? '').includes('M183.05,56H72') }; });
+  let xr0 = await xrRow();
+  check('…a VR row wearing the visor glyph, "not in VR" for a desktop peer', xr0?.glyph && xr0.on === 'false' && xr0.text === 'not in VR', JSON.stringify(xr0));
+  A.pose = { ...A.pose, xr: { h: [0, 0, 0, 1] } };
+  const until2 = async (fn, ms = 4000) => { const t0 = Date.now(); let v; while (Date.now() - t0 < ms) { v = await fn(); if (v?.ok) return v; await sleep(150); } return v; };
+  const xr1 = await until2(async () => { const r = await xrRow(); return { ok: r?.on === 'true', r }; });
+  check('…which turns to "in VR" when that peer streams a tracked body', xr1?.ok && xr1.r.text === 'in VR', JSON.stringify(xr1));
+  delete A.pose.xr; A.pose = { ...A.pose };
+  const xr2 = await until2(async () => { const r = await xrRow(); return { ok: r?.on === 'false', r }; });
+  check('…and back when it stops', xr2?.ok, JSON.stringify(xr2));
+  check('…beside the plate (right of it), inside the viewport',
     k.side === 'right' && k.l >= (a.ear?.r ?? a.r) && k.l - (a.ear?.r ?? a.r) < 24 && k.inView, JSON.stringify({ k, a }));
   await shot(pg, '71-hover-card.png');
 

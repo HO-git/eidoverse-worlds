@@ -20,7 +20,7 @@
 import * as THREE from 'three';
 import { VOICE_SILENT_M } from './voiceconsent.js';
 import { claimEscape } from './frames.js';
-import { svg } from './icons.js';
+import { svg, fsvg } from './icons.js';
 
 export const HOVER_MS = 300;       // rest this long on a plate before the card opens
 const LEAVE_MS = 250;              // grace to travel from plate to card
@@ -176,9 +176,11 @@ function paint() {
   } else {
     rows.push(`<div class="pc-row" data-k="voice"><span>voice state not shared</span></div>`);
   }
+  // the visor (owner, 10-02: "we should probably include the VR visor icon") — the HUD's own VR glyph
+  rows.push(`<div class="pc-row" data-k="xr" data-on="${!!r.xrOn}">${fsvg('virtual-reality', 14)}<span>${r.xrOn ? 'in VR' : 'not in VR'}</span></div>`);
   // the header's right end: what kind of body and how far — 'present' is the default and says nothing, so only away /
   // busy are named, in their presence colour, after the name
-  const where = [r.agent ? 'agent' : null, r.xrOn ? 'in VR' : null,
+  const where = [r.agent ? 'agent' : null,
     dist == null ? null : `${dist < 10 ? dist.toFixed(1) : Math.round(dist)} m`].filter(Boolean).join(' · ');
   card.innerHTML = `<div class="pc-head"><span class="pc-dot" style="background:${esc(d.colorFor?.(r.id) ?? 'var(--brand)')}"></span>`
     + `<b class="pc-name">${esc(r.id)}</b>`

@@ -136,6 +136,9 @@ const micIsOn = () => {
     return window.relayDiag?.().micPublished ?? micOn();
   } catch { return micOn(); }
 };
+// Mic and hearing state ride the pose packet to everyone in this world, agents included (the owner's decision,
+// 2026-10-02, docs/pose-wire.md "Voice state — who sees it"); the tooltip says so rather than leaving it to the docs.
+const SHARED = '\nmic and hearing on/off are visible to everyone in this world';
 function paint() {
   if (!micBtn) return;
   const on = micIsOn();
@@ -151,6 +154,7 @@ function paint() {
                              : 'push-to-talk armed — hold V to speak')
     : deaf ? 'mic LIVE — but you are not hearing the room (Shift+V to listen)'
     : 'mic LIVE — the world hears you (V)';
+  micBtn.title += SHARED;
   if (xrBtn) {
     const live = xrLive();
     xrBtn.innerHTML = xrAbsent && !live ? XR_SVG(false).replace(new RegExp(INK.off.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), INK.absent) : XR_SVG(live);
@@ -172,6 +176,7 @@ function paint() {
       : isHushed()
         ? 'hushed — voices still arriving, click to listen again mid-sentence'
         : 'hearing voices — click to hush (Audio panel revokes entirely)';
+    earBtn.title += SHARED;
   }
 }
 // hot = your voice is actually registering: a tiny analyser on the mic track,

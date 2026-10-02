@@ -156,7 +156,15 @@ try {
     }
     // the ∃ menu offers the light version, behind a centred confirmation (owner, 10-01)
     await p.keyboard.press('Escape'); await p.waitForTimeout(200);
-    const menuRow = async () => { if (!await p.locator('#emenu .mrow[data-item=lite]').isVisible().catch(() => false)) await p.locator('#hud').click(); return p.waitForSelector('#emenu .mrow[data-item=lite]', { timeout: 5000 }).then(() => true, () => false); };
+    // reopen the REAL menu deterministically (round-3 review: a pointer that left the menu arms ui.js's 450 ms mouse-away
+    // close; a row that still looked visible skipped the reopen and the timer shut the menu under the click). The pointer
+    // goes onto the ∃ first, which disarms that timer; the ∃ is clicked only if the menu is actually hidden (a click on an
+    // open menu toggles it shut); then the row must be VISIBLE, not merely attached. No force-click.
+    const menuRow = async () => {
+      await p.locator('#hud').hover();
+      if (await p.evaluate(() => document.getElementById('emenu')?.hidden !== false)) await p.locator('#hud').click();
+      return p.waitForSelector('#emenu .mrow[data-item=lite]', { state: 'visible', timeout: 5000 }).then(() => true, () => false);
+    };
     ok('∃ menu: a "Lite client" item', await menuRow());
     await p.locator('#emenu .mrow[data-item=lite]').click();
     const C = await p.evaluate(() => { const c = document.querySelector('#confirm-center .cc-card')?.getBoundingClientRect(); return c && { cx: Math.round((c.left + c.right) / 2 - innerWidth / 2), cy: Math.round((c.top + c.bottom) / 2 - innerHeight / 2), ok: document.querySelector('#confirm-center .cc-ok').textContent, focus: document.activeElement?.className }; });
@@ -172,14 +180,14 @@ try {
     ok('…and goes when the pointer leaves the row', await p.evaluate(() => !document.getElementById('tipchip').classList.contains('show')));
     ok('the bar at the bottom wears the lighthouse (the Panels row\'s icon), not the ∃', await p.evaluate(() => { const g = document.querySelector('#lantern-pill .lp-glyph')?.innerHTML ?? ''; return /M208,80/.test(g) && !/M4\.675 3/.test(g); }));
     // Enter on the FOCUSED cancel button cancels (review #212: Enter used to mean yes whatever had focus); Tab stays in the card
-    await menuRow(); await p.locator('#emenu .mrow[data-item=lite]').click();
+    ok('…the menu reopens for the next press', await menuRow()); await p.locator('#emenu .mrow[data-item=lite]').click();
     await p.keyboard.press('Tab');
     const onNo = await p.evaluate(() => document.activeElement?.classList.contains('cc-no'));
     await p.keyboard.press('Tab');
     const backOk = await p.evaluate(() => document.activeElement?.classList.contains('cc-ok'));
     await p.keyboard.press('Tab'); await p.keyboard.press('Enter'); await p.waitForTimeout(500);
     ok('confirm: Tab cycles OK ↔ Cancel inside the card; Enter on Cancel cancels', onNo && backOk && await p.evaluate(() => !document.getElementById('confirm-center') && globalThis.__ewLite === false));
-    await menuRow(); await p.locator('#emenu .mrow[data-item=lite]').click();
+    ok('…and again before the final Switch', await menuRow()); await p.locator('#emenu .mrow[data-item=lite]').click();
     ok('…Switch lands in the lite client and REMEMBERS it (ew-lite=1), address clean', await landedAfter(p, true, () => p.locator('#confirm-center .cc-ok').click()) && await p.evaluate(() => localStorage.getItem('ew-lite') === '1'));
     ok('no page errors on the desktop retry', errs.length === 0, errs.join(' | ').slice(0, 200)); await ctx.close();
   }

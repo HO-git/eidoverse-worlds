@@ -24,6 +24,7 @@ import {
 import { resolveFlight, worldFlightProvider } from "../shared/flightcap.js";
 import { inspectBody } from "../shared/flightbody.js";
 import { wingFoldPresence } from "../shared/wingpresence.js";
+import { clampBodyScale } from "../shared/presencewire.js";
 import { DEFAULT_LEAF_FORCE as LEAF_FORCE } from "../shared/leafforce.js";
 
 /** integrator yaw (atan2(dz,dx), forward = (cos,sin)) -> world yaw
@@ -2693,7 +2694,8 @@ export class WorldAgent {
       const pose = person!.pose;
       const pp = posePosition(pose);
       if (!pp) return { err: `${t.who} has no known position yet` };
-      body.poseAt(pp, pose?.yaw ?? 0, (pose as { pose?: Record<string, number[]> | null })?.pose ?? null);
+      // their chosen size (absent = 1): contacts scale about their root, as in every browser
+      body.poseAt(pp, pose?.yaw ?? 0, (pose as { pose?: Record<string, number[]> | null })?.pose ?? null, pose?.scale);
     }
     const c = body.contact(t.point!, t.standoff ?? 0.02);
     if (!c) return { err: `${t.who}'s rig has no ${t.point}` };
@@ -2993,6 +2995,9 @@ export class WorldAgent {
       entity: (eid) => this.entities.get(eid),
       mount: (eid) => this.mounts.get(eid),
       seatVerdict: (eid) => this.seatVerdictFor(eid),
+      // a rider's chosen size, from its own presence (absent = 1). An agent's own
+      // body is its authored size: no agent sets `scale`, so its wire carries none.
+      riderScale: (eid) => eid === this.name ? 1 : clampBodyScale(this.people.get(eid)?.pose?.scale),
     }, nowMs);
   }
 

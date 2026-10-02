@@ -231,17 +231,6 @@ console.log('avatar.js:');
     check('...on clearances the clamps did not decide (the comparison has a subject)', inside(at15) && inside(atLift), `${at15} ${atLift}`);
     check('...which the size actually moved (the comparison has a subject)', !near(atScale[0], atScale[4], 1e-3), J(atScale));
   }
-  // the deaf mark's two bakes: its live map IS one of them, so each texture must be released exactly once (review 09-30 N6)
-  {
-    const A: any = await import('../client/lib/avatar.js');
-    const counts = new Map<any, number>();
-    const tex = () => { const t = new THREE.Texture(); t.addEventListener('dispose', () => counts.set(t, (counts.get(t) ?? 0) + 1)); return t; };
-    const small = tex(), large = tex();
-    const ear = new THREE.Sprite(new THREE.SpriteMaterial({ map: small })); ear.userData.maps = { small, large };
-    if (typeof A.disposeSprite === 'function') A.disposeSprite(ear);
-    check('disposeSprite releases each texture once, even when the live map is one of the bakes', counts.get(small) === 1 && counts.get(large) === 1,
-      `small ×${counts.get(small) ?? 0}, large ×${counts.get(large) ?? 0}`);
-  }
   // A held reach's limb lengths are measured in the ROOT frame (reachbone.js measureChain), where vrm.scene's size
   // shows: a live resize — the size slider, or the VR fit changing on entering VR — must re-measure them, or the
   // solver keeps bending the old arm (and disagrees with the text tier, whose stand-in re-measures: physics.ts).

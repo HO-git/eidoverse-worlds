@@ -73,15 +73,6 @@ export const revealRamp = (held, t0, k0, now) => Math.min(1, Math.max(0, k0 + (h
 export const revealEase = (r) => r * r * (3 - 2 * r);
 
 
-// ---- the deaf mark's bake ------------------------------------------------------------------------------------
-// avatar.js bakes the mark twice: a small canvas drawn at about the size the mark is on screen from 5 m out, and the
-// 64 px one for close up. Small under MARK_SMALL_BELOW px, large over MARK_LARGE_ABOVE, and between them whatever it
-// was — a mark hovering at the boundary never flickers between the two.
-export const MARK_SMALL_BELOW = 36, MARK_LARGE_ABOVE = 44;
-/** px = the mark sprite's on-screen side in pixels; prev = 'small' | 'large' (or nothing) → which bake to show. */
-export const markBake = (px, prev) => px < MARK_SMALL_BELOW ? 'small' : px > MARK_LARGE_ABOVE ? 'large' : (prev === 'small' ? 'small' : 'large');
-
-
 // ---- the plate's box ----------------------------------------------------------------------------------------
 // avatar.js bakes the name onto a pill on a 512 px wide canvas. The pill is sized from the glyphs' MEASURED ink
 // (canvas measureText actualBoundingBox*), not from the font size (owner, 10-01: descenders touched the pill's edge).

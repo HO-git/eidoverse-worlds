@@ -83,11 +83,6 @@ if (has("plateClear")) {
 }
 
 // the mark's two bakes: small where it is small, large up close, and no flicker at the boundary
-if (typeof P.markBake === "function") {
-  check("mark bake: small at 20 px (5–15 m on 720p), large at 90 px (1 m)", P.markBake(20, "large") === "small" && P.markBake(90, "small") === "large");
-  check("mark bake: hysteresis — at 40 px it keeps whichever it was", P.markBake(40, "small") === "small" && P.markBake(40, "large") === "large");
-  check("mark bake: a first frame in the band starts large", P.markBake(40, undefined) === "large");
-} else check("markBake exists", false);
 
 // the plate's box (owner, 10-01: "only a whisper of room between the g's and the edge"): the pill is sized from the
 // glyphs' measured ink, so the padding is the same above the tallest glyph and below the lowest descender, and a name

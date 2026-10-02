@@ -3,10 +3,11 @@
 // maybe hovering your cursor on their nameplate can pop that info beside their nameplate? … a little like an in-world
 // tooltip").
 //
-// THE EAR: a person who is not hearing voices (their headphones off — `hear: false` on their presence packet,
-// shared/presencewire.js) and is inside voice range of you (VOICE_SILENT_M, the rolloff's silent edge) wears grey
-// crossed-out headphones beside their plate. It is avatar.js's sprite; this only decides who. Far away, nobody hears
-// you anyway; a client too old to say leaves `hear` undefined and gets no ear — unknown is not "can't hear you".
+// VOICE STATE IS HOVER-ONLY (owner, 10-02: "I'd go for hover only"). An earlier pass put grey crossed headphones
+// beside the plate of anyone nearby with hearing off. The headphone toggle gates VOICE only (mic and TTS; world sound
+// is a separate slider), so that mark only mattered to someone speaking aloud and was noise to everyone typing; it
+// is gone. Mic and hearing live in the card below, in words. A client too old to say leaves them undefined and the
+// card reads "not shared" — unknown is not "can't hear you".
 //
 // THE CARD: rest the pointer on a nameplate (or the head under it) for HOVER_MS and a small card opens beside the
 // plate — name, presence, mic and hearing in words, distance / VR / agent, and the one per-person action the people
@@ -15,7 +16,7 @@
 // (A sprite would need its own text rendering, its own hit-testing for the button and a repaint per state change.)
 // On a touch screen a TAP on a plate opens the same card; a tap elsewhere closes it. Esc closes it and goes no
 // further (frames.js's Esc toggle yields to the claim). Leaving plate and card closes a hover-opened card.
-// VR: the ear is a sprite and simply shows; the card is desktop/touch only and closes while presenting.
+// VR: the card is desktop/touch only and closes while presenting (VR has no hover; voice state there waits on a VR affordance).
 import * as THREE from 'three';
 import { VOICE_SILENT_M } from './voiceconsent.js';
 import { claimEscape } from './frames.js';
@@ -23,13 +24,12 @@ import { svg } from './icons.js';
 
 export const HOVER_MS = 300;       // rest this long on a plate before the card opens
 const LEAVE_MS = 250;              // grace to travel from plate to card
-const EAR_EVERY_MS = 200;          // who wears an ear: re-decided at 5 Hz (the fade is per-frame, in avatar.js)
 const HEAD_R = 0.14;               // metres: the head under the plate counts as the plate
 
 let d = null;                      // injected: { camera, canvas, remotes, myPos, presenting, openConvo, colorFor }
 let card = null, cardFor = null, openedBy = null, sig = '';
 let ptr = null;                    // { x, y } in client px while a mouse is over the canvas, else null
-let hoverId = null, hoverSince = 0, leftAt = 0, lastEar = 0;
+let hoverId = null, hoverSince = 0, leftAt = 0;
 let dismissed = null, dismissOff = 0;              // a card closed by hand (Esc, tap-out, its action) stays closed until the pointer leaves that plate
 const _v = new THREE.Vector3(), _h = new THREE.Vector3();
 
@@ -72,10 +72,9 @@ export function initPlates(deps) {
   claimEscape(() => (card.hidden ? null : 'platecard'));
 }
 
-/** Per frame (main.js registers it after gaze): the ear's who, the hover timer, the open card's place. */
+/** Per frame (main.js registers it after gaze): the hover timer, the open card's place. */
 export function updatePlates(now = performance.now()) {
   if (!d) return;
-  if (now - lastEar >= EAR_EVERY_MS) { lastEar = now; decideEars(); }
   if (d.presenting()) { if (!card.hidden) close(); hoverId = null; return; }
   // hover: the same plate for HOVER_MS opens it; leaving plate AND card closes a hover-opened card
   const over = ptr ? hitAt(ptr.x, ptr.y) : null;
@@ -95,16 +94,6 @@ export function updatePlates(now = performance.now()) {
   if (!card.hidden) follow();
 }
 
-function decideEars() {
-  const me = d.myPos();
-  for (const r of d.remotes.values()) {
-    const av = r.avatar;
-    if (!av?.setDeafMark || !av.root) continue;
-    const near = !!me && av.root.position.distanceTo(me) <= VOICE_SILENT_M;
-    av.setDeafMark(near && r.hear === false);
-  }
-}
-
 // ---- where a plate is on screen ------------------------------------------------------------------------------
 // The plate is a camera-facing sprite: its screen rect is its world anchor projected, sized by pixels-per-metre at
 // its view depth. Returns null when it is not drawn (faded out, hidden, behind the camera).
@@ -121,9 +110,6 @@ function plateRect(av, box) {
   const cx = box.left + (_v.x + 1) / 2 * W, cy = box.top + (1 - _v.y) / 2 * H;
   const lw = lab.scale.x;
   const hw = lw * (lab.userData.pill ?? 0.5) / 2 * ppm, hh = lw * (lab.userData.pillH ?? 52 / 512) / 2 * ppm;
-  // the ear, when shown, belongs to the plate too (its right edge is where the card starts): it sits beside the pill,
-  // one gap and its own width further right, at the plate's depth (avatar.js)
-  const ear = av.ear?.visible ? (av.ear.position.distanceTo(lab.position) + av.ear.scale.x / 2) * ppm - hw : 0;
   let head = null;
   if (av.head) {
     av.head.getWorldPosition(_v);
@@ -131,7 +117,7 @@ function plateRect(av, box) {
     if (-_h.z > cam.near) { _v.project(cam); head = _rectHead; head.x = box.left + (_v.x + 1) / 2 * W; head.y = box.top + (1 - _v.y) / 2 * H; head.r = HEAD_R * ppm; }
   }
   const o = _rect;
-  o.l = cx - hw; o.r = cx + hw + Math.max(0, ear); o.t = cy - hh; o.b = cy + hh; o.cx = cx; o.cy = cy; o.depth = depth; o.head = head;
+  o.l = cx - hw; o.r = cx + hw; o.t = cy - hh; o.b = cy + hh; o.cx = cx; o.cy = cy; o.depth = depth; o.head = head;
   return o;
 }
 // plateRect's answer, reused: it runs per remote on every pointer move and every frame the card follows, and every

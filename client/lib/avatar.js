@@ -29,8 +29,8 @@ import { warm, P_GATE } from './warmqueue.js';
 import { heightAt } from './terrain.js';
 import { surfaceUnder } from './colliders.js';
 import { DRIVEN_BONES } from './ragdoll.js';
-import { stroke as strokeIcon, strokeBold } from './icons.js';
-import { plateSize, plateClear, ownClearance, reachAbove, markBake, plateBox, CLEAR_MIN, PLATE_W } from './platesize.js';
+import { stroke as strokeIcon } from './icons.js';
+import { plateSize, plateClear, ownClearance, reachAbove, plateBox, CLEAR_MIN, PLATE_W } from './platesize.js';
 import { revealLevel } from './namereveal.js';
 import { crownEstimate, plateGap, plateAnchor, plateOffset, plateViewLift, STAND_SLOTS, DEAD as PLATE_DEAD } from './plateanchor.js';
 import { clampBodyScale, clampPlateY, plateLift, clipRate } from './bodyscale.js';
@@ -274,7 +274,7 @@ export const SEAT_CLIPS = { ground: 'sitting_on_ground', chair: SEAT_CLIP_FILE }
 
 // THE OWN-BODY CLEARANCE (owner, 09-30: labels hidden by scenery and by OTHER avatars — never by their owner's own
 // body). depthTest:false used to be the cure for a head or a crown of hair eating its own plate, and it also drew
-// every plate through every wall. Now the body-attached sprites (plate, deaf mark, typing pill) ARE depth-tested, but
+// every plate through every wall. Now the body-attached sprites (plate, typing pill) ARE depth-tested, but
 // write their depth as if they stood `userData.plateClear` metres nearer the eye (platesize.js plateClear: the body's
 // measured reach from the plate's anchor, grown past the eye while names are held). Why this and not the others:
 //   · a per-avatar "everything but me" depth pass is a scene render per body;
@@ -312,8 +312,7 @@ function textSprite(draw, w, h, scaleW, clear = false) {
   s.renderOrder = 99;
   return s;
 }
-// the ear's live map is one of its bakes (userData.maps): a Set so each texture is released once
-export const disposeSprite = (s) => { for (const t of new Set([s.material.map, ...Object.values(s.userData.maps ?? {})])) t?.dispose(); s.material.dispose(); };
+export const disposeSprite = (s) => { s.material.map?.dispose(); s.material.dispose(); };
 // a token read at paint time — canvas sprites cannot use var(); a 'style' event repaints them
 const tokv = (n, fb) => (getComputedStyle(document.documentElement).getPropertyValue(n) || fb).trim();
 // every live Avatar, so a Style change can repaint the sprites it baked from
@@ -345,7 +344,7 @@ const makeLabel = (name) => {
   }, box.w, box.h, PLATE_W, true);
   s.userData.aspect = box.h / box.w;   // the sprite's height per metre of width: avatar.js sizes it by width each frame
   s.userData.pillH = box.pillH / box.w;   // the pill's height, as a share of the sprite's width (the hover card's box)
-  s.userData.pill = box.pillW / box.w;   // the pill's share of the sprite's width: the ear and the hover card sit beside IT
+  s.userData.pill = box.pillW / box.w;   // the pill's share of the sprite's width: the hover card sits beside IT
   // Whether the viewer can SEE it, for the hover card (platecard.js): a GPU occlusion query on the plate's own draw,
   // so it is the same depth test the picture passes — walls hide it from the pointer exactly when they hide it from
   // the eye, its own body never does. The answer is a frame or two old (resolved async), and is read where the
@@ -356,46 +355,6 @@ const makeLabel = (name) => {
 };
 function noteOccluded(r) { this.userData.occluded = r.isOccluded(this); }
 
-// THE NAMEPLATE EAR (owner, 09-30: "anyone muted near you can pop up a grayed out ear *next* to their name plate"),
-// drawn as the HUD's own crossed-out headphones (icons.js 'headphonesOff') so it reads as the toggle they flipped:
-// a small separate sprite BESIDE the pill, never the plate restyled — grey, on the pill's own dark disc (a
-// bare grey stroke vanishes against a bright sky), a little taller than the pill so the glyph reads. Placed each frame
-// at the plate's anchor plus the camera's RIGHT (in the body's frame) — beside the plate from every view and in VR.
-// Not Sprite.center: the WebGPU sprite material drew it on the plate's middle (seen in the render, 09-30).
-// THE BOLD FORM (owner, 09-30: at ~10 px the outline glyph blurred into an "A/R"): the sprite is ~20 px on screen from
-// 5 m out (platesize holds the plate at 0.6°, the mark rides it), so it is baked in icons.js's bold weight — heavy
-// band, solid cups, the slash cut out of them — at every distance; up close it still reads as the HUD's picture.
-// The slash's margin is CUT and the disc painted underneath afterwards, so the gap is the disc itself, not a second dark.
-// TWO BAKES of that one form: at 5–15 m the mark is ~20 px on a 720p screen, and a 64 px canvas sampled down 3× sits
-// between mip levels — the render smears it (seen, 09-30). So a small bake at about the size it is drawn (EAR_SMALL_PX,
-// sampled near 1:1) and the 64 px one for close up; platesize.js markBake picks, with hysteresis so it can't flicker.
-const EAR_SMALL_PX = 24;
-const drawEar = (n) => (ctx) => {
-  const k = n / 64;
-  ctx.save();   // the glyph first, on bare canvas; then the disc goes in UNDER it (one coat, so its alpha is the token's)
-  ctx.translate(n / 2, n / 2);
-  ctx.strokeStyle = tokv('--dim', '#97979b');
-  strokeBold(ctx, 'headphonesOff', 44 * k, null);
-  ctx.restore();
-  ctx.globalCompositeOperation = 'destination-over';
-  ctx.fillStyle = tokv('--pill-bg', 'rgba(8,20,28,0.86)');
-  ctx.beginPath(); ctx.arc(n / 2, n / 2, 26 * k, 0, Math.PI * 2); ctx.fill();
-  ctx.globalCompositeOperation = 'source-over';
-};
-const makeEar = () => {
-  const s = textSprite(drawEar(64), 64, 64, 0.9 * 64 / 512, true);
-  const c = document.createElement('canvas');
-  c.width = c.height = EAR_SMALL_PX;
-  drawEar(EAR_SMALL_PX)(c.getContext('2d'));
-  const small = new THREE.CanvasTexture(c);
-  small.colorSpace = THREE.SRGBColorSpace;
-  s.userData.maps = { large: s.material.map, small };
-  s.userData.bake = 'large';
-  return s;
-};
-const EAR_GAP = 0.03;    // metres between pill and ear, at the plate's base size
-const EAR_K = 1.3;       // the ear's side, in units of 64/512 of the plate's width (the plate's height before its pill was padded)
-const _earDir = new THREE.Vector3(), _earQ = new THREE.Quaternion(), _earQ2 = new THREE.Quaternion();
 // what hangs over the plate, in the body's frame: lifts tuned when the plate sat at a fixed 1.95 (bubble 2.3, pill 2.12,
 // pill over a bubble 2.72) — now they ride wherever the plate hangs (plateanchor.js), sitting and lying included
 const BUBBLE_LIFT = 0.35, TYPING_LIFT = 0.17, TYPING_OVER_BUBBLE = 0.77;
@@ -614,7 +573,7 @@ export class Avatar {
     this.root.userData.who = id;        // perf attribution: this subtree is a PERSON (perfscope)
     this.root.add(vrm.scene);
     // THIS BODY's chosen size and plate lift (bodyscale.js; Profile › Avatar). The size lives on vrm.scene, multiplied
-    // with the VR puppet fit, never on the root: the root also carries the plate, the ear, the pill and the bubble,
+    // with the VR puppet fit, never on the root: the root also carries the plate, the pill and the bubble,
     // which platesize.js keeps screen-sized. A pooled VRM may come back still wearing its last owner's size, so the
     // scale is written fresh here, before anything below measures the body.
     this.userScale = 1; this.plateY = 0; this._puppet = 1;
@@ -2016,7 +1975,7 @@ export class Avatar {
    *  whole body (walking up stairs, a jump's root arc, a lift) never makes it trail — only posture changes ease.
    *  Standing (_plateStanding), Y is the rest crown over the root, so a jump clip moving the hips doesn't move it.
    *  Worked in WORLD (up is up even if the root tilts), then written into the root's frame, which is where the plate,
-   *  the deaf mark, the typing pill and the bubble all live. A body with no hips/head hangs it over its rest mesh top;
+   *  the typing pill and the bubble all live. A body with no hips/head hangs it over its rest mesh top;
    *  with nothing at all, at the old fixed 1.95. */
   _placePlate(dt) {
     const r = this._plateRest, sc = this.vrm?.scene, h = this.vrm?.humanoid;
@@ -2063,7 +2022,7 @@ export class Avatar {
 
   /** Slide the hung plate off the head for THIS viewer's camera (plateanchor.js plateViewLift): along the camera's up,
    *  in world, so each client lifts every plate for its own eye and nothing rides the wire. Runs after _placePlate,
-   *  the own-clearance measure and this frame's size; the mark, the pill and the bubble copy the plate after it. */
+   *  the own-clearance measure and this frame's size; the pill and the bubble copy the plate after it. */
   _liftPlateForView(camera) {
     if (this._plateDrop == null) return;
     const lab = this.label, a = _lvArgs;
@@ -2079,7 +2038,7 @@ export class Avatar {
   }
 
   /** Your own plate is for OTHER eyes: hidden while presenting (hideLabel, xr.js selfFirstPerson) and in desktop first
-   *  person (firstPersonView, controller.js updateFollowCamera) — with the mark, the typing pill and the bubble over it. */
+   *  person (firstPersonView, controller.js updateFollowCamera) — with the typing pill and the bubble over it. */
   get ownPlateHidden() { return !!(this.hideLabel || this.firstPersonView); }
 
   /** How far this body reaches from its plate's anchor, as the clearance its body-attached sprites write
@@ -2130,13 +2089,9 @@ export class Avatar {
     return pts;
   }
 
-  /** The nameplate ear: `on` = this person cannot hear you (hearing off, and near enough that it matters). The
-   *  caller decides; the plate only fades the mark in or out beside itself. */
-  setDeafMark(on) { this._earWant = on ? 1 : 0; }
   /** rebuild the nameplate sprite from the current tokens (rename, or a Style change) */
   repaintLabel() {
     const name = this._labelName ?? this.id ?? '';
-    if (this.ear) { this.root.remove(this.ear); disposeSprite(this.ear); this.ear = null; }   // re-baked from the new tokens on its next frame
     const at = this.label.position.clone();   // where the body hangs it (_placePlate); the new sprite takes the same spot
     this.root.remove(this.label);
     disposeSprite(this.label);
@@ -2536,26 +2491,6 @@ export class Avatar {
     this.label.visible = vis > 0.02 && !ownHidden;
     this.label.scale.set(lw, lw * (this.label.userData.aspect ?? 64 / 512), 1);   // scale carries the aspect: the text keeps its size whatever the canvas height
     this._liftPlateForView(camera);   // after the size (the lift clears the pill as drawn), before what hangs off the plate
-    // the headphones beside it: fades toward setDeafMark's wish (the only motion it has), always at the plate's own fade
-    const earWant = (this._earWant ?? 0) * (this.label.visible ? 1 : 0);
-    this._earA = (this._earA ?? 0) + (earWant - (this._earA ?? 0)) * (1 - Math.exp(-dt / 0.12));
-    if (this._earA > 0.01 && !this.ear) { this.ear = makeEar(); this.root.add(this.ear); }
-    if (this.ear) {
-      const ew = lw * 64 / 512 * EAR_K;
-      // the camera's right, expressed in the body's frame (the body turns; the plate faces the camera)
-      _earDir.set(1, 0, 0).applyQuaternion(camera.getWorldQuaternion(_earQ))
-        .applyQuaternion(this.root.getWorldQuaternion(_earQ2).invert());
-      this.ear.position.copy(this.label.position)
-        .addScaledVector(_earDir, lw * (this.label.userData.pill ?? 0.5) / 2 + EAR_GAP * lw / 0.9 + ew / 2);
-      this.ear.scale.set(ew, ew, 1);
-      // which bake: the mark's size on screen, in drawing-buffer pixels (projection's y focal length × half the height)
-      const px = ew * camera.projectionMatrix.elements[5] * (renderer.domElement.height || 720) / 2 / Math.max(0.1, d);
-      const bake = markBake(px, this.ear.userData.bake);
-      if (bake !== this.ear.userData.bake) { this.ear.userData.bake = bake; this.ear.material.map = this.ear.userData.maps[bake]; }
-      this.ear.material.opacity = this._earA * vis;
-      this.ear.visible = this._earA > 0.01;
-      this.ear.userData.plateClear = this.label.userData.plateClear;   // the mark hides and reveals with its plate
-    }
 
     if (this.bubble) {
       if (now > this.bubbleUntil) {
@@ -2619,7 +2554,6 @@ export class Avatar {
     if (this.bubble) disposeSprite(this.bubble);
     if (this.typing) disposeSprite(this.typing);
     disposeSprite(this.label);
-    if (this.ear) disposeSprite(this.ear);
     // The pool resets humanoid rotations/positions, but knows nothing about
     // custom-bone transforms or scale. Return every raw channel we still own
     // before dropping the compose records and handing this VRM to a new wearer.

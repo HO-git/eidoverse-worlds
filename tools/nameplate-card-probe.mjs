@@ -7,9 +7,8 @@
 //
 // What must hold:
 //   the wire — this client's own pose packets carry `mic` and `hear` (booleans), so peers can know;
-//   the ear — grey crossed-out headphones (the HUD's hear glyph, pixel-equal to icons.js 'headphonesOff') sit BESIDE
-//     (right of, level with, not on) the plate of a NEAR peer with hearing off; none for a near peer who hears, none
-//     for a far one (past the voice range) with hearing off; a live flip of `hear` brings it in and fades it out;
+//   hover only (owner, 10-02) — nothing is drawn beside a plate for voice state: a NEAR peer with hearing off wears no
+//     mark, and a live flip of `hear` changes no pixel beside the plate (measured in the render); the card says it;
 //   the plate's size — its width and fade are platesize.js's answer for the world distance (tools/platesize-test.ts
 //     holds the curve itself);
 //   occlusion (MEASURED IN THE RENDER) — plate, mark and typing pill are depth-tested sprites cleared of their own body:
@@ -109,7 +108,6 @@ const readers = () => {
 const plate = (pg, id) => pg.evaluate((id) => __plateOf(id), id);
 const cardState = (pg) => pg.evaluate(() => __card());
 const both = (pg, id) => pg.evaluate((id) => ({ k: __card(), a: __plateOf(id) }), id);
-const earOn = (pl) => !!pl?.ear?.vis && pl.ear.op > 0.5;
 const earOff = (pl) => !pl?.ear || !pl.ear.vis || pl.ear.op < 0.05;
 
 
@@ -145,44 +143,9 @@ try {
     mine && typeof mine.mic === 'boolean' && typeof mine.hear === 'boolean', JSON.stringify(mine && { mic: mine.mic, hear: mine.hear }));
 
   let a = await plate(pg, 'nearmute'), b = await plate(pg, 'nearhear'), c = await plate(pg, 'farmute');
-  check('ear: a NEAR peer with hearing off wears it', earOn(a), JSON.stringify(a));
-  check('…beside the plate, not on it: right of the pill, level with it', a?.ear && a.ear.l >= a.r && a.ear.l - a.r < 20
-    && Math.abs((a.ear.t + a.ear.b) / 2 - a.y) < 3 && a.ear.b - a.ear.t <= (a.b - a.t) * 1.8, JSON.stringify(a));
-  // THE GLYPH: the sprite's own canvas is the HUD's crossed-out headphones in their BOLD small-size form (icons.js
-  // strokeBold 'headphonesOff': heavy band, solid cups, knocked-out slash), not the outline glyph that blurred at 10 px
-  const glyph = await pg.evaluate(async () => {
-    const { stroke, strokeBold } = await import('/lib/icons.js');
-    if (typeof strokeBold !== 'function') return { err: 'no strokeBold in icons.js' };
-    const src = EW.remotes.get('nearmute')?.avatar?.ear?.userData?.maps?.large?.image;   // the close-up (64 px) bake
-    if (!src?.getContext) return { err: 'no ear canvas' };
-    const got = src.getContext('2d').getImageData(0, 0, 64, 64).data;
-    const disc = getComputedStyle(document.documentElement);
-    const bg = (disc.getPropertyValue('--pill-bg') || 'rgba(8,20,28,0.86)').trim(), ink = (disc.getPropertyValue('--dim') || '#97979b').trim();
-    const outline = (name) => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d');
-      x.fillStyle = bg; x.beginPath(); x.arc(32, 32, 26, 0, Math.PI * 2); x.fill();
-      x.translate(32, 32); x.scale(2, 2); x.strokeStyle = ink; stroke(x, name, 17);
-      return x.getImageData(0, 0, 64, 64).data; };
-    const bold = () => { const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d');
-      x.save(); x.translate(32, 32); x.strokeStyle = ink; strokeBold(x, 'headphonesOff', 44, null); x.restore();
-      x.globalCompositeOperation = 'destination-over'; x.fillStyle = bg; x.beginPath(); x.arc(32, 32, 26, 0, Math.PI * 2); x.fill();
-      return x.getImageData(0, 0, 64, 64).data; };
-    const diff = (a) => { let n = 0; for (let i = 3; i < a.length; i += 4) if (Math.abs(a[i] - got[i]) > 40 || Math.abs(a[i - 3] - got[i - 3]) > 40) n++; return n; };
-    return { vsBold: diff(bold()), vsOutline: diff(outline('headphonesOff')), vsOn: diff(outline('headphones')) };
-  }).catch((e) => ({ err: String(e).slice(0, 160) }));
-  check('ear glyph: the sprite IS the bold crossed-out headphones (pixel-equal to icons.js strokeBold; ≠ the outline form)',
-    glyph.vsBold === 0 && glyph.vsOutline > 20 && glyph.vsOn > 20, JSON.stringify(glyph));
-  // THE BAKE: the mark shows its small (near-1:1) bake when it is small on screen, per platesize.js markBake
-  const bake = await pg.evaluate(async () => {
-    const { markBake } = await import('/lib/platesize.js');
-    const av = EW.remotes.get('nearmute')?.avatar, ear = av?.ear;
-    if (!ear?.userData?.maps) return { err: 'no bakes' };
-    const e = new EW.THREE.Vector3(); EW.camera.getWorldPosition(e); const d = av.root.position.distanceTo(e);
-    const px = ear.scale.x * EW.camera.projectionMatrix.elements[5] * EW.renderer.domElement.height / 2 / d;
-    return { px, bake: ear.userData.bake, want: markBake(px, ear.userData.bake), shown: ear.material.map === ear.userData.maps[ear.userData.bake],
-      small: ear.userData.maps.small.image.width };
-  }).catch((e) => ({ err: String(e).slice(0, 160) }));
-  check('ear bake: the one on screen is markBake(its on-screen size); the small bake is a ~1:1 canvas',
-    !bake.err && bake.bake === bake.want && bake.shown && bake.small <= 32, JSON.stringify(bake));
+  // HOVER ONLY (owner, 10-02): voice state draws nothing beside a plate, near or far, hearing or not
+  check('no mark: a NEAR peer with hearing off wears nothing beside the plate', earOff(a) && a?.hear === false
+    && await pg.evaluate(() => !EW.remotes.get('nearmute')?.avatar?.ear), JSON.stringify(a));
   // THE SIZE: the plate's width is platesize.js's answer for the world distance this frame (the wiring, not the math)
   const size = await pg.evaluate(async () => {
     const { plateSize } = await import('/lib/platesize.js');
@@ -226,15 +189,15 @@ try {
   check('bake: …balanced above and below (within 4 px), and a name of capitals bakes to the same height',
     bg2 && bH && Math.abs(bg2.above - bg2.below) <= 4 && bH.h === bg2.h && bH.above >= 9, JSON.stringify({ bg2, bH }));
   check('bake: the sprite\'s height follows its canvas (scale y / x = canvas h / w)', plateBake?.scaleOk === true, JSON.stringify(plateBake?.near));
-  check('ear: none for a near peer who hears', earOff(b), JSON.stringify(b?.ear));
-  check('ear: none for a FAR peer (past voice range) with hearing off', earOff(c) && c?.hear === false, JSON.stringify(c));
-  await shot(pg, '70-ear-near.png');
+  check('no mark: none for a near peer who hears, none for a far one with hearing off', earOff(b) && earOff(c) && c?.hear === false,
+    JSON.stringify({ b: b?.ear, c: c?.ear }));
+  await shot(pg, '70-no-mark-near.png');
 
-  // live: the hearing peer turns voices off → the ear fades in; back on → it fades out
+  // live: the hearing peer turns voices off → NOTHING appears beside the plate (the card still knows)
   // (headless software GL runs a few frames a second, so these poll up to 4 s rather than trusting one sleep)
   const until = async (fn, ms = 4000) => { const t0 = Date.now(); let v; while (Date.now() - t0 < ms) { v = await fn(); if (v.ok) return v; await sleep(150); } return v; };
-  // MEASURE THE RENDER, not the arithmetic: a region around the hearing peer's plate captured with the ear off and on;
-  // what changed must be grey ear pixels, right of the pill and level with it — and the pill itself must not change
+  // MEASURE THE RENDER, not the arithmetic: a region around the hearing peer's plate captured with hearing on and off;
+  // no neutral-grey pixel may change beside the pill (the old mark's ink) — absence, measured where it used to draw
   // the peer's idle clip and its hair's springs move pixels too: hold that body still for the two captures
   await pg.evaluate(() => { const av = EW.remotes.get('nearhear').avatar; av.mixer.timeScale = 0; });
   await sleep(1500);   // springs settle
@@ -242,11 +205,12 @@ try {
   const clip = { x: Math.floor(b0.l - 30), y: Math.floor(b0.t - 30), width: Math.ceil(b0.r - b0.l + 110), height: Math.ceil(b0.b - b0.t + 60) };
   const capOff = (await pg.screenshot({ clip })).toString('base64');
   B.pose = { ...B.pose, hear: false };
-  let fl = await until(async () => { const pl = await plate(pg, 'nearhear'); return { ok: earOn(pl), pl }; });
-  check('ear: a live flip to hearing off brings it in', fl.ok, JSON.stringify(fl.pl?.ear));
-  await sleep(300);
+  let fl = await until(async () => { const pl = await plate(pg, 'nearhear'); return { ok: pl?.hear === false, pl }; });
+  check('the flip arrived: the client holds hear:false for that peer', fl.ok, JSON.stringify(fl.pl));
+  // count RENDERED frames, not ms: headless software GL draws a few a second, and the old mark took 5 Hz + a fade
+  await pg.evaluate(() => new Promise((r) => { let n = 0; const f = () => (++n >= 40 ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); }));
   const capOn = (await pg.screenshot({ clip })).toString('base64');
-  if (shotDir) { const { writeFileSync } = await import('node:fs'); writeFileSync(`${shotDir}/70b-ear-off-crop.png`, Buffer.from(capOff, 'base64')); writeFileSync(`${shotDir}/70c-ear-on-crop.png`, Buffer.from(capOn, 'base64')); }
+  if (shotDir) { const { writeFileSync } = await import('node:fs'); writeFileSync(`${shotDir}/70b-hearing-crop.png`, Buffer.from(capOff, 'base64')); writeFileSync(`${shotDir}/70c-not-hearing-crop.png`, Buffer.from(capOn, 'base64')); }
   const px = await pg.evaluate(async ([a, b]) => {
     const load = async (b64) => { const bm = await createImageBitmap(await (await fetch(`data:image/png;base64,${b64}`)).blob());
       const c = new OffscreenCanvas(bm.width, bm.height), x = c.getContext('2d'); x.drawImage(bm, 0, 0); return x.getImageData(0, 0, bm.width, bm.height); };
@@ -261,12 +225,10 @@ try {
     return { n, l, r, t, b: bt };
   }, [capOff, capOn]);
   const pl = fl.pl, rel = { l: px.l + clip.x, r: px.r + clip.x, t: px.t + clip.y, b: px.b + clip.y };
-  check('ear (render): grey pixels appear, right of the pill, level with it — the pill untouched',
-    px.n >= 6 && rel.l >= pl.r - 3 && rel.l - pl.r < 20 && rel.t < pl.b + 2 && rel.b > pl.t - 2, JSON.stringify({ px, rel, plate: { l: pl.l, r: pl.r, t: pl.t, b: pl.b } }));
+  check('no mark (render): no grey pixel changes beside the pill when hearing goes off',
+    px.n < 6 || !(rel.l >= pl.r - 3 && rel.l - pl.r < 20 && rel.t < pl.b + 2 && rel.b > pl.t - 2), JSON.stringify({ px, rel, plate: { l: pl.l, r: pl.r, t: pl.t, b: pl.b } }));
   await pg.evaluate(() => { EW.remotes.get('nearhear').avatar.mixer.timeScale = 1; });
   B.pose = { ...B.pose, hear: true };
-  fl = await until(async () => { const pl = await plate(pg, 'nearhear'); return { ok: earOff(pl), pl }; });
-  check('…and back on fades it out', fl.ok, JSON.stringify(fl.pl?.ear));
 
   // ---- OCCLUSION + HOLD-TO-REVEAL, measured in the render ---------------------------------------------------------
   // the materials: body-attached sprites are depth-tested node sprites with the own-body depth pull; bubbles stay on top
@@ -275,13 +237,12 @@ try {
     av.say?.('hello there');
     const m = (s) => s && { node: !!s.material.isSpriteNodeMaterial, dt: s.material.depthTest, dw: s.material.depthWrite, dn: !!s.material.depthNode, clear: s.userData.plateClear };
     av._typingUntil = performance.now() + 60000; av._typingState = 'mic';   // a live mic stacks ABOVE a bubble (a composing pill would give way to it)
-    return { label: m(av.label), ear: m(av.ear), bubble: av.bubble ? { dt: av.bubble.material.depthTest } : null };
+    return { label: m(av.label), bubble: av.bubble ? { dt: av.bubble.material.depthTest } : null };
   });
   await sleep(600);
   const typ = await pg.evaluate(() => { const t = EW.remotes.get('nearmute').avatar.typing; return t && { node: !!t.material.isSpriteNodeMaterial, dt: t.material.depthTest, dn: !!t.material.depthNode, clear: t.userData.plateClear }; });
-  check('occlusion: plate and mark are depth-tested node sprites carrying the own-body depth pull (no depth writes)',
-    mats.label?.node && mats.label.dt === true && mats.label.dw === false && mats.label.dn && mats.label.clear >= 0.3
-    && mats.ear?.node && mats.ear.dt === true && mats.ear.dn, JSON.stringify(mats));
+  check('occlusion: the plate is a depth-tested node sprite carrying the own-body depth pull (no depth writes)',
+    mats.label?.node && mats.label.dt === true && mats.label.dw === false && mats.label.dn && mats.label.clear >= 0.3, JSON.stringify(mats));
   check('…the typing pill too (clearance ≥ the plate’s: it sits above it)', typ?.node && typ.dt === true && typ.dn && typ.clear >= mats.label.clear, JSON.stringify(typ));
   check('…speech bubbles stay on top (depthTest off)', mats.bubble?.dt === false, JSON.stringify(mats.bubble));
   await pg.evaluate(() => { const av = EW.remotes.get('nearmute').avatar; av._typingUntil = 0; });

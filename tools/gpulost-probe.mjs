@@ -1,12 +1,14 @@
 // gpulost-probe — real Chromium: kill the WebGL context (WEBGL_lose_context), expect a reload into the
-// same world without ?xr=1 and a 'Graphics reset' card; kill it again inside 2 min, expect NO reload
-// and a 'Graphics lost again' card.   bun tools/gpulost-probe.mjs   (an owned server; SHOT=<png> saves the last frame)
+// same world without ?xr=1 and a red 'graphics reset' status chip (statuschips.js); kill it again inside 2 min, expect
+// NO reload and a red 'graphics lost ×2' chip that opens itself ('Graphics lost again') and replaces the reset chip.   bun tools/gpulost-probe.mjs   (an owned server; SHOT=<png> saves the last frame)
 import { launchBrowser, ownedWorld, checker } from './probe-harness.mjs';
 const { check: ok, done } = checker();
 const world = await ownedWorld({});
 const { browser, page } = await launchBrowser();
 try {
   const p = await page(); const errs = [], tees = [];
+  // THE SKY GUARD, before any module reads localStorage (sky.js): a cloudy sky in headless has frozen the host
+  await p.context().addInitScript(() => { try { localStorage.setItem('ew-cloud-quality', 'off'); } catch {} });
   p.on('pageerror', (e) => errs.push(e.message));
   p.on('console', (m) => { if (/\[gpu\]/.test(m.text())) tees.push(m.text()); });
   const booted = () => p.waitForFunction(() => globalThis.__gpuLost && globalThis.EW?.renderer, null, { timeout: 90000 });
@@ -21,13 +23,21 @@ try {
   ok('…into the same world, without the XR boot flag', /world=gpulost/.test(p.url()) && !/[?&]xr=/.test(p.url()), p.url());
   await p.waitForTimeout(3000);
   for (const t of ['go in anyway']) { const x = p.getByText(t, { exact: true }); if (await x.isVisible().catch(() => false)) await x.click(); }
-  const card1 = await p.evaluate(() => [...document.querySelectorAll('.capnotice .cn-item')].map((i) => i.textContent).join(' | '));
-  ok("…and says why on the capability card ('Graphics reset')", /Graphics reset/.test(card1), card1.slice(0, 160));
+  const chipOf = (id) => p.evaluate((i) => { const c = document.getElementById(`stchip-${i}`); return c ? { label: c.textContent.trim(), level: c.dataset.level } : null; }, id);
+  const c1 = await chipOf('gpu-recovered');
+  ok("…and says why: a RED 'graphics reset' status chip", c1?.level === 'err' && /^graphics reset/.test(c1.label), JSON.stringify(c1));
+  await p.click('#stchip-gpu-recovered'); await p.waitForTimeout(200);
+  const pop1 = await p.evaluate(() => document.getElementById('stpop')?.textContent ?? '');
+  ok("…whose popover gives the reason ('Graphics reset' … 'webgl context lost')", /Graphics reset/.test(pop1) && /webgl context lost/.test(pop1), pop1.slice(0, 160));
+  await p.keyboard.press('Escape');
   const nav2 = p.waitForEvent('framenavigated', { timeout: 6000 }).then(() => true, () => false);
   await kill();
   ok('a second loss inside 2 min does NOT reload (no loop)', !(await nav2));
-  const card2 = await p.evaluate(() => [...document.querySelectorAll('.capnotice .cn-item')].map((i) => i.textContent).join(' | '));
-  ok("…and says so ('Graphics lost again')", /Graphics lost again/.test(card2), card2.slice(0, 160));
+  await p.waitForTimeout(300);
+  const c2 = await chipOf('gpu-stop'), pop2 = await p.evaluate(() => { const q = document.getElementById('stpop'); return q && !q.hidden ? q.textContent : ''; });
+  ok("…and says so: a RED 'graphics lost ×2' chip, its text already open ('Graphics lost again', no 'don’t show again')",
+    c2?.level === 'err' && c2.label === 'graphics lost ×2' && /Graphics lost again/.test(pop2) && !/show again/.test(pop2), JSON.stringify({ c2, pop2: pop2.slice(0, 120) }));
+  ok('…replacing the reset chip (one chip for the GPU)', !(await chipOf('gpu-recovered')));
   ok('no page errors', errs.length === 0, errs.slice(0, 3).join(' | '));
   console.log('  · tees:', tees.join(' ;; ').slice(0, 300));
   if (process.env.SHOT) await p.screenshot({ path: process.env.SHOT });

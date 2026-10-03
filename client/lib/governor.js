@@ -62,6 +62,14 @@ import { setGrassDensity, getGrassDensity, hasGrass } from './terrain.js';
 import { setLodBias } from './remotes.js';
 import { setSystemEvery, getSystemEvery } from './frame.js';
 import { toast } from './ui.js';
+import { statusChip, clearStatusChip } from './statuschips.js';
+
+// the governor's model-detail shed, as a status chip (statuschips.js) for exactly as long as it holds
+export const REDUCED_CHIP = {
+  id: 'quality-reduced', level: 'attn', label: 'reduced detail', title: 'Distant objects reduced',
+  body: 'The frame rate dipped, so objects at middle distance load a lighter version to keep it. ' +
+        'Full detail comes back on its own once the frame rate recovers — this chip goes with it.',
+};
 
 // ---- the resident's render-scale dial (§22k) --------------------------------
 // The §22j A/B proved pixel-bound machines exist; the cruise answers them
@@ -256,12 +264,15 @@ const LEVERS = [
     shed() {
       if (modelQuality.shed || modelQuality.quality !== 'auto') return false;
       modelQuality.setShed(true);
-      toast('distant objects reduced to keep the frame rate', 'warn', 8000);
+      // a STATE, not an event: the chip stays while the reduction is in effect and goes when restore() lifts it (a
+      // toast said it once and was gone while the world stayed reduced)
+      statusChip(REDUCED_CHIP);
       return true;
     },
     restore() {
       if (!modelQuality.shed) return false;
       modelQuality.setShed(false);
+      clearStatusChip(REDUCED_CHIP.id);
       return true;
     },
   },

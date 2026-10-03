@@ -17,6 +17,7 @@ import { decideBackend } from './backend_choice.js';
 import { headsetSeenRecently as _headsetSeenRecently, migrateHeadsetSeen as _migrateHeadsetSeen } from './headset_seen.js';
 import { guardPixelRatioInXR } from './xrpixelratio.js';
 import { separateXRPass } from './xrpass.js';
+import { tolerateNullXRFramebuffer } from './xr_nullfb.js';
 import { patchShadowNodeForXR } from './xrshadow.js';
 import { installSyncGate } from './syncgate.js';
 
@@ -182,6 +183,8 @@ if (globalThis.__xrCtx) { const a = _xrGl?.getContextAttributes(); Object.assign
 // VR enter/exit: stereo renders keep their own render objects, so the switch never rebuilds either variant (xrpass.js).
 // Inert without a stereo camera, so every boot gets it — sessions can start from a non-XR boot too.
 globalThis.__xrPassSplit = separateXRPass(renderer);
+// An emulator's null eye framebuffer is the default framebuffer, not a WeakMap key (xr_nullfb.js). Installs only for a session whose layer has one — never on hardware.
+globalThis.__xrNullFb = tolerateNullXRFramebuffer(renderer);
 // No pipeline links on the render path: a missed warm pops in late instead of freezing the browser (syncgate.js). ?syncgate=0 = census only.
 globalThis.__syncGate = installSyncGate(renderer, { tee: (l, now) => (now ? teeNow(l) : tee(l)), gate: CONFIG.params.get('syncgate') !== '0' });
 // A lost context (GPU watchdog reset, driver crash) goes back to the live world instead of a black canvas (gpulost.js).

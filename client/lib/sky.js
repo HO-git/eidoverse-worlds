@@ -384,14 +384,32 @@ export async function applySky(args = {}, ts) {
   // folded args carry their own ts (the shared fold stamps it); the param
   // stays as a fallback for un-folded callers like the tuner's preview path
   clock = { args: { ...args }, t0: args.ts ?? ts ?? Date.now() };
+  logged = { args: clock.args, t0: clock.t0 };
+  previewing = false;
   await render();
 }
 
 /** Local preview (the tuner) — same path, no new epoch. */
 export async function previewSky(args) {
   clock = { args: { ...args }, t0: clock?.t0 ?? Date.now() };
+  previewing = true;
   await render();
 }
+
+// What the LOG says, apart from what this client draws: a preview replaces `clock` but never `logged`.
+let logged = null, previewing = false, rendering = 0;
+export const loggedSky = () => logged;
+export const skyPreviewing = () => previewing;
+// 'sky-busy' comes from the sky's own arrival (a stand-in gradient, a tier swap compiling): loading too. Harmless unheard.
+let arriving = false;
+bus.on('sky-busy', (b) => { arriving = !!b; bus.emit('sky-state'); });
+// A render only reads as 'loading…' once it has run past LOAD_SHOW_MS: a rated sky, a real clock or a forecast re-render
+// every second and finish in a frame, and flashing the line at 1 Hz re-rasterised the whole World panel in VR
+// (review 3, M3 / U1). Real builds and swaps take seconds, so they still show.
+const LOAD_SHOW_MS = 400;
+let renderSince = 0;
+export const skyRendering = () => arriving || (rendering > 0 && performance.now() - renderSince >= LOAD_SHOW_MS);
+export const skyDegraded = () => degrade >= 2;
 
 function nowHours() {
   // the shared formula — the fold's hours-rebase on weather verbs uses the
@@ -420,7 +438,15 @@ const MAX_SKY_BUILDS = 2;
 // its own idea of how degraded things are, and each building its own sky.
 let renderChain = Promise.resolve();
 function render() {
+  bus.emit('sky-state');   // the log/preview state changed (readers write only on change)
+  if (rendering++ === 0) {
+    renderSince = performance.now();
+    const at = renderSince;
+    setTimeout(() => { if (rendering > 0 && renderSince === at) bus.emit('sky-state'); }, LOAD_SHOW_MS + 10);
+  }
   renderChain = renderChain.then(renderOnce, renderOnce);
+  const done = () => { rendering--; bus.emit('sky-state'); };
+  renderChain.then(done, done);
   return renderChain;
 }
 
@@ -802,8 +828,8 @@ async function worldSettled() {
   teeNow(`[sky] world settled after ${((performance.now() - t0) / 1000).toFixed(1)} s: compiling the sky now`);
 }
 // 'sky-busy' (true/false): the sky is still arriving here (the stand-in gradient is up, or a tier swap is compiling or
-// baking). Its one listener today is xr.js's entry curtain, which waits on it (capped at 15 s); no panel shows it
-// (review 10b L2: this comment used to promise a 'loading…' in the World › sky panel that nothing wires).
+// baking). Two listeners: xr.js's entry curtain, which waits on it (capped at 15 s), and the `arriving` flag above,
+// which feeds skyRendering() and so the World › sky panel's "you: loading…".
 let swapping = 0, busyShown = false;
 function announceBusy() {
   const b = interimSkyShown() || swapping > 0 || bakedRefreshing();

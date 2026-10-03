@@ -26,9 +26,9 @@ let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log("  FAIL", m); } };
 
 // a VRM-shaped humanoid: hips→spine→chest→upperChest→neck→head; shoulders off upperChest; arms along ±X
-function humanoid() {
+function humanoid(scale = 1) {
   const mk = (name: string, x: number, y: number, z: number, parent?: any) => { const o = new THREE.Object3D(); o.name = name; o.position.set(x, y, z); parent?.add(o); return o; };
-  const scene = new THREE.Object3D();
+  const scene = new THREE.Object3D(); scene.scale.setScalar(scale);
   const hips = mk('hips', 0, 0.95, 0, scene), spine = mk('spine', 0, 0.1, 0, hips), chest = mk('chest', 0, 0.12, 0, spine), upperChest = mk('upperChest', 0, 0.12, 0, chest);
   const neck = mk('neck', 0, 0.12, 0, upperChest), head = mk('head', 0, 0.08, 0, neck);
   const bones: Record<string, any> = { hips, spine, chest, upperChest, neck, head };
@@ -220,6 +220,25 @@ const ident = new THREE.Quaternion();
   for (let i = 0; i < 10; i++) o = step(L, R);   // landing: targets back on the floor, still no x/z change
   ok(Math.abs(o.L.pos.y - L.y) < 1e-6 && Math.abs(o.R.pos.y - R.y) < 1e-6, `both feet back on the floor after landing without an x/z step (L ${o.L.pos.y.toFixed(3)}, R ${o.R.pos.y.toFixed(3)})`);
   ok(!g.L.step && !g.R.step, 'no step was needed to come down');
+}
+
+// 8. A SCALED BODY (review 09-30 B1). vrm.scene wears the chosen size × the VR fit (u/k), so the bones' local offsets
+//    are not world lengths; targets are world. Lengths read model-local put the hand up to ~80 cm off the grip at u=2.
+//    Reaches are a fraction of THIS body's chain; the leg plants a foot a scaled step ahead.
+for (const u of [0.5, 1.5, 2]) {
+  const v = humanoid(u); const sh = v.bones.rightUpperArm.getWorldPosition(new THREE.Vector3()), chain = 0.54 * u;
+  for (const frac of [0.45, 0.8, 0.95]) {
+    const t = sh.clone().add(new THREE.Vector3(-0.4, 0.1, 0.8).normalize().multiplyScalar(chain * frac));
+    solveArm(v, 'right', t, ident, { dt: 1 / 72, torso: { ...torsoOf(v), r: 0.12 * u } }); v.scene.updateMatrixWorld(true);
+    const err = handAt(v, 'right').distanceTo(t);
+    ok(err < 0.02 * u, `scale ${u}, reach ${frac * 100}% of the chain: hand on target (err ${(err * 100).toFixed(1)} cm)`);
+  }
+  const c: any = makeCapsuleVrm(); c.scene.scale.setScalar(u); c.scene.updateMatrixWorld(true);
+  const foot = c.humanoid.getNormalizedBoneNode('leftFoot').getWorldPosition(new THREE.Vector3());
+  const t = foot.clone(); t.y += 0.03 * u; t.z += 0.12 * u;
+  solveLeg(c, 'left', t, 0); c.scene.updateMatrixWorld(true);
+  const err = c.humanoid.getNormalizedBoneNode('leftFoot').getWorldPosition(new THREE.Vector3()).distanceTo(t);
+  ok(err < 0.06 * u, `scale ${u}: foot near its target (err ${(err * 100).toFixed(1)} cm)`);
 }
 
 console.log(`${pass} passed, ${fail} failed`);

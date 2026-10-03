@@ -809,7 +809,7 @@ export function perfscopeOff() {
 }
 
 /** Mount the panel into a debug stack. Idempotent per stack: a plain mount
- *  upgrades in place when a collapsible `section(parent, title, build)` is
+ *  upgrades in place when a grouped `section(parent, title, build)` (a debug tab's group) is
  *  offered later; a section mount is never duplicated. */
 export function mountPerfPanel(stack, { toast = console.log, section = null } = {}) {
   const cur = stack.__perfMount;

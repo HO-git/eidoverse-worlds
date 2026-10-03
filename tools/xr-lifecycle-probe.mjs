@@ -121,7 +121,8 @@ const reports = [], artifacts = [], consoleTail = [];
 // KNOWN EMULATOR ARTIFACT, disclosed not hidden: IWER's XRWebGLLayer.framebuffer returns null by design
 // (lib/layers/XRWebGLLayer.js:44-46 — it draws to the default framebuffer); a real runtime returns an opaque
 // WebGLFramebuffer. three's WebGL backend keys a WeakMap on that object (WebGLState.drawBuffers) and throws
-// on null. The product's per-system catch (frame.js:99) contains it. Counted and printed; never asserted.
+// on null. FIXED 09-30 (client/lib/xr_nullfb.js; asserted by tools/xr-render-errors-probe.mjs, which also showed the
+// throw left renderer.xr.enabled off). Still counted and printed here, so a count above 0 is now a regression.
 const ARTIFACT = /Invalid value used as weak map key.*WebGLState\.drawBuffers/;
 pg.on('console', (m) => {
   consoleTail.push(`${m.type()}: ${m.text().replace(/\s+/g, ' ').slice(0, 200)}`); if (consoleTail.length > 40) consoleTail.shift();

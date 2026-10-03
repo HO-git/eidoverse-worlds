@@ -32,7 +32,7 @@ async function session(res) {
   await pg.waitForFunction(() => { const b = document.querySelector('#xrbtn'); return !!b && getComputedStyle(b).display !== 'none'; }, null, { timeout: 120000 });
   // the settings row, as a person finds it
   const row = await pg.evaluate(async () => {
-    document.querySelector('#sec-vr .head')?.click(); await new Promise((r) => setTimeout(r, 400));
+    document.querySelector('#sec-vr-tab')?.click(); await new Promise((r) => setTimeout(r, 400));
     const sel = [...document.querySelectorAll('#sec-vr select')].find((s) => [...s.options].some((o) => /headset asks/.test(o.textContent)));
     return sel ? { opts: [...sel.options].map((o) => o.value), value: sel.value } : null;
   });

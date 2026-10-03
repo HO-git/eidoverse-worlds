@@ -8,7 +8,8 @@
 // at desk height. Frames that never register (chat's free text, the debug
 // log) simply have no VR body yet, and say nothing rather than pretend.
 
-import { THREE } from './core.js';
+import { THREE, renderer } from './core.js';
+import { quadMaterial } from './quadcolour.js';
 import { bus } from './base.js';
 import { renderCanvas, hitRegion } from './panels.js';
 import { domQuadsEnabled, domQuadsEnter, domQuadsExit, domQuadsPick, domQuadsPress, domQuadsDrag, domQuadsRelease, domQuadsSetShown, domQuadsShown, domQuadShow, domQuadOpen, domQuadsGrab, domQuadRelease } from './domquad.js';   // the REAL frames on quads (default); ?canvasquads=1 keeps these canvases
@@ -32,13 +33,16 @@ export function registerXRPanel(def) {
 }
 export const xrPanelIds = () => registry.map((d) => d.id);
 
-function makePanel(def, i, n) {
+/** exported for tools/xr-quad-colour-probe.mjs (the fallback quad's material, measured) */
+export function makePanel(def, i, n) {
   const canvas = document.createElement('canvas');
   const tex = new THREE.CanvasTexture(canvas);
   tex.anisotropy = 4;
+  tex.colorSpace = THREE.SRGBColorSpace;   // canvas pixels ARE sRGB; unmarked, they read as linear and the output encode lifted them
   const mesh = new THREE.Mesh(
     new THREE.PlaneGeometry(1, 1),
     new THREE.MeshBasicMaterial({ map: tex, transparent: false }));
+  quadMaterial(mesh, renderer);   // the authored colour after the ACES output pass, graded like the DOM quads (quadcolour.js)
   // fan the quads across an arc in front of the body, desk height
   const a = (i - (n - 1) / 2) * 0.55;
   mesh.position.set(Math.sin(a) * 0.85, 1.15, -Math.cos(a) * 0.85);

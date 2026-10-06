@@ -10,6 +10,9 @@ import { effectiveSky, effectiveClock } from "../shared/forecast.js";
 import { projectFlora } from "./render-flora.ts";
 import { advanceSim, simSnapshot, tickOf } from "../shared/sim.js";
 import { waterParams, vector, MAX_AIR } from "../shared/water.js";
+import { normalizeParticles } from "../shared/particles.js";
+import { normalizePicture } from "../shared/picture.js";
+import { normalizeSound } from "../shared/sound.js";
 import type { Client, World } from "./world.ts";
 
 export const RENDER_VERSION = 1;
@@ -28,15 +31,32 @@ export function projectEnvironment(state: any) {
     heights.push(height((x / n - .5) * p.size, (z / n - .5) * p.size));
   const tint=state.terrain?.color??state.terrain?.layers?.[0]?.color??0x70815a;
   const color=typeof tint==='string'?parseInt(tint.replace('#',''),16):tint;
-  return { terrain: { size: p.size, segments: n, heights, color:Number.isFinite(color)?color:0x70815a, authored: !!state.terrain },
+  const layers = Array.isArray(state.terrain?.layers) ? state.terrain.layers.slice(0, 8).map((l: any) => ({
+    color: typeof l?.color === "string" ? parseInt(l.color.replace("#", ""), 16) : Number(l?.color ?? 0x70815a),
+    repeat: Number.isFinite(l?.repeat) ? l.repeat : 16 })) : [];
+  return { terrain: { size: p.size, segments: n, heights, color:Number.isFinite(color)?color:0x70815a, authored: !!state.terrain, layers },
     sky: state.sky ?? null, grass: state.grass ?? null, flora: projectFlora(state.grass,height) };
 }
 
 // Renderer-facing component parameters (tools/water/README.md). Water is
 // normalized by the same law the browser uses; the rest pass through bounded.
 const PASS_THROUGH = ["environment", "vehicle", "traversal", "collision"] as const;
-export function projectComponentData(comp: any) {
+export function projectComponentData(comp: any, entityId = "") {
   const data: Record<string, unknown> = {};
+  // Presentation components, normalized by the same shared laws the browser uses
+  // (a bag that does not normalize renders nothing there either).
+  if (comp?.particles) { const r = normalizeParticles(comp.particles, { entityId }); if (r.ok) data.particles = r.emitter; }
+  if (comp?.picture) { const r = normalizePicture(comp.picture); if (r.ok) data.picture = r.picture; }
+  if (comp?.sound) { const r = normalizeSound(comp.sound); if (r.ok) data.sound = r.sound; }
+  // Named-part motions (motion.js): every motion:<part> key, plus motion with a part.
+  // t0 is left as authored; partMotionsFor() resolves a missing t0 per request.
+  const parts: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(comp ?? {})) {
+    if (!v || typeof v !== "object") continue;
+    if (k.startsWith("motion:") && k.length > 7) parts[k.slice(7).slice(0, 64)] = v;
+    else if (k === "motion" && typeof (v as any).part === "string") parts[(v as any).part.slice(0, 64)] = v;
+  }
+  if (Object.keys(parts).length) data.parts = Object.fromEntries(Object.entries(parts).slice(0, 32));
   if (comp?.water) { const { center, size, absorption, scatter, speed, waves } = waterParams(comp.water);
     data.water = { center, size, absorption, scatter, speed, waves }; }
   if (Array.isArray(comp?.air?.boxes)) data.air = { boxes: comp.air.boxes.slice(0, MAX_AIR).map((b: any) => {
@@ -61,7 +81,8 @@ export function projectEntity(id: string, e: any) {
   }
   const out = { id, lib: e.lib ?? "", kind: e.kind ?? "model", structure,
     color: e.color ?? 0xffe0b0, intensity: e.intensity ?? 1, range: e.range ?? 10,
-    collide: e.collide ?? "exact", components: Object.keys(e.comp ?? {}), data: projectComponentData(e.comp),
+    collide: e.collide ?? "exact", collideAuthored: e.collide ?? null, components: Object.keys(e.comp ?? {}), data: projectComponentData(e.comp, id),
+    ...(e.kind === "light" ? { keep: !!e.keep, day: e.day !== false } : {}),
     interact: {actions:Object.keys(e.comp?.reactions??{}).slice(0,32),sockets:e.comp?.sockets??null,
       locked:!!e.comp?.lock, mounted:!!e.parent, moving:!!e.comp?.motion} };
   return { ...out, revision: hash(out) };
@@ -81,8 +102,22 @@ export function localMount(raw: any, parent: any) {
   const m = raw?.parent;
   if (!m?.to) return null;
   const sock = m.slot ? parent?.comp?.sockets?.[m.slot] : undefined;
-  if (sock && typeof sock.part === "string") return null;
-  return { to: m.to, offset: m.offset ?? sock?.pos ?? [0, 0, 0], yaw: m.yaw ?? sock?.yaw ?? 0, scale: raw.scale ?? 1 };
+  // A socket on a named part: the native renderer rides the part's live transform.
+  const part = sock && typeof sock.part === "string" ? { part: sock.part.slice(0, 64) } : {};
+  return { to: m.to, offset: m.offset ?? sock?.pos ?? [0, 0, 0], yaw: m.yaw ?? sock?.yaw ?? 0, scale: raw.scale ?? 1, ...(m.slot ? { slot: m.slot } : {}), ...part };
+}
+// Resolve each part motion's t0 the way localMotion does, so every native client agrees.
+export function partMotionsFor(raw: any, nowMs: number) {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw?.comp ?? {})) {
+    let part: string | null = null;
+    if (k.startsWith("motion:") && k.length > 7) part = k.slice(7);
+    else if (k === "motion" && typeof (v as any)?.part === "string") part = (v as any).part;
+    if (!part || !v || typeof (v as any).type !== "string") continue;
+    const m = v as any;
+    out[part.slice(0, 64)] = { ...m, t0: Number.isFinite(m.t0) ? m.t0 : nowMs - since(m, nowMs) * 1000 };
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 export function renderScene(c: Client, msg: any, now = Date.now()): object | null {
@@ -136,17 +171,36 @@ export function renderScene(c: Client, msg: any, now = Date.now()): object | nul
     const weather=effectiveSky(w.state.sky,now),clock=effectiveClock(w.state.sky,now);
     let moving = !!w.state.sky || activeBodies > 0;
     for (const e of cached.entities) {
-      const unsupported = e.components.filter((k: string) => ["particles", "flora", "panel", "physics"].includes(k) || k.startsWith("motion:"));
+      const unsupported = e.components.filter((k: string) => ["flora", "panel", "physics"].includes(k));
       if (unsupported.length) warnings.push(`${e.id}: unsupported native components: ${unsupported.join(", ")}`);
       const lease=w.leases?.get(e.id);
       if(lease?.lastState){const s=lease.lastState;transforms.push({id:e.id,p:s.p,q:s.q??[0,Math.sin((s.yaw??0)/2),0,Math.cos((s.yaw??0)/2)],scale:w.state.entities[e.id].scale??1,leased:true});moving=true;continue;}
+      const raw = w.state.entities[e.id];
+      const partMotions = partMotionsFor(raw, now);
+      const b = sim?.bodies[e.id];
+      const simState = b ? { sim: { v: b.v, resting: !!b.resting, on: !!b.on, tickMs: sim?.epoch?.tickMs ?? 66 } } : {};
       const t = effectiveWorldTransform(e.id, view, now);
       if (t.ok) {
-        const raw = w.state.entities[e.id];
-        const motion = localMotion(raw, now, !!sim?.bodies[e.id]);
+        const motion = localMotion(raw, now, !!b);
         const mount = raw?.parent ? localMount(raw, w.state.entities[raw.parent.to]) : null;
-        transforms.push({ id: e.id, p: t.pos, q: t.quat, scale: t.scale, ...(motion ? { motion } : {}), ...(mount ? { mount } : {}) });
-        moving ||= !!t.moving;
+        transforms.push({ id: e.id, p: t.pos, q: t.quat, scale: t.scale, ...(motion ? { motion } : {}), ...(mount ? { mount } : {}),
+          ...(partMotions ? { parts: partMotions } : {}), ...simState });
+        moving ||= !!t.moving || !!partMotions;
+      }
+      else if (raw?.parent) {
+        // Mounted on a part socket: no server-side part pose, so send the rest-pose
+        // composition and the mount; native clients ride the live part.
+        const pt = effectiveWorldTransform(raw.parent.to, view, now), mount = localMount(raw, w.state.entities[raw.parent.to]);
+        if (pt.ok && mount) {
+          const [qx, qy, qz, qw] = pt.quat, o = (mount.offset as number[]).map((v: number) => v * (pt.scale ?? 1));
+          // rotate o by the parent quaternion
+          const ix = qw * o[0] + qy * o[2] - qz * o[1], iy = qw * o[1] + qz * o[0] - qx * o[2], iz = qw * o[2] + qx * o[1] - qy * o[0], iw = -qx * o[0] - qy * o[1] - qz * o[2];
+          const p = [pt.pos[0] + ix * qw + iw * -qx + iy * -qz - iz * -qy, pt.pos[1] + iy * qw + iw * -qy + iz * -qx - ix * -qz, pt.pos[2] + iz * qw + iw * -qz + ix * -qy - iy * -qx];
+          const h = (mount.yaw as number) / 2, yq = [0, Math.sin(h), 0, Math.cos(h)];
+          const q = [qw * yq[0] + qx * yq[3] + qy * yq[2] - qz * yq[1], qw * yq[1] - qx * yq[2] + qy * yq[3] + qz * yq[0], qw * yq[2] + qx * yq[1] - qy * yq[0] + qz * yq[3], qw * yq[3] - qx * yq[0] - qy * yq[1] - qz * yq[2]];
+          transforms.push({ id: e.id, p, q, scale: raw.scale ?? 1, mount, ...(partMotions ? { parts: partMotions } : {}) });
+          moving = true;
+        } else warnings.push(`${e.id}: ${t.why}`);
       }
       else warnings.push(`${e.id}: ${t.why}`);
     }

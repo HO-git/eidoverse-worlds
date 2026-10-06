@@ -187,3 +187,24 @@ test("terrain says whether it was authored, so renderers can honor environment.f
   const st:any=emptyState();st.terrain={size:300,amplitude:4};
   expect(projectEnvironment(st).terrain.authored).toBe(true);
 });
+test("presentation components, part motions, part sockets and light flags reach native renderers",()=>{
+  const f=fixture();
+  f.write("spawn",{id:"swing",lib:"swing.glb",pos:[0,0,0]});
+  f.write("comp",{id:"swing",type:"motion:seat",data:{type:"pendulum",axis:[1,0,0],amp:0.4,period:3}});
+  f.write("comp",{id:"swing",type:"sockets",data:{seat:{pos:[0,0.5,0],part:"seat"}}});
+  f.write("comp",{id:"swing",type:"particles",data:{preset:"fire",count:5000}});
+  f.write("comp",{id:"swing",type:"sound",data:{src:"eidoverse/assets/audio/creak.ogg",volume:2}});
+  f.write("comp",{id:"swing",type:"picture",data:{src:"eidoverse/assets/images/a.png",part:"board"}});
+  f.write("spawn",{id:"kid",lib:"c.glb"});f.write("mount",{id:"kid",to:"swing",slot:"seat"});
+  f.write("light",{id:"lamp",pos:[1,2,3],keep:true,day:false});
+  const r=f.request(1000);
+  const swing=r.upserts.find((u:any)=>u.id==="swing");
+  expect(swing.data.particles.preset).toBe("fire");expect(swing.data.particles.count).toBe(600);
+  expect(typeof swing.data.particles.seed).toBe("number");
+  expect(swing.data.sound.volume).toBe(1);expect(swing.data.picture.part).toBe("board");
+  expect(swing.data.parts.seat.type).toBe("pendulum");
+  const st=r.transforms.find((t:any)=>t.id==="swing");expect(st.parts.seat.type).toBe("pendulum");expect(Number.isFinite(st.parts.seat.t0)).toBe(true);
+  const kid=r.transforms.find((t:any)=>t.id==="kid");expect(kid.mount.part).toBe("seat");expect(kid.p[1]).toBeCloseTo(0.5);
+  const lamp=r.upserts.find((u:any)=>u.id==="lamp");expect(lamp.keep).toBe(true);expect(lamp.day).toBe(false);
+  expect(r.warnings.filter((w:string)=>w.includes("unsupported"))).toEqual([]);
+});

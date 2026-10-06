@@ -84,7 +84,9 @@ export function projectEntity(id: string, e: any) {
     collide: e.collide ?? "exact", collideAuthored: e.collide ?? null, components: Object.keys(e.comp ?? {}), data: projectComponentData(e.comp, id),
     ...(e.kind === "light" ? { keep: !!e.keep, day: e.day !== false } : {}),
     interact: {actions:Object.keys(e.comp?.reactions??{}).slice(0,32),sockets:e.comp?.sockets??null,
-      locked:!!e.comp?.lock, mounted:!!e.parent, moving:!!e.comp?.motion} };
+      locked:!!e.comp?.lock, mounted:!!e.parent, moving:!!e.comp?.motion,
+      // attribution for the inspector and the guard check (placer.js / build.js mayAuthor)
+      guarded:!!e.comp?.guard, placer:e.placer?.id ?? null, placerSub:e.placer?.sub ?? null, lastActor:e.actor ?? null} };
   return { ...out, revision: hash(out) };
 }
 

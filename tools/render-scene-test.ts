@@ -208,3 +208,12 @@ test("presentation components, part motions, part sockets and light flags reach 
   const lamp=r.upserts.find((u:any)=>u.id==="lamp");expect(lamp.keep).toBe(true);expect(lamp.day).toBe(false);
   expect(r.warnings.filter((w:string)=>w.includes("unsupported"))).toEqual([]);
 });
+test("inspector attribution: placer, last actor, lock and guard reach native renderers",()=>{
+  const f=fixture();
+  f.write("spawn",{id:"lamp1",lib:"l.glb",pos:[0,0,0],placer:{id:"ada",sub:"discord:1"}});
+  f.write("comp",{id:"lamp1",type:"guard",data:true});
+  f.write("comp",{id:"lamp1",type:"lock",data:true});
+  const u=f.request(1000).upserts.find((x:any)=>x.id==="lamp1");
+  expect(u.interact.placer).toBe("ada");expect(u.interact.placerSub).toBe("discord:1");
+  expect(u.interact.guarded).toBe(true);expect(u.interact.locked).toBe(true);expect(u.interact.lastActor).toBe("builder");
+});

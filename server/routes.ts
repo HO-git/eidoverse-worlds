@@ -983,7 +983,15 @@ const ROUTES: Route[] = [
   {
     match: (u) => u.pathname.startsWith("/library/"),
     handler: ({ req, url }) => {
-      const rel = url.pathname.slice("/library/".length);
+      // url.pathname keeps percent-encoding, so a library file whose name has
+      // a space ("Frosted Glass Window Seat.glb" → %20) was looked up on disk
+      // with the literal "%20" and 404'd for every client. Decode once; a
+      // malformed sequence or a NUL keeps the raw path. Every lookup below
+      // still goes through normalize()+startsWith(base) (serveFrom, the
+      // PATCH_DIR/OPT_DIR probes, variantSource), so a decoded "../" cannot
+      // leave the library.
+      let rel = url.pathname.slice("/library/".length);
+      try { const d = decodeURIComponent(rel); if (!d.includes("\0")) rel = d; } catch {}
       // optimized mirror first (draco+webp): same path, ~30x smaller
       const versioned = url.searchParams.has("v") || rel.startsWith("store/"); // content-addressed = immutable
       // Deliberate upstream forks win over EVERYTHING (upstream-patched/

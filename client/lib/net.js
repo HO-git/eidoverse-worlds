@@ -777,9 +777,15 @@ async function onSnapshot(msg) {
   // The server's `you` is authoritative (verified identity, or a suffixed name
   // when two people share a nick). If it differs from what this client thinks,
   // adopt it — and say so, a silently different nameplate is confusing.
-  if (msg.you && msg.you !== CONFIG.name) {
-    CONFIG.name = msg.you;
-    localStorage.setItem('ew-name', msg.you);
+  // Renderer/spectator clients join under a transport prefix ("renderer-" /
+  // "retina-", see sendJoin) that is part of the wire id, not the name. Strip
+  // it before comparing and storing, or ew-name grows one prefix per reload
+  // (renderer-renderer-…).
+  const prefix = CONFIG.renderer ? 'renderer-' : CONFIG.spectate ? 'retina-' : '';
+  const you = prefix && msg.you?.startsWith(prefix) ? msg.you.slice(prefix.length) : msg.you;
+  if (you && you !== CONFIG.name) {
+    CONFIG.name = you;
+    localStorage.setItem('ew-name', you);
     toast(`you're appearing as “${msg.you}”`, 'info', 8000);
   }
   if (typeof msg.throughSeq === 'number' && msg.throughSeq > lastSeq) lastSeq = msg.throughSeq;

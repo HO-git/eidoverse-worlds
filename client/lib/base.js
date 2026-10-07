@@ -48,6 +48,18 @@ export const CONFIG = {
     `guest-${Math.random().toString(36).slice(2, 6)}`,
 };
 if (params.get('key')) store?.setItem('ew-key', CONFIG.token);
+// Heal names poisoned by the join-ack bug fixed in net.js onSnapshot, which
+// folded the transport prefix ("renderer-" / "retina-", see sendJoin) back into
+// ew-name on every reload. On a renderer/spectator any leading prefix is
+// poison; elsewhere only a stacked one is unambiguous, so a person who really
+// is called "renderer-fan" keeps their name.
+{
+  const poison = (CONFIG.renderer || CONFIG.spectate)
+    ? /^(renderer-|retina-)+/ : /^(renderer-|retina-){2,}/;
+  if (poison.test(CONFIG.name)) {
+    CONFIG.name = CONFIG.name.replace(poison, '') || `guest-${Math.random().toString(36).slice(2, 6)}`;
+  }
+}
 store?.setItem('ew-name', CONFIG.name);
 
 /** Rename in place (the front-door panel calls this before connecting). */

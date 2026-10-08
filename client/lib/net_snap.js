@@ -7,6 +7,7 @@ import { THREE, camera } from './core.js';
 import { remotes } from './remotes.js';
 import { composeFirstPerson } from './fp_view.js';
 import { captureFrame, captureFrom } from './capture.js';
+import { normalizeSnapFrame } from '../../shared/snapframe.js';
 
 const _snapHead = new THREE.Vector3();
 const _snapBox = new THREE.Box3();
@@ -26,13 +27,16 @@ export async function snapshot(msg) {
     if (!r?.avatar) throw new Error(`${msg.follow} not in local scene (still loading?)`);
     const root = r.avatar.root;
     const fwd = new THREE.Vector3(Math.sin(root.rotation.y), 0, Math.cos(root.rotation.y));
+    // Optional framing (shared/snapframe.js): absent fields keep the fixed
+    // defaults below, so a request without them frames exactly as before.
+    const frame = normalizeSnapFrame(msg);
     let dataUrl;
     if (msg.view === 'third') {
-      const eye = root.position.clone().add(new THREE.Vector3(0, 2.1, 0)).addScaledVector(fwd, -3.4);
+      const eye = root.position.clone().add(new THREE.Vector3(0, frame.height ?? 2.1, 0)).addScaledVector(fwd, -(frame.dist ?? 3.4));
       dataUrl = captureFrom(eye,
         root.position.clone().add(new THREE.Vector3(0, 1.2, 0)).addScaledVector(fwd, 4));
     } else if (msg.view === 'selfie') {
-      const eye = root.position.clone().add(new THREE.Vector3(0, 1.6, 0)).addScaledVector(fwd, 2.6);
+      const eye = root.position.clone().add(new THREE.Vector3(0, frame.height ?? 1.6, 0)).addScaledVector(fwd, frame.dist ?? 2.6);
       dataUrl = captureFrom(eye, root.position.clone().add(new THREE.Vector3(0, 1.25, 0)));
     } else {
       const head = r.avatar.headWorldPosition(_snapHead);
@@ -40,6 +44,7 @@ export async function snapshot(msg) {
       dataUrl = composeFirstPerson({
         camera,
         yaw: root.rotation.y,
+        pitch: frame.pitch,
         head: head ? [head.x, head.y, head.z] : null,
         bounds: box ? { min: box.min.toArray(), max: box.max.toArray() } : null,
         name: msg.follow,

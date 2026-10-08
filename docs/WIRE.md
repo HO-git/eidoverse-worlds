@@ -111,7 +111,7 @@ Every message belongs to exactly one plane:
 - `whisper` (with `echo:true` on your own sent copy), `anim`, `puppet`,
   `bodydrag`, `caption`, `typing`, `drag`, `rtc`, `performed` — presence
   relays, shapes as sent (see §3) plus attribution stamps.
-- `snap` — `{id, follow?, view?}`: server asks a renderer leg for a PNG.
+- `snap` — `{id, follow?, view?, dist?, height?, pitch?}`: server asks a renderer leg for a PNG. The framing fields are optional and normalised by `shared/snapframe.js` on both ends; absent = the fixed default framing.
 - `world-forked`, `world-reset` — admin outcomes.
 - `avatar-updated` / `avatar-profile-updated` — library changes (VRM upload,
   profile edit), broadcast to every world.

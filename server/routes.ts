@@ -18,6 +18,7 @@ import { isStoreOriginal, isServingArtifact, variantStatus, variantSource, fresh
 import { glbPerfOfFile } from "./glbperf.ts";
 import { rankOf, TIER_NAMES } from "../shared/perfrank.js";
 import { wantsKtx2, KTX2_KEY } from "../shared/ktx2.js";
+import { normalizeSnapFrame } from "../shared/snapframe.js";
 import { LOD_RECIPE, lodVariantPath, lodVerdictKind, lodVerdictFinal } from "./store-variants.ts";
 import { hnSessions, hnJti, sessionFromCookie, saveSessions, SESSION_TTL_MS, HN_ISSUER_KEY, HN_ISS, HN_AUD, HN_LOGIN_URL, HN_REQUIRE_LOGIN } from "./auth.ts";
 import { verifyToken } from "./aid1.ts";
@@ -62,7 +63,8 @@ export type Srv = {
 };
 
 // ---- snapshots: the world serves views of itself ---------------------------
-// GET /snap?world=W&follow=ID → the sequencer asks a renderer client (an
+// GET /snap?world=W&follow=ID[&view=first|third|selfie][&dist=&height=&pitch=]
+// (optional framing, shared/snapframe.js) → the sequencer asks a renderer client (an
 // invisible hub-spectator on some GPU box, dialed OUT to us like any client)
 // to jump its camera to ID's head and return one frame. Clients never know
 // rendering exists as a separate thing — it's just the world's API.
@@ -70,7 +72,7 @@ type PendingSnap = { resolve: (r: { ok: true; png: Uint8Array } | { ok: false; e
 export const pendingSnaps = new Map<string, PendingSnap>();
 let nextSnapId = 1;
 
-function requestSnap(world: World, follow: string, view = "first"): Promise<{ ok: true; png: Uint8Array } | { ok: false; err: string; status: number }> {
+function requestSnap(world: World, follow: string, view = "first", frame: { dist?: number; height?: number; pitch?: number } = {}): Promise<{ ok: true; png: Uint8Array } | { ok: false; err: string; status: number }> {
   const renderer = [...world.clients].find((c) => c.renderer);
   if (!renderer) return Promise.resolve({ ok: false, err: `no renderer is currently serving world "${world.name}"`, status: 503 });
   const target = [...world.clients].find((c) => c.id === follow && !c.spectator);
@@ -79,7 +81,7 @@ function requestSnap(world: World, follow: string, view = "first"): Promise<{ ok
   const id = `snap-${nextSnapId++}`;
   return new Promise((resolve) => {
     pendingSnaps.set(id, { resolve });
-    renderer.ws.send(JSON.stringify({ type: "snap", id, follow, view }));
+    renderer.ws.send(JSON.stringify({ type: "snap", id, follow, view, ...frame }));
     setTimeout(() => {
       if (pendingSnaps.delete(id)) resolve({ ok: false, err: "renderer timed out", status: 504 });
     }, 12_000);
@@ -644,7 +646,9 @@ const ROUTES: Route[] = [
       const w = worlds.get(url.searchParams.get("world") ?? "commons");
       const follow = url.searchParams.get("follow") ?? "";
       if (!w) return new Response("unknown world", { status: 404 });
-      const r = await requestSnap(w, follow, url.searchParams.get("view") ?? "first");
+      const q = url.searchParams;
+      const frame = normalizeSnapFrame({ dist: q.get("dist"), height: q.get("height"), pitch: q.get("pitch") });
+      const r = await requestSnap(w, follow, q.get("view") ?? "first", frame);
       if (!r.ok) return new Response(r.err, { status: r.status });
       return new Response(r.png, { headers: { "content-type": "image/png", "cache-control": "no-store" } });
     },

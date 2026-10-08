@@ -985,13 +985,18 @@ const ROUTES: Route[] = [
     handler: ({ req, url }) => {
       // url.pathname keeps percent-encoding, so a library file whose name has
       // a space ("Frosted Glass Window Seat.glb" → %20) was looked up on disk
-      // with the literal "%20" and 404'd for every client. Decode once; a
-      // malformed sequence or a NUL keeps the raw path. Every lookup below
-      // still goes through normalize()+startsWith(base) (serveFrom, the
-      // PATCH_DIR/OPT_DIR probes, variantSource), so a decoded "../" cannot
-      // leave the library.
+      // with the literal "%20" and 404'd for every client. Decode once, with
+      // three guards: a raw path that already names a file wins (a model
+      // literally called "box%41.glb" must not turn into "boxA.glb"); a
+      // malformed sequence or a NUL keeps the raw path; and a decoded ".."
+      // segment is refused outright — normalize()+startsWith(base) further
+      // down is a string-prefix check, so "..%2flibrary-backup%2fx" would
+      // otherwise reach a SIBLING directory whose name starts with the base's.
       let rel = url.pathname.slice("/library/".length);
-      try { const d = decodeURIComponent(rel); if (!d.includes("\0")) rel = d; } catch {}
+      if (rel.includes("%") && !existsSync(join(LIBRARY_DIR, rel)) && !existsSync(join(OPT_DIR, rel))) {
+        try { const d = decodeURIComponent(rel); if (!d.includes("\0")) rel = d; } catch {}
+        if (rel.split(/[\/\\]/).includes("..")) return new Response("forbidden", { status: 403 });
+      }
       // optimized mirror first (draco+webp): same path, ~30x smaller
       const versioned = url.searchParams.has("v") || rel.startsWith("store/"); // content-addressed = immutable
       // Deliberate upstream forks win over EVERYTHING (upstream-patched/

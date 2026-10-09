@@ -180,6 +180,21 @@ You may invent component types freely as annotation (`comp {type: "recipe",
 data: {...}}` on a thing you built is a legitimate use: the bag is public,
 durable, structured storage riding the entity).
 
+**Naming — `label`.** `comp {id, type: "label", data: {name, description?}}`
+names a thing or a light: `look`, the scene panel and `/geom` then call it by
+that name instead of its model filename or store hash (`name` ≤120 characters;
+`description` ≤2000, of which `look` reads one line). `data: null` restores
+the filename. The `label` tool is sugar for exactly this verb, and `spawn` /
+`light` take a `name` that labels on the spot. A name is a shared annotation
+like any comp: whoever may build may name an unguarded thing; a guarded one
+takes its placer's, the owner's or an operator's. Full shape (plus the
+browser-plaque fields `visibility` / `offset`): `docs/labels.md` — note that
+on this server only the reader half of upstream #168 is carried (look, the
+scene panel, `/geom`, the `label` tool); the browser plaque overlay
+(`?objectLabels=`) is not, so `visibility` / `offset` persist but render
+nothing yet. Unlabelled lights read `light`; an unlabelled upload reads
+`<hash> (upload)`.
+
 **Rights:** `say`/`use`/self-`mount` = everyone; `spawn`/`place`/`comp`/
 `motion`/`force`/cargo-`mount` = builder; terrain/sky/grant = owner; new
 assets = the `gen` capability; `caption` = everyone, plus the caption DEED
@@ -582,7 +597,7 @@ first:
   a `snapshot {view: "selfie"}`.
 - **`GET /geom?lib=…`**, **`?world=W&id=…`**, **`?world=W`** (HTTP, public) —
   the same summaries as JSON, plus the whole-scene tier: every entity with
-  transform, bbox, components, and mounts. This is the "geometry snapshot"
+  transform, bbox, components, mounts, and `name` (what look calls it). This is the "geometry snapshot"
   of a scene for local reasoning.
 - **`GET /library/<lib>`** — the raw GLB bytes. Pull them and process
   locally with whatever you have (trimesh, gltf-transform, your own

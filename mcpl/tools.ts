@@ -26,6 +26,8 @@ import sharp from "sharp";
 import { validatePose, validateTracks, tracksSpan, poseReport, HUMANOID_BONES, mergePose } from "../shared/humanoid.js";
 import { rigBonesFor } from "./rigbones.ts";
 import { CONTACT_POINTS, canonicalPoint } from "../shared/contact.js";
+import { readLabel } from "../shared/label.js";
+import { thingIdentity } from "../shared/naming.js";
 import { rawShapeError } from "./shape.ts";
 import type { WorldAgent } from "./agent.ts";
 
@@ -70,7 +72,7 @@ export const REHEARSAL_TOOLS = new Set(["rehearse_down", "rehearse_recover"]);
 
 export const TOOLS = [
   { name: "body_state", description: "Perceive your body or another present participant (who; omitted or 'self' means you). Default summary reports posture, wings, position, held poses/reaches and freshness. detail:'bones' adds published quaternions and derived world joint positions; 'contacts' adds named world-space contact points, outward normals, self-relative positions and ready-to-use reach targets; 'all' includes both. Optional window_ms (0–5000) measures reconstructed joint motion and endpoint residuals over a short window; a snapshot alone does not measure stability. Optional points filters contacts, e.g. ['chest_front','hand_l','hand_r']. Geometry evaluates the shared VRMA posture clips, published bone rotations and dependent limb reaches. Missing clips or unresolved/cyclic reach dependencies return incomplete geometry. Contacts are bone-bound anatomical estimates; full renderer blending, emotes and springbones are not reproduced. Reading never moves or touches anyone. Use returned reachTarget with reach to track a named point; use selfPosition to plan offsets around your own body.", inputSchema: { type: "object", properties: { who: { type: "string" }, detail: { type: "string", enum: ["summary", "bones", "contacts", "all"] }, points: { type: "array", items: { type: "string" }, maxItems: Object.keys(CONTACT_POINTS).length }, window_ms: { type: "integer", minimum: 0, maximum: 5000 } } } },
-  { name: "look", description: "Text-tier perception: where you are, who's present and what they're doing, every placed thing with distance/bearing, and chat since you last looked.", inputSchema: { type: "object", properties: {} } },
+  { name: "look", description: "Text-tier perception: where you are, who's present and what they're doing, every placed thing with distance/bearing, and chat since you last looked. Things are called by their authored name when one exists (the `label` tool / comp), else by their model filename; an unlabelled upload shows its store hash marked (upload). A description, when authored, is quoted after the facts for things within reach (12m, or 60m if its author chose visibility 'always'), at most 8 per look; `measure {id}` has the whole of it.", inputSchema: { type: "object", properties: {} } },
   { name: "snapshot", description: "A rendered image from the world (spectator browser on a GPU host). Slower than look — use when spatial/visual detail matters. view: 'first' (default) is your avatar's eyes — you are not in frame; 'third' is an over-the-shoulder chase view — your body and what's ahead of it; 'selfie' faces you from in front — your avatar, framed.", inputSchema: { type: "object", properties: { view: { type: "string", enum: ["first", "third", "selfie"] } } } },
   { name: "walk_to", description: "Walk (or run) to world coordinates. Default arrival tolerance is 0.01m, so short positioning moves are honored. Optional tolerance (0–0.4 metres) changes how close to the requested point counts as arrived. This is destination accuracy, not distance from another body.", inputSchema: { type: "object", properties: { x: { type: "number" }, z: { type: "number" }, run: { type: "boolean" }, tolerance: { type: "number", minimum: 0, maximum: 0.4 } }, required: ["x", "z"] } },
   // ---- FLIGHT (upstream's flight arc, merged 2026-09-02; behind the `fly`
@@ -105,10 +107,11 @@ export const TOOLS = [
   { name: "library_sheet", description: "A contact sheet — one grid image with names under each tile. kind 'avatars' is the wearable roster (portraits exist once a body has been worn); kind 'models' is the placeable object library. 12 per page. Use library_preview for a closer look at one, set_avatar to wear, spawn to place.", inputSchema: { type: "object", properties: { kind: { type: "string", enum: ["avatars", "models"] }, page: { type: "number" } }, required: ["kind"] } },
   { name: "library_preview", description: "One item at full size: an avatar's portrait (roster name) or a model's preview render (library filename or path).", inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } },
   { name: "list_library", description: "Search the model library by keywords. Returns library paths for spawn.", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
-  { name: "spawn", description: "Spawn a library model. lib (exact) or query (best match); position defaults to 2m in front of you.", inputSchema: { type: "object", properties: { lib: { type: "string" }, query: { type: "string" }, x: { type: "number" }, z: { type: "number" }, y: { type: "number" }, yaw: { type: "number" }, id: { type: "string" } } } },
+  { name: "spawn", description: "Spawn a library model. lib (exact) or query (best match); position defaults to 2m in front of you. name (optional) labels it on the spot — what look, the scene panel and /geom will call it instead of the model's filename (an uploaded store/<hash>.glb has no readable name without one).", inputSchema: { type: "object", properties: { lib: { type: "string" }, query: { type: "string" }, x: { type: "number" }, z: { type: "number" }, y: { type: "number" }, yaw: { type: "number" }, id: { type: "string" }, name: { type: "string" }, replace: { type: "boolean" } } } },
   { name: "place", description: "Move an entity (id from look) to x,z (y defaults to terrain; pass y to seat on furniture).", inputSchema: { type: "object", properties: { id: { type: "string" }, x: { type: "number" }, z: { type: "number" }, y: { type: "number" }, yaw: { type: "number" } }, required: ["id", "x", "z"] } },
   { name: "light", description: "Place a light source in the world, or update one you can already see: calling with the id of an existing light changes ONLY the fields you pass (brightness via intensity, color, range, position) and leaves the rest alone. Persists like any placed thing. color is a hex integer (e.g. 0xffd9a0 warm, 0x88bbff cool, 0xff5533 red), intensity (default 16) and range are optional. keep: true means the light ALWAYS casts: it lives outside the per-client point-light budget (consumes no slot, so unkept lights keep their full budget) and framerate governors never douse it. Every casting light has real GPU cost — keep it for lights that matter. Position defaults to just in front of you. A small glowing sphere marks it; move or remove it by id like any entity.", inputSchema: { type: "object", properties: { color: { type: "number" }, intensity: { type: "number" }, range: { type: "number" }, keep: { type: "boolean" }, x: { type: "number" }, y: { type: "number" }, z: { type: "number" }, id: { type: "string" } } } },
   { name: "remove", description: "Remove a placed entity.", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] } },
+  { name: "label", description: "Name a placed thing or light (id from look) so everyone — look, the scene panel, /geom, the browser — calls it that instead of its model filename or upload hash. name ≤120 characters (look shows 60). Optional description ≤2000 characters: say what it IS and what it is for; look quotes its first 160 characters, attributed as yours, for things within 12m (visibility 'always' → 60m; 'inspect' → only via measure). clear: true removes the label and the filename comes back. Stored as comp {id, type: \"label\", data: {name, description?}} — anyone who may build can name an unguarded thing, the log records who, and people nearby hear `* <you> names [id] …`. Convention: name what you placed; ask before renaming someone else's (comp {type: \"guard\", data: true} on your own thing makes its name yours alone — it fences its other comps too, so use it sparingly). A guarded thing takes only its placer's, the owner's or an operator's label.", inputSchema: { type: "object", properties: { id: { type: "string" }, name: { type: "string" }, description: { type: "string" }, clear: { type: "boolean" } }, required: ["id"] } },
   // Description narrowed to what the implementation actually does (antra
   // review, #3). It previously promised "held pose and posture survive", which
   // joinWorld does NOT transfer — and which contradicts the existing pose
@@ -221,6 +224,17 @@ export async function snapshotTool(ag: ToolAgent, view = "first") {
 // "Unknown tool" a caller meets at runtime.
 
 const text = (t: string) => ({ content: [{ type: "text", text: t }] });
+
+/** The `label` component data a tool call authors, or null when there is
+ *  nothing to say: name trimmed to 120 code points, description to 2000 --
+ *  the same caps every reader applies (shared/label.js readLabel), so what is
+ *  logged is what will be shown. */
+function labelData(a: Record<string, any>): { name: string; description?: string } | null {
+  const name = typeof a.name === "string" ? [...a.name.replace(/\s+/g, " ").trim()].slice(0, 120).join("") : "";
+  if (!name) return null;
+  const description = typeof a.description === "string" ? [...a.description.trim()].slice(0, 2000).join("") : "";
+  return description ? { name, description } : { name };
+}
 // Refused at dispatch too, not merely hidden: a pilot who learned the name
 // off a bench must not be able to fire the trusted seam here.
 const rehearse = (ag: ToolAgent, a: Record<string, any>, name: string) => {
@@ -583,14 +597,30 @@ export const HANDLERS: Record<string, ToolHandler> = {
       const x = a.x ?? ag.pos.x + Math.sin(ag.yaw) * 2;
       const z = a.z ?? ag.pos.z + Math.cos(ag.yaw) * 2;
       const id = a.id ?? crypto.randomUUID().slice(0, 8);
+      // A spawn onto an existing id REPLACES it wholesale (fold: comps, parent
+      // and label gone; the thing jumps to the new pos) — never by accident.
+      if (ag.entities.has(id) && !a.replace) return text(`[${id}] ${ag.nameOf(id)} already exists — place moves it, label renames it, remove then spawn (or replace: true) replaces it`);
+      const t0 = Date.now();
       ag.verb("spawn", { id, lib, pos: [x, a.y ?? ag.heightAt(x, z), z], yaw: a.yaw ?? 0 });
-      return text(`spawned [${id}] ${String(lib).split("/").pop()} at (${x.toFixed(1)}, ${z.toFixed(1)})`);
+      // The fold keeps only what spawn authors (lib/pos/yaw/scale/collide) --
+      // a name rides as the `label` component, one more entry right behind,
+      // sent once the thing exists so a refused spawn leaves no dangling label.
+      const named = labelData(a);
+      const shown = named?.name ?? thingIdentity({ id, lib: String(lib) }).name;
+      if (named) {
+        if (!(await ag.awaitEntity(id))) {
+          const why = ag.lastRefusal && ag.lastRefusal.ts >= t0 ? ` — refused: ${ag.lastRefusal.text}` : " — no echo yet; name it with label {id} once it appears";
+          return text(`spawn [${id}] sent, name not applied${why}`);
+        }
+        ag.verb("comp", { id, type: "label", data: named });
+      }
+      return text(`spawned [${id}] ${shown} at (${x.toFixed(1)}, ${z.toFixed(1)})`);
 
   },
   place: async (ag, a, ctx, name) => {
       if (!ag.entities.has(a.id)) return text(`no entity ${a.id}`);
       ag.verb("place", { id: a.id, pos: [a.x, a.y ?? ag.heightAt(a.x, a.z), a.z], ...(a.yaw != null ? { yaw: a.yaw } : {}) });
-      return text(`placed ${a.id}`);
+      return text(`placed [${a.id}] ${ag.nameOf(String(a.id))}`);
 
   },
   light: async (ag, a, ctx, name) => {
@@ -605,17 +635,49 @@ export const HANDLERS: Record<string, ToolHandler> = {
           patch.pos = [a.x ?? prev[0], a.y ?? prev[1], a.z ?? prev[2]];
         }
         ag.verb("light", patch);
-        return text(`updated light [${a.id}]`);
+        const named = labelData(a);
+        if (named) ag.verb("comp", { id: a.id, type: "label", data: named });
+        return text(`updated light [${a.id}] ${named?.name ?? ag.nameOf(String(a.id))}`);
       }
       const x = a.x ?? ag.pos.x + Math.sin(ag.yaw) * 2;
       const z = a.z ?? ag.pos.z + Math.cos(ag.yaw) * 2;
       const y = a.y ?? ag.heightAt(x, z) + 1.6;
       const id = a.id ?? crypto.randomUUID().slice(0, 8);
       ag.verb("light", { id, pos: [x, y, z], color: a.color ?? 0xffd9a0, intensity: a.intensity ?? 16, range: a.range ?? 10, ...(a.keep ? { keep: true } : {}) });
-      return text(`placed light [${id}] at (${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)})`);
+      const named = labelData(a);
+      if (named) {
+        if (!(await ag.awaitEntity(id))) return text(`light [${id}] sent, name not applied — name it with label {id} once it appears`);
+        ag.verb("comp", { id, type: "label", data: named });
+      }
+      return text(`placed light [${id}]${named ? ` ${named.name}` : ""} at (${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)})`);
 
   },
-  remove: async (ag, a, ctx, name) => { ag.verb("remove", { id: a.id }); return text(`removed ${a.id}`); },
+  remove: async (ag, a, ctx, name) => { const was = ag.nameOf(String(a.id)); ag.verb("remove", { id: a.id }); return text(`removed [${a.id}] ${was}`); },
+  label: async (ag, a, ctx, name) => {
+      const id = String(a.id ?? "");
+      const e = ag.entities.get(id);
+      if (!e) return text(`no entity ${id} — ids come from look`);
+      if (a.clear) {
+        if (!e.comp?.label) return text(`[${id}] ${ag.nameOf(id)} has no label to clear`);
+        const t0 = Date.now();
+        ag.verb("comp", { id, type: "label", data: null });
+        const out = await ag.ackOutcome(t0);
+        if (out?.startsWith("refused:")) return { content: [{ type: "text", text: `label: ${out}` }], isError: true };
+        return text(`${out ?? `sent — clearing the label on [${id}]`}; it goes back to ${thingIdentity({ ...e, comp: { ...(e.comp ?? {}), label: undefined } }).name}`);
+      }
+      // merge over what is already there: a description alone keeps the name,
+      // a new name keeps the description, browser-side fields ride along
+      const prev = readLabel(e.comp?.label);
+      const prevRaw = e.comp?.label && typeof e.comp.label === "object" ? e.comp.label : {};
+      const next = labelData({ name: typeof a.name === "string" ? a.name : prev.name, description: typeof a.description === "string" ? a.description : prev.description });
+      if (!next) return text(`label wants a name (clear: true removes one)`);
+      const data = { ...(prevRaw.visibility ? { visibility: prevRaw.visibility } : {}), ...(prevRaw.offset ? { offset: prevRaw.offset } : {}), ...next };
+      const t0 = Date.now();
+      ag.verb("comp", { id, type: "label", data });
+      const out = await ag.ackOutcome(t0);
+      if (out?.startsWith("refused:")) return { content: [{ type: "text", text: `label: ${out}` }], isError: true };
+      return text(`${out ?? `sent — [${id}] "${data.name}" (no echo yet)`}${data.description ? " — with a description" : ""}; logged as you, heard by anyone nearby`);
+  },
   travel: async (ag, a, ctx, name) => {
       // Travel is SESSION machinery — channel epochs, join gates, the
       // fatal-join teardown — so the shared table hands it to the host
@@ -686,7 +748,9 @@ export const HANDLERS: Record<string, ToolHandler> = {
       if (!g?.bbox) return text("no geometry available for that (parsing offline, or a light)");
       const L: string[] = [];
       const s = g.bbox.size;
-      L.push(`${a.id ? `[${d.id}] ${d.lib ?? ""}` : d.lib} — ${s[0]}×${s[1]}×${s[2]}m, ${g.tris} tris${g.sampled ? " (sampled)" : ""}`);
+      L.push(`${a.id ? `[${d.id}] ${d.name && d.name !== d.lib ? `${d.name} (${d.lib ?? "light"})` : d.lib ?? ""}` : d.lib} — ${s[0]}×${s[1]}×${s[2]}m, ${g.tris} tris${g.sampled ? " (sampled)" : ""}`);
+      // the whole authored description lives here (look quotes one line of it)
+      if (a.id && d.comp?.label) { const l = readLabel(d.comp.label); if (l.description) L.push(`described by its author as: "${l.description}"`); }
       if (a.id) L.push(`placed at (${d.pos.map((n: number) => n.toFixed(2)).join(", ")}) yaw ${d.yaw.toFixed(2)}${d.scale !== 1 ? ` scale ${d.scale}` : ""}${d.parent ? ` — mounted on ${d.parent.to}` : ""}`);
       if (g.topSurfaces?.length) {
         L.push(`flat zones (local frame, biggest first) — a center is a socket pos verbatim:`);

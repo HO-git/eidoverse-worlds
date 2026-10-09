@@ -26,6 +26,42 @@ import { inspectBody } from "../shared/flightbody.js";
 import { wingFoldPresence } from "../shared/wingpresence.js";
 import { clampBodyScale } from "../shared/presencewire.js";
 import { DEFAULT_LEAF_FORCE as LEAF_FORCE } from "../shared/leafforce.js";
+import { readLabel } from '../shared/label.js';
+import { thingIdentity } from '../shared/naming.js';
+
+/** One authored description as one perception line. The cap is per OBJECT and
+ *  a look renders every labelled object in view, so the ceiling that matters is
+ *  the product, not the single string. Cut on a word where there is one. */
+const AFFORDANCE_MAX = 160;
+function affordanceText(value: string): string {
+  const flat = value.replace(/\s+/g, " ").trim();
+  if ([...flat].length <= AFFORDANCE_MAX) return flat;
+  const cut = [...flat].slice(0, AFFORDANCE_MAX).join("");
+  const space = cut.lastIndexOf(" ");
+  return `${space > AFFORDANCE_MAX / 2 ? cut.slice(0, space) : cut}…`;
+}
+/** Authored text is quoted INTO a line whose own grammar is `[id] name: … — a · b`.
+ *  Neutralise that grammar in the text so a name cannot forge a line: brackets
+ *  become parentheses, the separators a plain dash, curly quotes straight. */
+function plainLine(value: string): string {
+  return value.replace(/\s+/g, " ").replace(/\[/g, "(").replace(/\]/g, ")").replace(/ [—·] /g, " - ").replace(/[“”]/g, '"').trim();
+}
+/** The display cap for a NAME on a perception line (storage allows 120). */
+const NAME_LINE_MAX = 60;
+/** How many authored descriptions one look() reads out, nearest first — a
+ *  well-labelled commons must not turn the most-called tool into a brochure. */
+const DESC_PER_LOOK = 8;
+/** What a thing is called on a perception line: the authored name with the
+ *  model kept as a hint ("vigil candle (light)", "Helen's bench (parkbank)"),
+ *  an unlabelled upload marked as one ("6ebfa7b1379c3125 (upload)" — a hash
+ *  describes nothing), otherwise the filename or "light". */
+function displayName(identity: ReturnType<typeof thingIdentity>): string {
+  const cps = [...plainLine(identity.name)];
+  const name = cps.length > NAME_LINE_MAX ? `${cps.slice(0, NAME_LINE_MAX).join("")}…` : cps.join("");
+  if (identity.authored && identity.model && identity.model !== identity.name) return `${name} (${plainLine(identity.model)})`;
+  if (!identity.authored && identity.store) return `${name} (upload)`;
+  return name;
+}
 
 /** integrator yaw (atan2(dz,dx), forward = (cos,sin)) -> world yaw
  *  (atan2(dx,dz), which every renderer and walkTo already speak). */
@@ -1263,6 +1299,9 @@ export class WorldAgent {
         // in the world — the one component type with a live sensory event.
         // Replay reconstructs the state above and stops there: a fire that was
         // lit last week is in look(), not in your ears (#25).
+        // Naming is a public, contestable act: everyone nearby hears it, and the
+        // author's own door gets its acknowledgement (the tool's answer).
+        if (args.type === "label" && live) this.noteLabel(actor, String(args.id), before, args.data ?? null, ts);
         if (args.type === "particles" && live) {
           // proximity-gate on where the emitter's owner ACTUALLY is — a
           // carried lantern is judged at the carrier, not at its pre-mount
@@ -1450,6 +1489,28 @@ export class WorldAgent {
       this.onEvent?.({ ts, kind: "world-change", who: actor, text: line });
     }
     this.openEmitterWindow(id, actor, after);
+  }
+
+  /** A label arriving, changing or leaving is something you HEAR happen — the
+   *  same inbox line a moderation act gets, so the plain door (no push channel)
+   *  reads it in look()'s "Since you last looked". Proximity-gated at the
+   *  thing's effective position like an emitter; the author's own act is not
+   *  narrated back but acknowledged (lastAck → the label tool's reply). */
+  private noteLabel(actor: string | undefined, id: string, before: unknown, after: unknown, ts: number) {
+    if (!actor || actor === "world") return;
+    const name = (v: unknown) => { const l = readLabel(v); return l.name ? `"${plainLine(l.name)}"` : ""; };
+    const was = name(before), now = name(after);
+    const line = now && was && now !== was ? `renames [${id}] ${was} → ${now}`
+      : now && !was ? `names [${id}] ${now}`
+      : !now && was ? `clears the name of [${id}] (was ${was})`
+      : now ? `re-describes [${id}] ${now}` : null;
+    if (!line) return;
+    if (actor === this.name) { this.lastAck = { ts: Date.now(), text: `you ${line}` }; return; }
+    const fx = this.eff(id, this.serverNow());
+    if (fx.ok && Math.hypot(fx.pos[0] - this.pos.x, fx.pos[2] - this.pos.z) > this.activityRadiusM) return;
+    this.act30.builds++;
+    this.inbox.push({ ts, kind: "act", who: actor, text: line });
+    this.onEvent?.({ ts, kind: "act", who: actor, text: line });
   }
 
   private openEmitterWindow(id: string, actor: string, announced: unknown) {
@@ -2533,6 +2594,14 @@ export class WorldAgent {
 
   face(x: number, z: number) { this.yaw = Math.atan2(x - this.pos.x, z - this.pos.z); }
 
+  /** What a placed thing is called right now -- the shared ladder (authored
+   *  label, logged asset name, model filename, id). Tool replies say this
+   *  instead of a raw id or path. */
+  nameOf(id: string): string {
+    const e = this.entities.get(id);
+    return e ? thingIdentity(e, this.st.assets).name : id;
+  }
+
   verb(verb: string, args: Record<string, unknown>) {
     if (!this.joined) throw new Error("not joined");
     this.ws!.send(JSON.stringify({ type: "verb", verb, args }));
@@ -2597,6 +2666,29 @@ export class WorldAgent {
    *  `mod` confirmation (or the authoritative log echo of our own ban/kick),
    *  or an `error` refusal. Verbs are fire-and-forget by doctrine; moderation
    *  is the act where "did that actually happen" deserves a real answer. */
+  /** The world's echo of this body's own label verb (noteLabel), so the label
+   *  tool can answer "did that happen" instead of "sent". */
+  lastAck: { ts: number; text: string } | null = null;
+  async ackOutcome(t0: number, ms = 600): Promise<string | null> {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (this.lastRefusal && this.lastRefusal.ts >= t0) return `refused: ${this.lastRefusal.text}`;
+      if (this.lastAck && this.lastAck.ts >= t0) return this.lastAck.text;
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    return null;
+  }
+  /** Wait briefly for an entity to exist in the fold (our own spawn/light echo). */
+  async awaitEntity(id: string, ms = 600): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (this.entities.has(id)) return true;
+      if (this.lastRefusal && this.lastRefusal.ts >= deadline - ms) return false;
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    return this.entities.has(id);
+  }
+
   async modOutcome(t0: number, ms = 1500): Promise<string | null> {
     const deadline = Date.now() + ms;
     while (Date.now() < deadline) {
@@ -3124,9 +3216,11 @@ export class WorldAgent {
     for (const e of ents) fx.set(e.id, this.eff(e.id, nowMs));
     const sortKey = (e: Entity) => { const f = fx.get(e.id)!; return f.ok ? Math.hypot(f.pos[0] - me.x, f.pos[2] - me.z) : Infinity; };
     const ordered = meKnown ? [...ents].sort((a, b) => sortKey(a) - sortKey(b)) : ents;
+    let descBudget = DESC_PER_LOOK;
     for (const e of ordered) {
       const f = fx.get(e.id)!;
-      const short = (e.lib ?? "(light)").split("/").pop()!.replace(".glb", "").split("_").slice(0, 5).join(" ");
+      const identity = thingIdentity(e, this.st.assets);
+      const short = displayName(identity);
       // Affordances read out loud: a thing that can be sat on, used, or is
       // moving SAYS SO in text-tier perception — this is how the capability
       // a builder declared (sockets/reactions components) reaches everyone
@@ -3173,12 +3267,27 @@ export class WorldAgent {
       // structure component buys: `components: structure` would be true and
       // useless, where "a building: 2 rooms, 14 walls, 1 door" is actionable.
       if (c.structure) { try { aff.push(describeStructure(c.structure)); } catch { /* a broken house is not a broken look() */ } }
-      const extra = Object.keys(c).filter((k) => !["sockets", "reactions", "motion", "particles", "picture", "captions", "sound", "lock", "guard", "structure"].includes(k));
+      const extra = Object.keys(c).filter((k) => !["sockets", "reactions", "motion", "particles", "picture", "captions", "sound", "lock", "guard", "structure", "label"].includes(k));
       if (extra.length) aff.push(`components: ${extra.join(", ")}`);
       const ride = this.mounts.get(e.id);
       if (ride) aff.push(`mounted on ${ride.to}${f.ok && f.moving ? ` (riding its ${f.moving})` : ""}`);
       const riders = [...this.mounts.entries()].filter(([, m]) => m.to === e.id).map(([rid, m]) => `${rid}${m.slot ? ` (${m.slot})` : ""}`);
       if (riders.length) aff.push(`carrying: ${riders.join(", ")}`);
+      // The author's description comes LAST, quoted and attributed as authored
+      // text (a server fact is never in quotes), one line of it, and only
+      // within the label's own reach: nearby 12m, always 60m, inspect never —
+      // the same bounds a browser plaque obeys. look() prints every thing in
+      // the world; descriptions are what would make that unaffordable, so at
+      // most DESC_PER_LOOK of them, nearest first. The full text is one
+      // `measure {id}` away. With the agent's own position unknown no distance
+      // exists, so no description does either.
+      if (identity.description && descBudget > 0 && f.ok && meKnown) {
+        const reach = identity.visibility === "always" ? 60 : identity.visibility === "inspect" ? 0 : 12;
+        if (Math.hypot(f.pos[0] - me.x, f.pos[2] - me.z) <= reach) {
+          aff.push(`described as: "${plainLine(affordanceText(identity.description))}"`);
+          descBudget--;
+        }
+      }
       if (f.ok) {
         // the EFFECTIVE position — mount chain and motion composed at nowMs.
         // For an unmounted, unmoving thing this is exactly the folded pos.

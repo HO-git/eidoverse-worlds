@@ -31,6 +31,8 @@
 import { THREE } from './core.js';
 import { CONFIG, bus } from './base.js';
 import { entities, entityMeta, comps, avatarMounts } from './world.js';
+import { thingIdentity } from '../../shared/naming.js';
+import { state, onWorldChange } from './state.js';
 import { editorsFor } from './inspect.js';
 import './lights.js';   // for its registered light editor (world.js pulls it in anyway)
 import { sendVerb, requestDebug } from './net.js';
@@ -108,8 +110,7 @@ function paintScene(force = false) {
   const rows = [];
   const row = (id, depth) => {
     const meta = entityMeta.get(id);
-    const short = (meta?.lib ?? meta?.kind ?? '?').split('/').pop().replace('.glb', '')
-      .split('_').slice(0, 3).join(' ');
+    const short = thingIdentity({ id, ...meta, comp: comps.get(id) }, state.st.assets).name;
     const badges = badgesFor(id);
     const scripts = behaviorRows.filter((b) => b.attach === id).map((b) => `📜${b.id}`);
     rows.push(`<div class="who-row sg-row${id === selected ? ' sel' : ''}" data-id="${esc(id)}" style="cursor:pointer;padding-left:${depth * 14}px">
@@ -406,4 +407,6 @@ export function initSceneGraph() {
   bus.on('entity', repaint);
   bus.on('comp', repaint);
   bus.on('mount', repaint);
+  // asset names feed the row's display name; an `asset` entry emits no bus event
+  onWorldChange(ev => { if (ev.type === 'entry' && ev.entry?.verb === 'asset') repaint(); });
 }

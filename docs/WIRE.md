@@ -143,7 +143,7 @@ is a protocol amendment.
 (archipelago-home) · `/version` + `/client-version` (build identity) ·
 `/library/*` + `/library-list` + `/library-models` (asset library:
 upstream-patched > store > eidoverse-video precedence) · `/upload` POST ·
-`/avatars` + `/animations` (rosters) · `/geom` (bbox summaries) · `/snap`
+`/avatars` + `/animations` (rosters) · `/geom` (bbox summaries + display `name`) · `/snap`
 (render-for-me via a renderer leg) · `/thumb`, `/thumb/*` (thumbnails) ·
 `/perflog` POST (client perf beacons) · `/shared/*`, `/node_modules/*`, `/`
 (client serving).

@@ -18,6 +18,7 @@ import { isStoreOriginal, isServingArtifact, variantStatus, variantSource, fresh
 import { glbPerfOfFile } from "./glbperf.ts";
 import { rankOf, TIER_NAMES } from "../shared/perfrank.js";
 import { wantsKtx2, KTX2_KEY } from "../shared/ktx2.js";
+import { thingIdentity } from "../shared/naming.js";
 import { LOD_RECIPE, lodVariantPath, lodVerdictKind, lodVerdictFinal } from "./store-variants.ts";
 import { hnSessions, hnJti, sessionFromCookie, saveSessions, SESSION_TTL_MS, HN_ISSUER_KEY, HN_ISS, HN_AUD, HN_LOGIN_URL, HN_REQUIRE_LOGIN } from "./auth.ts";
 import { verifyToken } from "./aid1.ts";
@@ -580,7 +581,10 @@ const ROUTES: Route[] = [
         const file = e.lib ? resolveLibFile(e.lib) : null;
         const sum = file ? await summarizeGlb(file) : null;
         const at = simAt(id, e);
-        return j({ id, lib: e.lib ?? null, pos: at.pos, yaw: at.yaw, scale: e.scale ?? 1,
+        // `name` is what look() and the scene panel call it (shared/label.js):
+        // the authored label, else the logged asset name, else the filename
+        return j({ id, lib: e.lib ?? null, kind: e.kind ?? "thing", name: thingIdentity({ id, ...e }, w.state.assets).name,
+          pos: at.pos, yaw: at.yaw, scale: e.scale ?? 1,
           parent: e.parent ?? null, comp: e.comp ?? {},
           geometry: sum,   // local frame — compose with pos/yaw/scale for world space
           note: "geometry coords are the MODEL's local frame; sockets use the same frame, so a topSurface center is a socket pos verbatim" });
@@ -592,6 +596,7 @@ const ROUTES: Route[] = [
         const sum = file ? await summarizeGlb(file) : null;
         const at = simAt(eid, e);
         out.push({ id: eid, lib: e.lib ?? null, kind: e.kind ?? "thing",
+          name: thingIdentity({ id: eid, ...e }, w.state.assets).name,   // the display name every surface agrees on (shared/naming.js)
           pos: at.pos, yaw: at.yaw, scale: e.scale ?? 1,
           parent: e.parent ?? null, comp: e.comp ?? {},
           ...(sum ? { bbox: sum.bbox, tris: sum.tris } : {}) });

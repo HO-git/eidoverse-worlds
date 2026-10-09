@@ -51,14 +51,18 @@ const NAME_LINE_MAX = 60;
 /** How many authored descriptions one look() reads out, nearest first — a
  *  well-labelled commons must not turn the most-called tool into a brochure. */
 const DESC_PER_LOOK = 8;
-/** What a thing is called on a perception line: the authored name with the
- *  model kept as a hint ("vigil candle (light)", "Helen's bench (parkbank)"),
- *  an unlabelled upload marked as one ("6ebfa7b1379c3125 (upload)" — a hash
- *  describes nothing), otherwise the filename or "light". */
+/** What a thing is called on a perception line: the authored name, else the
+ *  filename or "light". A named LIGHT keeps "(light)" unless its name already
+ *  says so ("vigil candle (light)", but "rotunda light") — the line carries no
+ *  other sign that it is a light. A named MODEL shows its name alone: the
+ *  filenames are mostly marketplace noise ("grass claster downoad like
+ *  please"), which is what a name replaces, and `measure {id}` still shows the
+ *  file. An unlabelled upload is marked as one ("6ebfa7b1379c3125 (upload)" —
+ *  a hash describes nothing). */
 function displayName(identity: ReturnType<typeof thingIdentity>): string {
   const cps = [...plainLine(identity.name)];
   const name = cps.length > NAME_LINE_MAX ? `${cps.slice(0, NAME_LINE_MAX).join("")}…` : cps.join("");
-  if (identity.authored && identity.model && identity.model !== identity.name) return `${name} (${plainLine(identity.model)})`;
+  if (identity.authored && identity.kind === "light" && !/\blight\b/i.test(name)) return `${name} (light)`;
   if (!identity.authored && identity.store) return `${name} (upload)`;
   return name;
 }

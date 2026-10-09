@@ -23,6 +23,7 @@ import { hnSessions, hnJti, sessionFromCookie, saveSessions, SESSION_TTL_MS, HN_
 import { verifyToken } from "./aid1.ts";
 import { resolveLibFile } from "./lint.ts";
 import { summarizeGlb } from "./geometry.ts";
+import { vrmHeightFor } from "./vrmheight.ts";
 import { worlds, getWorld, type World } from "./world.ts";
 import { handleUpload, optStatus, rebuildAsset } from "./upload.ts";
 import { defsPayload, avatarDefs, animationDefs } from "./defs.ts";
@@ -112,7 +113,9 @@ export function avatarPerfParam(raw: string | null, v: string | null): AvatarPer
   const r = rankOf(n);
   return { ...n, rank: r.rank, rankName: TIER_NAMES[r.rank], worst: r.worst, v };
 }
-export function avatarRoster(): { name: string; path: string; height: number | null; perf?: AvatarPerf | null; seat?: unknown }[] {
+export function avatarRoster(): { name: string; path: string; height: number | null;
+  height_source: "def" | "browser" | "skeleton" | "bbox_extent" | null;
+  perf?: AvatarPerf | null; seat?: unknown }[] {
   const seen = new Map<string, { url: string; file: string; v: string }>();
   for (const base of [LIBRARY_DIR, OPT_DIR]) {
     const dir = join(base, "eidoverse/assets/vrms");
@@ -150,11 +153,22 @@ export function avatarRoster(): { name: string; path: string; height: number | n
   // never rehash a VRM and can never read a stale value as fresh). The sha
   // work behind judge() is mtime-cached, so a roster read costs hashing only
   // when a body's bytes actually changed.
-  return [...seen].map(([name, { url, file, v }]) => ({ name, path: url,
-    height: defs[name]?.height ?? hmeta[name.replace(/[^a-zA-Z0-9_-]/g, "_")]?.h ?? null,
-    // the loupe's rank of THIS version only (the v its URL carries): a stamp from an older export is withheld until a wearer re-measures
-    perf: ((p) => p && p.v === v ? p : null)(hmeta[name.replace(/[^a-zA-Z0-9_-]/g, "_")]?.perf),
-    seat: seatStore.judge(name, file) }));
+  return [...seen].map(([name, { url, file, v }]) => {
+    const safe = name.replace(/[^a-zA-Z0-9_-]/g, "_");
+    // The stature ladder, tagged so a fallback is never mistaken for a
+    // measurement: a def's declared height, else a wearer's browser reading,
+    // else the file's own skeleton (vrmheight.ts — mtime-cached, so this is
+    // a lookup except the once per new upload).
+    const declared = defs[name]?.height;
+    const worn = hmeta[safe]?.h;
+    const est = declared == null && worn == null ? vrmHeightFor(safe, file, v) : null;
+    return { name, path: url,
+      height: declared ?? worn ?? est?.h ?? null,
+      height_source: declared != null ? "def" as const : worn != null ? "browser" as const : est?.src ?? null,
+      // the loupe's rank of THIS version only (the v its URL carries): a stamp from an older export is withheld until a wearer re-measures
+      perf: ((p) => p && p.v === v ? p : null)(hmeta[safe]?.perf),
+      seat: seatStore.judge(name, file) };
+  });
 }
 
 /** The animation clips, each at a path stamped with its mtime — the same

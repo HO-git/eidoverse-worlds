@@ -153,6 +153,27 @@ export function setAvatarDetail(v) {
 }
 if (avatarDetail !== 'auto') setLodBias(AVATAR_DETAILS[avatarDetail]);
 
+// ---- the resident's master switch (local patch) -----------------------------
+// 'keep full detail': the governor never sheds and the cruise never steps
+// pixels — a builder looking at the world wants it as it is, not smooth at
+// any cost. Turning it on hands back everything already shed, at once.
+// Persisted like the dials above; loading grace and the calm signal still run.
+const FD_KEY = 'ew-full-detail';
+let fullDetail = (() => { try { return localStorage.getItem(FD_KEY) === '1'; } catch { return false; } })();
+export const getFullDetail = () => fullDetail;
+export function setFullDetail(on) {
+  fullDetail = !!on;
+  try { localStorage.setItem(FD_KEY, fullDetail ? '1' : '0'); } catch { /* private mode */ }
+  if (fullDetail) {
+    for (let i = LEVERS.length - 1; i >= 0; i--) {
+      for (let n = 0; n < 16 && LEVERS[i].restore(); n++) { /* unwind this lever fully */ }
+    }
+    slowFor = 0; goodFor = 0; midFor = 0;
+    if (history.length < 60) history.push(`✋ full detail @${Math.round(performance.now() / 1000)}s`);
+  }
+  return fullDetail;
+}
+
 const EMITTER_TIERS = ['auto', 'med', 'low'];
 const CASTER_STEPS = [12, 6, 2];
 const GRASS_STEPS = [1, 0.6, 0.35];
@@ -343,7 +364,7 @@ let grassDial = 1;
 // oscillation. ?cruise=off disables the whole thing (the §17d A/B lever).
 const CRUISE = (CONFIG.params.get('cruise') ?? 'on') !== 'off';
 const cruiseFloor = () => Math.max(0.7, residentBase() * 0.7);
-const cruiseActive = () => CRUISE && renderScale === 'auto';   // a pinned scale is the resident's word
+const cruiseActive = () => CRUISE && renderScale === 'auto' && !fullDetail;   // a pinned scale is the resident's word
 let midFor = 0;
 
 let slowFor = 0;
@@ -414,7 +435,7 @@ export function governPerformance(fps) {
     calmFor = 0;
     midFor = 0;
     slowFor++;
-    if (slowFor > 2) {
+    if (slowFor > 2 && !fullDetail) {
       for (const lever of LEVERS) {
         if (lever.shed()) {
           slowFor = 0;   // one lever per slow window — a hitch cannot cascade
@@ -461,7 +482,7 @@ export function governPerformance(fps) {
 }
 
 export const governorDebug = () => ({
-  pixelRatio, slowFor, goodFor, midFor, renderScale,
+  pixelRatio, slowFor, goodFor, midFor, renderScale, fullDetail,
   grace, calmFor, calm: calmReached,
   casterBudget: getCasterBudget(), slotCap: getSlotCap(),
   emitters: emitterQuality(), grass: getGrassDensity(),

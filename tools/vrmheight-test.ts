@@ -9,10 +9,14 @@
 // default claude.vrm) that rules out every mesh-extent method and makes the
 // client's head-joint formula the measurement of record. Cases cover both
 // humanoid dialects (VRMC_vrm map, VRM 0.x array), the headless-rig vertex
-// fallback, the bbox_extent fallback, the unmeasurable refusal, and the
-// vrmHeightFor cache (sidecar hit, version-bump recompute).
+// fallback, the bbox_extent fallback, the unmeasurable refusal, orphan
+// (scene-unreachable) meshes, unreadable positions (Draco bodies / zero-fill
+// accessors — declared min/max feed the box, a crafted count buys no spin),
+// and the vrmHeightFor cache: version-bump recompute, the name-verbatim +
+// path guard on saved entries, and a fresh process answering measured AND
+// failed entries from heights.json without touching the file.
 
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -85,11 +89,12 @@ function rigged(humanoidExt: Record<string, unknown>): Uint8Array {
     extensions: humanoidExt,
   }, bin);
 }
+const VRM1 = { VRMC_vrm: { specVersion: "1.0", humanoid: { humanBones: { hips: { node: 0 }, head: { node: 1 } } } } };
 
 // 1. VRM 1.0: stature = head joint (1.37) + 0.13 forehead; the 2.2m
 //    head-weighted tentacle inflates only the box
 check("vrm1: head formula beats the tentacle",
-  measureVrmBytes(rigged({ VRMC_vrm: { specVersion: "1.0", humanoid: { humanBones: { hips: { node: 0 }, head: { node: 1 } } } } })),
+  measureVrmBytes(rigged(VRM1)),
   { h: 1.5, src: "skeleton", box: 2.2 });
 
 // 2. VRM 0.x: the array dialect lands on the same number
@@ -119,20 +124,73 @@ check("plain glb: bbox_extent", measureVrmBytes(plain), { h: 1.8, src: "bbox_ext
 // 5. nothing to measure: refusal, not a guess
 check("empty glb: null", measureVrmBytes(glb({ asset: { version: "2.0" } }, new Uint8Array(0))), null);
 
+// 6. an orphan mesh node — present in the file, attached to no scene — never
+//    renders on any client, so its 5m leftover must not raise the height
+const orphanBin = new Uint8Array(new Float32Array([0, 0, 0, 0, 1.8, 0, 0.3, 0.2, 0, 0, 5, 0, 0, 0, 0, 1, 0, 0]).buffer);
+check("orphan mesh: not part of the world, not part of the height",
+  measureVrmBytes(glb({
+    asset: { version: "2.0" }, scenes: [{ nodes: [0] }],
+    nodes: [{ mesh: 0 }, { name: "leftover", mesh: 1 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }, { primitives: [{ attributes: { POSITION: 1 } }] }],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: 3, type: "VEC3", min: [0, 0, 0], max: [0.3, 1.8, 0] },
+      { bufferView: 1, componentType: 5126, count: 3, type: "VEC3", min: [0, 0, 0], max: [1, 5, 0] }],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 36 }, { buffer: 0, byteOffset: 36, byteLength: 36 }],
+    buffers: [{ byteLength: 72 }],
+  }, orphanBin)),
+  { h: 1.8, src: "bbox_extent", box: 1.8 });
+
+// 7. unreadable positions (a Draco body; equally a zero-fill accessor with a
+//    crafted count): no reader, no spin — the declared min/max still bound
+//    the box, instantly, whatever the count claims
+check("draco/zero-fill positions: declared min/max feed the box, a crafted count can't spin",
+  measureVrmBytes(glb({
+    asset: { version: "2.0" }, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, extensions: { KHR_draco_mesh_compression: { bufferView: 0, attributes: { POSITION: 0 } } } }] }],
+    accessors: [{ componentType: 5126, count: 500_000_000, type: "VEC3", min: [-0.2, 0, -0.2], max: [0.2, 1.8, 0.2] }],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 4 }],
+    buffers: [{ byteLength: 4 }],
+  }, new Uint8Array(4))),
+  { h: 1.8, src: "bbox_extent", box: 1.8 });
+
 // ---- vrmHeightFor: cache + sidecar ----------------------------------------
 const dir = mkdtempSync(join(tmpdir(), "vrmheight-files-"));
 const file = join(dir, "t.vrm");
-writeFileSync(file, rigged({ VRMC_vrm: { specVersion: "1.0", humanoid: { humanBones: { hips: { node: 0 }, head: { node: 1 } } } } }));
+writeFileSync(file, rigged(VRM1));
 
 check("vrmHeightFor: first read measures", vrmHeightFor("t", file, "v1"), { h: 1.5, src: "skeleton", box: 2.2 });
 writeFileSync(file, plain);   // bytes change under the SAME version stamp…
 check("vrmHeightFor: same v serves the cache", vrmHeightFor("t", file, "v1"), { h: 1.5, src: "skeleton", box: 2.2 });
 check("vrmHeightFor: new v re-measures", vrmHeightFor("t", file, "v2"), { h: 1.8, src: "bbox_extent", box: 1.8 });
 const sidecar = JSON.parse(await Bun.file(join(process.env.OPT_DIR!, "thumbs", "heights.json")).text());
-check("sidecar persists the latest verdict", sidecar.t, { v: "v2", h: 1.8, src: "bbox_extent", box: 1.8 });
+check("sidecar persists the latest verdict", sidecar.t, { v: "v2", p: file, h: 1.8, src: "bbox_extent", box: 1.8 });
+
+// names are keyed VERBATIM ("foo bar" is not "foo_bar"), and a saved entry
+// binds to its file path — the same name repointed at a different file under
+// a coinciding stamp re-measures instead of inheriting
+const fA = join(dir, "a.vrm"), fB = join(dir, "b.vrm");
+writeFileSync(fA, rigged(VRM1)); writeFileSync(fB, plain);
+check("'foo bar' measures its own file", vrmHeightFor("foo bar", fA, "vv"), { h: 1.5, src: "skeleton", box: 2.2 });
+check("'foo_bar' is a different body", vrmHeightFor("foo_bar", fB, "vv"), { h: 1.8, src: "bbox_extent", box: 1.8 });
+check("same name, new file, same v: the path guard re-measures", vrmHeightFor("foo bar", fB, "vv"), { h: 1.8, src: "bbox_extent", box: 1.8 });
+
 writeFileSync(file, "not a glb");
 check("vrmHeightFor: broken file is null, once", vrmHeightFor("t", file, "v3"), null);
 check("vrmHeightFor: the failure is cached too", vrmHeightFor("t", file, "v3"), null);
+
+// ---- a fresh process answers from heights.json, never the file ------------
+// The measured entry's file is DELETED and the failed entry's file made
+// valid before the re-import: a value can then only come from the sidecar,
+// and a re-measure would flip the failure — either slip fails loudly here.
+const fileC = join(dir, "c.vrm");
+writeFileSync(fileC, rigged(VRM1));
+check("C measured before the restart", vrmHeightFor("C", fileC, "vc"), { h: 1.5, src: "skeleton", box: 2.2 });
+rmSync(fileC);
+writeFileSync(file, rigged(VRM1));
+const fresh = await import("../server/vrmheight.ts?fresh");   // busted specifier = new module instance, empty memo
+check("the re-import is genuinely fresh", fresh.vrmHeightFor !== vrmHeightFor, true);
+check("fresh process: measured entry loads from heights.json (file is gone)", fresh.vrmHeightFor("C", fileC, "vc"), { h: 1.5, src: "skeleton", box: 2.2 });
+check("fresh process: the saved failure holds (file is valid now)", fresh.vrmHeightFor("t", file, "v3"), null);
 
 console.log(`${pass}/${pass + fail}`);
 if (fail) process.exit(1);

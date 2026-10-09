@@ -41,9 +41,14 @@ function accReader(json: any, bin: Uint8Array, idx: number): ((i: number, out: n
   const n = TYPE_N[acc.type];
   const size = COMP_SIZE[acc.componentType];
   if (!n || !size) return null;
-  if (acc.bufferView == null) {               // spec: absent view = zeros
-    return (_i, out) => { for (let k = 0; k < n; k++) out[k] = 0; };
-  }
+  // Absent bufferView is spec-legal (zero-fill bases, Draco bodies) but gets
+  // no reader HERE: zeros measure nothing, Draco positions live in the
+  // extension's own view, and a crafted `count` on a zero-fill accessor would
+  // otherwise buy a free synchronous spin (#229 review P1). With this branch
+  // out, every count the walk loops over is backed by the in-bounds check
+  // below — bounded by the file's actual bytes. The accessor's declared
+  // min/max still feed the box (measureVrmBytes).
+  if (acc.bufferView == null) return null;
   const bv = json.bufferViews?.[acc.bufferView];
   if (!bv || json.buffers?.[bv.buffer]?.uri) return null;   // GLB bodies keep everything in chunk 0
   const base = (bv.byteOffset ?? 0) + (acc.byteOffset ?? 0);
@@ -103,7 +108,12 @@ function worldMatrices(json: any): number[][] {
   const compute = (i: number): number[] => {
     if (world[i]) return world[i]!;
     const local = localMatrix(nodes[i] ?? {});
-    return (world[i] = parent[i] < 0 ? local : matMul(compute(parent[i]), local));
+    const p = parent[i];
+    if (p < 0 || p === i) return (world[i] = local);
+    // pre-seed with the local so a malformed cycle terminates at it instead
+    // of recursing forever; acyclic files overwrite it one line later
+    world[i] = local;
+    return (world[i] = matMul(compute(p), local));
   };
   nodes.forEach((_, i) => compute(i));
   return world as number[][];
@@ -143,11 +153,29 @@ export function measureVrmBytes(bytes: Uint8Array): VrmHeight | null {
   const hum = humanoid(json);
   const nodes: any[] = json.nodes ?? [];
 
-  let allMinY = Infinity, allMaxY = -Infinity;     // the whole file: the box extent
+  // Only scene-reachable meshes measure — same doctrine as geometry.ts: an
+  // orphan node (present in the file, attached to nothing) never renders on
+  // any client, so letting its leftovers raise the extent would report a
+  // height no one can see. The head FORMULA stays scene-independent: bone
+  // transforms exist whether or not anything draws.
+  const inScene = new Set<number>();
+  {
+    const stack: number[] = [];
+    for (const sc of json.scenes ?? []) for (const r of sc?.nodes ?? []) if (typeof r === "number") stack.push(r);
+    while (stack.length) {
+      const i = stack.pop()!;
+      if (inScene.has(i) || !nodes[i]) continue;
+      inScene.add(i);
+      for (const c of nodes[i].children ?? []) if (typeof c === "number") stack.push(c);
+    }
+  }
+
+  let allMinY = Infinity, allMaxY = -Infinity;     // the whole visible file: the box extent
   let bodyMinY = Infinity, bodyMaxY = -Infinity;   // humanoid-weighted vertices only
   const p = [0, 0, 0], jv = [0, 0, 0, 0], wv = [0, 0, 0, 0];
 
   for (let ni = 0; ni < nodes.length; ni++) {
+    if (!inScene.has(ni)) continue;
     const nd = nodes[ni];
     const mesh = json.meshes?.[nd?.mesh];
     if (!mesh) continue;
@@ -180,7 +208,23 @@ export function measureVrmBytes(bytes: Uint8Array): VrmHeight | null {
       const posIdx = prim.attributes?.POSITION;
       if (posIdx == null) continue;
       const posR = accReader(json, bin, posIdx);
-      if (!posR) continue;
+      if (!posR) {
+        // unreadable positions (a Draco body, a zero-fill base): the
+        // accessor's REQUIRED min/max still bound the geometry, so the box
+        // gets the declared corners through the node world instead of
+        // silence. No body voting — skinning needs real vertices.
+        const acc = json.accessors?.[posIdx];
+        if (Array.isArray(acc?.min) && Array.isArray(acc?.max) && acc.min.length === 3 && acc.max.length === 3) {
+          for (const x of [acc.min[0], acc.max[0]]) for (const y of [acc.min[1], acc.max[1]]) for (const z of [acc.min[2], acc.max[2]]) {
+            const wy = nw ? nw[1] * x + nw[5] * y + nw[9] * z + nw[13] : y;
+            if (Number.isFinite(wy)) {
+              if (wy < allMinY) allMinY = wy;
+              if (wy > allMaxY) allMaxY = wy;
+            }
+          }
+        }
+        continue;
+      }
       const count = json.accessors[posIdx].count ?? 0;
       const jR = jointYRow ? accReader(json, bin, prim.attributes?.JOINTS_0) : null;
       const wR = jointYRow ? accReader(json, bin, prim.attributes?.WEIGHTS_0) : null;
@@ -245,7 +289,7 @@ export function measureVrmBytes(bytes: Uint8Array): VrmHeight | null {
 
 // ---- caching ---------------------------------------------------------------
 
-type SidecarEntry = { v: string; h: number | null; src?: HeightSource; box?: number | null };
+type SidecarEntry = { v: string; p?: string; h: number | null; src?: HeightSource; box?: number | null };
 const memo = new Map<string, { v: string; r: VrmHeight | null }>();
 let sidecar: Record<string, SidecarEntry> | null = null;
 const sidecarPath = () => join(OPT_DIR, "thumbs", "heights.json");
@@ -257,18 +301,20 @@ function loadSidecar(): Record<string, SidecarEntry> {
   return sidecar!;
 }
 
-/** Stature for one roster body, computed from its file when needed. `safe`
- *  is the roster's sanitized name (the thumbs/meta.json key convention), `v`
- *  the mtime stamp avatarRoster already minted — same stamp, same meaning:
- *  these numbers describe exactly the bytes that URL serves. A failed parse
- *  caches too (keyed on v), so a broken upload costs one attempt, not one
- *  per roster read. */
-export function vrmHeightFor(safe: string, file: string, v: string): VrmHeight | null {
+/** Stature for one roster body, computed from its file when needed. `name`
+ *  is the roster name VERBATIM (sanitizing it would let "foo bar" and
+ *  "foo_bar" share an entry), `v` the mtime stamp avatarRoster already
+ *  minted — same stamp, same meaning: these numbers describe exactly the
+ *  bytes that URL serves. A saved entry also carries the file's path and a
+ *  hit requires BOTH to match, so a def repointing a name at a different
+ *  file re-measures even when the mtimes coincide. A failed parse caches
+ *  too, so a broken upload costs one attempt, not one per roster read. */
+export function vrmHeightFor(name: string, file: string, v: string): VrmHeight | null {
   const hit = memo.get(file);
   if (hit && hit.v === v) return hit.r;
   const sc = loadSidecar();
-  const entry = sc[safe];
-  if (entry && entry.v === v) {
+  const entry = sc[name];
+  if (entry && entry.v === v && entry.p === file) {
     const r = entry.h != null ? { h: entry.h, src: entry.src ?? "skeleton", box: entry.box ?? null } : null;
     memo.set(file, { v, r });
     return r;
@@ -276,13 +322,13 @@ export function vrmHeightFor(safe: string, file: string, v: string): VrmHeight |
   let r: VrmHeight | null = null;
   const t0 = Date.now();
   try { r = measureVrmBytes(readFileSync(file)); }
-  catch (err) { console.warn(`[vrmheight] ${safe}: unmeasurable — ${String(err).slice(0, 160)}`); }
+  catch (err) { console.warn(`[vrmheight] ${name}: unmeasurable — ${String(err).slice(0, 160)}`); }
   memo.set(file, { v, r });
-  sc[safe] = r ? { v, h: r.h, src: r.src, box: r.box } : { v, h: null };
+  sc[name] = r ? { v, p: file, h: r.h, src: r.src, box: r.box } : { v, p: file, h: null };
   try {
     mkdirSync(join(OPT_DIR, "thumbs"), { recursive: true });
     atomicWrite(sidecarPath(), JSON.stringify(sc));
   } catch (err) { console.warn(`[vrmheight] sidecar write failed:`, String(err).slice(0, 160)); }
-  if (r) console.log(`[vrmheight] ${safe}: ${r.h}m ${r.src}${r.box != null ? ` (box ${r.box}m)` : ""} in ${Date.now() - t0}ms`);
+  if (r) console.log(`[vrmheight] ${name}: ${r.h}m ${r.src}${r.box != null ? ` (box ${r.box}m)` : ""} in ${Date.now() - t0}ms`);
   return r;
 }

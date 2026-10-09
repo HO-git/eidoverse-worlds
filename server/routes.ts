@@ -161,7 +161,7 @@ export function avatarRoster(): { name: string; path: string; height: number | n
     // a lookup except the once per new upload).
     const declared = defs[name]?.height;
     const worn = hmeta[safe]?.h;
-    const est = declared == null && worn == null ? vrmHeightFor(safe, file, v) : null;
+    const est = declared == null && worn == null ? vrmHeightFor(name, file, v) : null;
     return { name, path: url,
       height: declared ?? worn ?? est?.h ?? null,
       height_source: declared != null ? "def" as const : worn != null ? "browser" as const : est?.src ?? null,

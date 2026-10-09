@@ -476,8 +476,11 @@ export const MESSAGES: Record<string, (ctx: MsgCtx, msg: any) => void> = {
     const pending = pendingSnaps.get(msg.id);
     // Both drops used to be silent, so a frame arriving after the timeout (or
     // from a client without the renderer flag) looked identical to no reply.
-    if (!pending) { console.log(`[snap] ${msg.id}: reply from ${c.id} for an expired or unknown snap — dropped`); return; }
-    if (!c.renderer) { console.log(`[snap] ${msg.id}: reply from ${c.id}, which is not a renderer — dropped`); return; }
+    // msg.id is client text: bound and escape it, or a peer could print its own
+    // "log lines" (embedded newlines) into the server log.
+    const loggedId = typeof msg.id === "string" ? JSON.stringify(msg.id.slice(0, LIMITS.ID_LEN)) : "(invalid id)";
+    if (!pending) { console.log(`[snap] ${loggedId}: reply from ${JSON.stringify(c.id)} for an expired or unknown snap — dropped`); return; }
+    if (!c.renderer) { console.log(`[snap] ${loggedId}: reply from ${JSON.stringify(c.id)}, which is not a renderer — dropped`); return; }
     pendingSnaps.delete(msg.id);
     if (typeof msg.dataUrl === "string" && msg.dataUrl.startsWith("data:image/png;base64,")) {
       pending.resolve({ ok: true, png: Buffer.from(msg.dataUrl.slice("data:image/png;base64,".length), "base64") });

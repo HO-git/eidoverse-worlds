@@ -168,6 +168,11 @@ export function setFullDetail(on) {
     for (let i = LEVERS.length - 1; i >= 0; i--) {
       for (let n = 0; n < 16 && LEVERS[i].restore(); n++) { /* unwind this lever fully */ }
     }
+    // two dials the levers' restore() guards can leave shed: pixels in a headset (restore declines while presenting;
+    // queued here, applyPendingPixelRatio lands it after exit and xr:exit-resized re-asserts this value), and a
+    // grass budget shed before the meadow was cleared (restore needs a live field; setGrass re-applies the budget)
+    if (pixelRatio < residentBase()) setPR(residentBase());
+    if (grassDial < 1) { grassDial = 1; setGrassDensity(1); }
     slowFor = 0; goodFor = 0; midFor = 0;
     if (history.length < 60) history.push(`✋ full detail @${Math.round(performance.now() / 1000)}s`);
   }

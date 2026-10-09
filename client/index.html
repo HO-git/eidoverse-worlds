@@ -1733,6 +1733,11 @@ try { const o = JSON.parse(localStorage.getItem('ew-style-tokens') || '{}');
     const name = params.get('name')
       || (localStorage.getItem('ew-name-set') === '1' ? localStorage.getItem('ew-name') : null);
     if (!name) return;   // the first-run door decides identity — never preempt it
+    // A name poisoned by the old prefix bug (STACKED_PREFIX in base.js): base.js
+    // heals it at load, so joining with it here would be joining as someone
+    // else — and on a new world, making THAT name the owner. Let the normal
+    // path join under the healed name.
+    if (/^(renderer-|retina-){2,}/.test(name)) return;
     const world = params.get('world') || 'commons';
     const token = params.get('key') || localStorage.getItem('ew-key') || '';
     const avatar = wantAvatar;   // resolved above, and published for lite.js to match

@@ -7,7 +7,7 @@
 // and a later update authored as "5" are one light in world state. #216's
 // own advice for such a light is to supply id: "5". The realizer keyed its
 // maps by the raw id, so that update realized a second light beside the
-// first (review of #216, sw-ew216 I14). This runs the real
+// first. This runs the real
 // client/lib/realize/models.js and the real state and fold over the stub
 // cone tools/lod-client-stub.mjs, which lod-client-test also uses: no
 // renderer, a light is a bare group in the stub's scene.

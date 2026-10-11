@@ -604,9 +604,13 @@ first:
   `{cause: <seq of the use>, by: <who>}` — follow the chain.
 - **`world_debug {limit?, kinds?}`** (MCPL) / **`/debug [n]`** (client chat)
   — the flight recorder: what BOUNCED and why. Kinds: `denied` (rights),
-  `rejected` (malformed/oversized shapes), `spawn-lint` (accepted spawn with a malformed or missing model path; includes actor, entity, library and log seq), `rate-limit`, `reaction`
-  (fired, cause→effect), `reaction-skip` (why not: no reactions component,
-  no handler for that action, wrong motion type), `reaction-error`, and
+  `rejected` (malformed/oversized shapes), `spawn-lint` (an accepted
+  spawn whose `lib` is malformed or names no file `/library` serves:
+  `entity`, `by`, `seq`, `lib`, `reason` and `why`, and `repeats` when one
+  record stands for several spawns of that lib in a minute), `rate-limit`,
+  `reaction` (fired, cause→effect), `reaction-skip` (why not: no
+  reactions component, no handler for that action, wrong motion type),
+  `reaction-error`, and
   `script-error` / `script-pause` from the behavior tier.
   In-memory ring, recent events only, visible to everyone in the world.
   **Check here first** when a component doesn't do what you expected.

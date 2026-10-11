@@ -11,7 +11,7 @@ const root = mkdtempSync(join(tmpdir(), "ew-spawn-unit-"));
 const ladder = ["patched", "overlay", "library"].map(dir => join(root, dir));
 for (const dir of ladder) mkdirSync(dir);
 mock.module(new URL("../server/config.ts", import.meta.url).pathname, () => ({ LADDER: ladder }));
-const { resolveLibFile, lintSpawn } = await import("../server/lint.ts");
+const { resolveLibFile, lintSpawn, libraryPath } = await import("../server/lint.ts");
 try {
   for (const dir of ladder) writeFileSync(join(dir, "shared.glb"), "fixture");
   check("patched models take the same precedence as /library", resolveLibFile("shared.glb") === join(ladder[0], "shared.glb"));
@@ -34,6 +34,12 @@ try {
       resolveLibFile(encoded) === join(ladder[2], encoded));
   }
   check("URL-normalized traversal out of /library is refused", resolveLibFile("%2e%2e/shared.glb") === null);
+  check("a path that leaves /library is refused", resolveLibFile("../x/secret.glb") === null
+    && libraryPath("../x/secret.glb", /\.glb$/i) === null && libraryPath("a/../../x.glb", /\.glb$/i) === null);
+  writeFileSync(join(ladder[2], "robot..v2.glb"), "two dots, no traversal");
+  check("a name with two dots is a name, served and resolved", resolveLibFile("robot..v2.glb") === join(ladder[2], "robot..v2.glb"));
+  mkdirSync(join(ladder[2], "folder.glb"));
+  check("a directory named like a model is no model", resolveLibFile("folder.glb") === null);
   const events: any[] = [];
   const w = { state: emptyState(), debug: (kind: string, detail: unknown) => events.push({ kind, ...detail as object }) };
   const entry = { seq: 7, ts: 1, actor: "script-author", verb: "spawn", args: { id: "ghost", lib: "missing.glb" } };
@@ -43,16 +49,32 @@ try {
   await Bun.sleep(0);
   check("the warning carries committed provenance", events.length === 1 && events[0].by === "script-author" && events[0].seq === 7);
   check("lint leaves the entry and folded world unchanged", JSON.stringify(entry) === before && Object.keys(w.state.entities).length === 0);
-  lintSpawn({ ...w, debug() { throw new Error("recorder unavailable"); } }, entry);
-  await Bun.sleep(0);
-  check("a failed recorder cannot escape the detached callback", true);
+  // A recorder that throws is contained and logged: without the catch, the
+  // throw would escape the microtask and end this process.
+  const logged: unknown[][] = [];
+  const consoleError = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args); };
+  try {
+    lintSpawn({ ...w, debug() { throw new Error("recorder unavailable"); } }, entry);
+    await Bun.sleep(0);
+  } finally {
+    console.error = consoleError;
+  }
+  check("a failed recorder is contained, and says so on the console",
+    logged.length === 1 && String(logged[0][0]).includes("[lint] spawn-lint failed for seq 7"));
   lintSpawn(w, { ...entry, args: { lib: "missing.glb" } });
   lintSpawn(w, { ...entry, args: { id: "exists", lib: "shared.glb" } });
   await Bun.sleep(0);
-  check("a non-spawned id and an existing model produce no warning", events.length === 1);
+  check("a spawn with no id, and one whose model exists, produce no warning", events.length === 1);
+  // An entity already in the world, which a fold-inert spawn (no lib) leaves
+  // as it is: the lint neither diagnoses nor touches it.
+  w.state.entities.existing = { id: "existing", lib: "shared.glb", pos: [1, 0, 1] } as any;
+  const standing = JSON.stringify(w.state.entities.existing);
   for (const lib of [undefined, null, "", false, 0]) lintSpawn(w, { ...entry, args: { id: "existing", lib } });
   await Bun.sleep(0);
-  check("fold-inert spawns never diagnose an unchanged entity", events.length === 1);
+  check("fold-inert spawns never diagnose an unchanged entity",
+    events.length === 1 && JSON.stringify(w.state.entities.existing) === standing);
+  delete w.state.entities.existing;
   lintSpawn(w, { ...entry, args: { id: "version-missing", lib: "absent.glb?v=123#mesh" } });
   await Bun.sleep(0);
   check("a missing versioned path is not-found rather than malformed",
@@ -64,7 +86,29 @@ try {
     events.slice(-2).every(e => JSON.stringify(e).length < 1600));
   check("preview truncation is explicit and the committed seq remains available",
     events.at(-2).lib.endsWith("[truncated]") && events.at(-2).seq === entry.seq);
-  check("object payloads are summarized rather than retained", events.at(-1).lib === "[object]" && events.at(-1).entity === "[array]");
+  check("object payloads are summarized rather than retained", events.at(-1).lib === "[object]");
+  check("the entity is named by the fold's key, String(id), bounded",
+    events.at(-1).entity.startsWith("xxx") && events.at(-1).entity.endsWith("[truncated]"));
+  lintSpawn(w, { ...entry, args: { id: ["a", "b"], lib: "array-id.glb" } });
+  await Bun.sleep(0);
+  check("an array id is named as the fold keys it", events.at(-1).entity === "a,b");
+
+  // Repeats of one lib and reason are recorded once a minute; the next record
+  // says how many spawns it stands for.
+  let clock = 1_000_000;
+  const tick = () => clock;
+  const recorded = events.length;
+  for (let i = 0; i < 3; i++) lintSpawn(w, { ...entry, seq: 100 + i, args: { id: "r" + i, lib: "repeated.glb" } }, tick);
+  await Bun.sleep(0);
+  check("repeated spawns of one missing lib leave one record", events.length === recorded + 1 && events.at(-1).entity === "r0");
+  clock += 61_000;
+  lintSpawn(w, { ...entry, seq: 200, args: { id: "r3", lib: "repeated.glb" } }, tick);
+  await Bun.sleep(0);
+  check("a minute on, the next record says how many it stands for",
+    events.length === recorded + 2 && events.at(-1).entity === "r3" && events.at(-1).repeats === 2);
+  lintSpawn(w, { ...entry, seq: 201, args: { id: "r4", lib: "another-missing.glb" } }, tick);
+  await Bun.sleep(0);
+  check("another lib is recorded at once", events.length === recorded + 3 && events.at(-1).repeats === undefined);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

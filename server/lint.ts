@@ -5,7 +5,7 @@
 // ever read off the World — so this module needs geometry and shared code,
 // never server.ts.
 
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join, normalize } from "node:path";
 import { LADDER } from "./config.ts";
 import { summarizeGlb } from "./geometry.ts";
@@ -39,16 +39,32 @@ export const MOTION_TYPES: Record<string, Set<string>> = {
   path: new Set(["type", "points", "speed", "duration", "loop", "face", "t0", "part", "cause", "by"]),
 };
 
-function modelPath(lib: unknown): string | null {
+/** The /library path a lib names, as the asset route will look it up, or
+ *  null when it names none with that extension. Mirrors the client's
+ *  /library/<lib> URL: percent-encoding of spaces/Unicode, and query and
+ *  fragment removed. The route uses URL.pathname verbatim (it does not decode
+ *  it back to a disk filename). A parent-traversal segment is refused; a name
+ *  that merely contains two dots, such as robot..v2.glb, is served and kept. */
+export function libraryPath(lib: unknown, extension: RegExp): string | null {
   if (typeof lib !== "string") return null;
-  // Mirror the client's /library/<lib> URL, including percent-encoding of
-  // spaces/Unicode and removal of query/fragment. The asset route uses
-  // URL.pathname verbatim (it does not decode it back to a disk filename).
   if (lib.split(/[?#]/, 1)[0].includes("\0")) return null;
   const pathname = new URL("/library/" + lib, "http://library.invalid").pathname;
   if (!pathname.startsWith("/library/")) return null;
   const rel = normalize(pathname.slice("/library/".length)).replace(/^\/+/, "");
-  return rel.includes("..") || !/\.(glb|vrm)$/i.test(rel) ? null : rel;
+  return rel.split("/").includes("..") || !extension.test(rel) ? null : rel;
+}
+
+const MODEL = /\.(glb|vrm)$/i;
+const modelPath = (lib: unknown) => libraryPath(lib, MODEL);
+
+/** The first rung of the ladder holding `rel` as a regular file, as /library
+ *  serves it: a directory named like a model is no model. */
+export function onLadder(rel: string): string | null {
+  for (const base of LADDER) {
+    const p = normalize(join(base, rel));
+    if (p.startsWith(base) && statSync(p, { throwIfNoEntry: false })?.isFile()) return p;
+  }
+  return null;
 }
 
 // The recorder is a bounded diagnosis, not another copy of arbitrary args.
@@ -61,20 +77,22 @@ function diagnosticValue(value: unknown): unknown {
 
 export function resolveLibFile(lib: string): string | null {
   const rel = modelPath(lib);
-  if (rel === null) return null;
   // Geometry and route callers deliberately see the same patched/upload/base
   // bytes as /library, not a different unpatched model behind the same name.
-  for (const base of LADDER) {
-    const p = normalize(join(base, rel));
-    if (p.startsWith(base) && existsSync(p)) return p;
-  }
-  return null;
+  return rel === null ? null : onLadder(rel);
 }
+
+// The recorder is a 300-entry ring shared by every kind: a script spawning
+// the same unresolvable lib again and again must not evict everything else.
+// One record per world, lib and reason a minute; the next says how many
+// spawns it stands for since the last.
+const SPAWN_LINT_WINDOW_MS = 60_000;
+const spawnLintSeen = new WeakMap<object, Map<string, { at: number; since: number }>>();
 
 /** A spawn still folds when its library cannot resolve. Tell the author why
  * through world_debug instead of leaving only every joiner's failed fetch.
  * Run after dispatch, contain every failure, and never edit world history. */
-export function lintSpawn(w: LintHost, entry: LogEntry): void {
+export function lintSpawn(w: LintHost, entry: LogEntry, now: () => number = Date.now): void {
   queueMicrotask(() => {
     try {
       const a = entry.args;
@@ -84,14 +102,27 @@ export function lintSpawn(w: LintHost, entry: LogEntry): void {
       const lib = a.lib;
       const malformed = modelPath(lib) === null;
       if (!malformed && resolveLibFile(lib as string)) return;
+      const reason = malformed ? "malformed" : "not-found";
+      let seen = spawnLintSeen.get(w);
+      if (!seen) { seen = new Map(); spawnLintSeen.set(w, seen); }
+      const key = reason + "\0" + (typeof lib === "string" ? lib : JSON.stringify(diagnosticValue(lib)));
+      const last = seen.get(key), at = now();
+      if (last && at - last.at < SPAWN_LINT_WINDOW_MS) { last.since++; return; }
+      seen.set(key, { at, since: 0 });
       w.debug("spawn-lint", {
-        entity: String(diagnosticValue(a.id)), by: diagnosticValue(entry.actor), seq: entry.seq, lib: diagnosticValue(lib),
-        reason: malformed ? "malformed" : "not-found",
+        // The fold keys an entity by String(id); name it by that key.
+        entity: diagnosticValue(String(a.id)), by: diagnosticValue(entry.actor), seq: entry.seq, lib: diagnosticValue(lib),
+        reason,
+        ...(last?.since ? { repeats: last.since } : {}),
         why: malformed
           ? "spawn lib is malformed: use a library-relative .glb or .vrm path without parent traversal"
           : "spawn lib was not found in the patched assets, upload overlay or asset library; check the path or upload the asset",
       });
-    } catch { /* advisory lint must never escape into the sequencer */ }
+    } catch (err) {
+      // Advisory lint must never escape into the sequencer, and a broken one
+      // must not look like a quiet world.
+      console.error("[lint] spawn-lint failed for seq " + entry.seq + ":", err);
+    }
   });
 }
 

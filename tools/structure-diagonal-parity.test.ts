@@ -1,9 +1,9 @@
 // bun test tools/structure-diagonal-parity.test.ts
 import { expect, test } from "bun:test";
-import { planStructure, segmentEnds } from "../shared/structure.js";
+import { planStructure, segmentEnds, APERTURES } from "../shared/structure.js";
 
 for (const axis of [2, 3]) for (const aperture of [null, "door", "window", "arch"]) {
-  test("axis " + axis + " " + (aperture ?? "solid") + " shares authored cell, visible geometry and collider", () => {
+  test("axis " + axis + " " + (aperture ?? "solid") + " shares authored cell, visible geometry and collider, opening included", () => {
     const plan = planStructure({ tile: 2, levels: [{ tiles: [[4, -3]],
       walls: [[axis, 4, -3]], apertures: aperture ? [[axis, 4, -3, aperture]] : [] }] });
     const level = plan.levels[0], g = plan.grid;
@@ -28,6 +28,19 @@ for (const axis of [2, 3]) for (const aperture of [null, "door", "window", "arch
     for (const box of boxes) {
       const x = (box.x0 + box.x1) / 2, z = (box.z0 + box.z1) / 2;
       expect(axis === 2 ? (x - 8) - (z + 6) : (x - 8) + (z + 6)).toBeCloseTo(axis === 2 ? 0 : 2, 10);
+    }
+    // The opening: a door or arch is open below its lintel in the collider and
+    // in the visible wall alike. A window is a visible opening only; its
+    // collider stays solid from the floor up.
+    const floorY = level.y, ys: number[] = [];
+    for (const p of parts) for (let i = 1; i < p.positions.length; i += 3) ys.push(p.positions[i]);
+    const open = aperture === "door" || aperture === "arch";
+    const lintel = open ? floorY + APERTURES[aperture].top : floorY;
+    for (const box of boxes) expect(box.y0).toBeCloseTo(lintel, 10);
+    expect(Math.min(...ys)).toBeCloseTo(lintel, 10);
+    if (aperture === "window") {
+      const sill = floorY + APERTURES.window.bottom, head = floorY + APERTURES.window.top;
+      expect(ys.some(y => y > sill + 1e-9 && y < head - 1e-9)).toBe(false);
     }
   });
 }

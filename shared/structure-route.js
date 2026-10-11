@@ -2,7 +2,7 @@
 // navigable too; indoor ROOM derivation remains the floor-only graph.
 // This is topology, not capsule clearance or terrain/mesh navigation.
 import { edgeBetween, nodeAtPoint, nodeOnSide, diagOf,
-  halfTriangle, halfFloored, segmentEnds, APERTURES } from './structure.js';
+  halfTriangle, halfFloored, segmentEnds, APERTURES, cellKey, edgeKey } from './structure.js';
 
 export const ROUTE_MAX_CELLS = 16384;
 const EPS = 1e-9;
@@ -33,38 +33,93 @@ function crossingRange(a, b, c, d) {
   return hi >= lo-EPS ? [lo,Math.max(lo,hi)] : null;
 }
 
+/** Cell bounds of authored geometry: every tile, and every wall's full cell
+ * (which contains either diagonal and either axis), so a free-standing wall
+ * without tiles still bounds the search. Empty geometry leaves minX at
+ * Infinity. */
+function emptyBounds() { return { minX: Infinity, minZ: Infinity, maxX: -Infinity, maxZ: -Infinity }; }
+function includeLevel(bounds, level) {
+  const include = (x, z) => {
+    bounds.minX = Math.min(bounds.minX, x); bounds.minZ = Math.min(bounds.minZ, z);
+    bounds.maxX = Math.max(bounds.maxX, x); bounds.maxZ = Math.max(bounds.maxZ, z);
+  };
+  for (const k of level.tiles.keys()) {
+    const [x, z] = k.split(',').map(Number); include(x, z); include(x + 1, z + 1);
+  }
+  for (const edge of level.walls.values()) { include(edge.x, edge.z); include(edge.x + 1, edge.z + 1); }
+  return bounds;
+}
+
+// A span is filed under every cell its segment's box touches, widened by
+// this margin (in cells) so a segment that only touches a wall at a cell
+// boundary still finds it.
+const BUCKET_MARGIN = 1e-6;
+const cellRange = (lo, hi, tile) => [Math.floor(lo / tile - BUCKET_MARGIN), Math.floor(hi / tile + BUCKET_MARGIN)];
+
 // Plans are immutable derivations of one received component revision.
 // Weak keys retain neither replaced component revisions nor discarded plans.
 const routeGeometry = new WeakMap();
+
+/** What routing needs from one plan, derived once: every level's wall spans,
+ * filed by the cells they touch so a check reads only the walls near its
+ * segment; each cell's diagonals, which a terrain walker's graph chooses
+ * among per walk (see terrainCells); and the bounds of all authored
+ * geometry, which a terrain walker's search covers. */
 export function routeGeometryFor(plan) {
   let prepared = routeGeometry.get(plan);
   if (prepared) return prepared;
-  const spans = [];
-  const terrain = { tiles: new Map(), walls: new Map(), apertures: new Map(), halves: new Map() };
+  const g = plan.grid, spans = [], buckets = new Map(), diagonals = new Map();
+  // Spans whose cells aren't safe integers (authored far beyond any search's
+  // reach) can't be filed by cell; every check reads them directly.
+  const wide = [];
+  let cells = 0;
+  const bounds = emptyBounds();
   for (const lv of plan.levels) {
-    for (const [key,tile] of lv.level.tiles) terrain.tiles.set(key,tile);
-    for (const [key,edge] of lv.level.walls) terrain.walls.set(key,edge);
+    includeLevel(bounds, lv.level);
+    for (const [key, edge] of lv.level.walls) {
+      const ends = segmentEnds(edge, g), ap = lv.level.apertures.get(key);
+      // Windows remain topological barriers. Doors/arches remove their opening,
+      // but the lintel above the opening still obstructs a higher terrain plane.
+      const low = lv.y + (OPEN.has(ap) ? Math.min(APERTURES[ap].top, g.wallH) : 0);
+      const high = lv.y + g.wallH;
+      if (!ends.flat().concat([low,high]).every(Number.isFinite)) throw new Error('non-finite wall geometry');
+      if (high <= low) continue;            // an opening the wall's full height: nothing stands there
+      const span = { ends, low, high, seen: 0 };
+      spans.push(span);
+      const [x0, x1] = cellRange(Math.min(ends[0][0], ends[1][0]), Math.max(ends[0][0], ends[1][0]), g.tile);
+      const [z0, z1] = cellRange(Math.min(ends[0][1], ends[1][1]), Math.max(ends[0][1], ends[1][1]), g.tile);
+      if (![x0, x1, z0, z1].every(Number.isSafeInteger)) wide.push(span);
+      else for (let x = x0; x <= x1; x++) {
+        let column = buckets.get(x);
+        if (!column) buckets.set(x, column = new Map());
+        for (let z = z0; z <= z1; z++) {
+          const list = column.get(z);
+          if (list) list.push(span); else { column.set(z, [span]); cells++; }
+        }
+      }
+      if (edge.axis >= 2) {
+        const cell = cellKey(edge.x, edge.z), options = diagonals.get(cell);
+        const option = { axis: edge.axis, edge, low, high };
+        if (options) options.push(option); else diagonals.set(cell, [option]);
+      }
+    }
   }
-  for (const lv of plan.levels) for (const [key, edge] of lv.level.walls) {
-    const ends = segmentEnds(edge, plan.grid), ap = lv.level.apertures.get(key);
-    // Windows remain topological barriers. Doors/arches remove their opening,
-    // but the lintel above the opening still obstructs a higher terrain plane.
-    const low = lv.y + (OPEN.has(ap) ? Math.min(APERTURES[ap].top, plan.grid.wallH) : 0);
-    const high = lv.y + plan.grid.wallH;
-    if (!ends.flat().concat([low,high]).every(Number.isFinite)) throw new Error('non-finite wall geometry');
-    if (high > low) spans.push({ ends, low, high });
-  }
-  prepared = { spans, terrain };
+  prepared = { spans, buckets, wide, cells, diagonals, bounds };
   routeGeometry.set(plan,prepared);
   return prepared;
 }
+
+// Each check marks the spans it has tested with a fresh stamp, so a span
+// filed under several cells is tested once per check.
+let stamp = 0;
 
 /** Geometry is shared across walks; this checker is fresh for each supplied
  * support basis. A tall lower wall can obstruct without supplying support. */
 export function prepareWallCheck(plan, basis) {
   const band = basis.step ?? ROUTE_STEP_METRES;
   if (!Number.isFinite(band) || band < 0) throw new Error('invalid local step band');
-  const { spans } = routeGeometryFor(plan);
+  const { spans, buckets, wide, cells } = routeGeometryFor(plan);
+  const tile = plan.grid.tile;
   const heightAt = basis.kind === 'terrain' ? basis.heightAt : () => basis.height;
   if (typeof heightAt !== 'function') throw new Error('terrain walking requires a height function');
   const overlaps = (span, y) => y < span.high - EPS && y + band >= span.low - EPS;
@@ -73,48 +128,84 @@ export function prepareWallCheck(plan, basis) {
     try {
       // Non-finite support data is a refusal even on a wall-free segment.
       if (![heightAt(...a),heightAt(...b)].every(Number.isFinite)) return false;
-      for (const span of spans) {
+      const visit = ++stamp;
+      const obstructs = span => {
+        if (span.seen === visit) return false;
+        span.seen = visit;
         const range = crossingRange(a,b,...span.ends);
-        if (!range) continue;
-        const point = t => [a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];
-        if (range[1]-range[0] > EPS && basis.kind === 'terrain') {
-          // A point-query terrain API cannot bound its height over an entire
-          // collinear overlap. Route away from that projected wall rather than
-          // certify it from a few samples. Point crossings are exact queries.
-          return false;
+        if (!range) return false;
+        // A point-query terrain API cannot bound its height over an entire
+        // collinear overlap. Route away from that projected wall rather than
+        // certify it from a few samples. Point crossings are exact queries.
+        if (range[1]-range[0] > EPS && basis.kind === 'terrain') return true;
+        const t = range[0];
+        const y = heightAt(a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t);
+        return !Number.isFinite(y) || overlaps(span,y);
+      };
+      const [x0, x1] = cellRange(Math.min(a[0], b[0]), Math.max(a[0], b[0]), tile);
+      const [z0, z1] = cellRange(Math.min(a[1], b[1]), Math.max(a[1], b[1]), tile);
+      // A long segment (a distant endpoint's connector) covers more cells than
+      // hold walls: then read the spans directly rather than every cell it covers.
+      if (![x0, x1, z0, z1].every(Number.isSafeInteger) || (x1 - x0 + 1) * (z1 - z0 + 1) > cells)
+        return !spans.some(obstructs);
+      if (wide.some(obstructs)) return false;
+      for (let x = x0; x <= x1; x++) {
+        const column = buckets.get(x);
+        if (!column) continue;
+        for (let z = z0; z <= z1; z++) {
+          const list = column.get(z);
+          if (list && list.some(obstructs)) return false;
         }
-        const y = heightAt(...point(range[0]));
-        if (!Number.isFinite(y) || overlaps(span,y)) return false;
       }
       return true;
     } catch { return false; }
   };
 }
 
+/** The cell graph a terrain walker searches: the diagonals that cut its
+ * cells, chosen for this walk. Levels can cut one cell along different
+ * diagonals, and the one that matters is the one a walker meets: the
+ * diagonal whose span meets the feet-to-step band at the cell centre's
+ * terrain height. When both do, the cell is cut both ways, which two halves
+ * can't represent; ↘ is taken, and legs that would cross ↗ fail the wall check
+ * and route elsewhere. A diagonal no level's band meets leaves the cell
+ * whole. Only diagonals are carried: the node helpers read nothing else of a
+ * level for a terrain walker (openings are in the spans, and half floors
+ * don't bound one), and the search's bounds come from all levels. */
+export function terrainCells(plan, heightAt, band) {
+  const { diagonals } = routeGeometryFor(plan), g = plan.grid, walls = new Map();
+  for (const [cell, options] of diagonals) {
+    const [x, z] = cell.split(',').map(Number);
+    const y = heightAt((x + .5) * g.tile, (z + .5) * g.tile);
+    const meets = Number.isFinite(y) ? options.filter(o => y < o.high - EPS && y + band >= o.low - EPS) : options;
+    const pick = meets.find(o => o.axis === 2) ?? meets[0];
+    if (pick) walls.set(edgeKey(pick.axis, x, z), pick.edge);
+  }
+  return { walls };
+}
+
 /** The result distinguishes a validated direct leg from a refused route.
- * A refused search is never permission to walk the direct leg. */
-export function routeLevel(level, g, from, to, outdoors, clear) {
+ * A refused search is never permission to walk the direct leg. The search
+ * covers `bounds` (a level's own when omitted), padded by one cell; `scale`
+ * is world metres per local metre, for the refusal's figures. */
+export function routeLevel(level, g, from, to, outdoors, clear, { bounds, scale = 1 } = {}) {
   const blocked = reason => ({ kind: 'blocked', reason, points: [] });
   if (![...from, ...to].every(Number.isFinite)) return blocked('non-finite endpoint');
   if (outdoors && clear(from, to)) return { kind: 'clear', points: [from, to] };
-  if (!clear(from, from) || !clear(to, to)) return blocked('endpoint lies on a solid wall');
+  if (!clear(from, from)) return blocked('the start lies on a solid wall');
+  if (!clear(to, to)) return blocked('the destination lies on a solid wall');
 
-  // Bounds belong to authored geometry, never to walk distance. Include walls
-  // without tiles: a free-standing exterior wall still blocks a walk.
-  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
-  const include = (x, z) => { minX = Math.min(minX, x); minZ = Math.min(minZ, z); maxX = Math.max(maxX, x); maxZ = Math.max(maxZ, z); };
-  for (const k of level.tiles.keys()) {
-    const [x, z] = k.split(',').map(Number); include(x, z); include(x + 1, z + 1);
-  }
-  for (const edge of level.walls.values()) {
-    // Full cell extent also contains either diagonal and either axis.
-    include(edge.x, edge.z); include(edge.x + 1, edge.z + 1);
-  }
+  // Bounds belong to authored geometry, never to walk distance.
+  let { minX, minZ, maxX, maxZ } = bounds ?? includeLevel(emptyBounds(), level);
+  if (minX > maxX) return blocked(outdoors ? 'the structure has no cells or walls' : 'the identified floor has no cells');
   minX--; minZ--; maxX++; maxZ++;
   const width = maxX - minX, depth = maxZ - minZ;
-  if (![minX, minZ, maxX, maxZ, width, depth].every(Number.isSafeInteger) ||
-      width <= 0 || depth <= 0 || width > ROUTE_MAX_CELLS / depth)
-    return blocked('routing region exceeds ' + ROUTE_MAX_CELLS + ' cells');
+  if (![minX, minZ, maxX, maxZ, width, depth].every(Number.isSafeInteger) || width > ROUTE_MAX_CELLS / depth) {
+    const metres = n => +(n * g.tile * scale).toPrecision(4);
+    return blocked(`its footprint, padded by a cell, is ${width}×${depth} cells (${metres(width)}×${metres(depth)} m), ` +
+      `over the ${ROUTE_MAX_CELLS}-cell routing limit; nearer endpoints won't help, since the search covers the whole ` +
+      `footprint, but a straight leg that clears its walls needs no search`);
+  }
   // Padding guarantees the projected connector remains outside every wall.
   // Its landing lies on the outer ring's centers, not on an exclusive bound.
   const clip = p => [Math.max((minX + .5) * g.tile, Math.min((maxX - .5) * g.tile, p[0])),

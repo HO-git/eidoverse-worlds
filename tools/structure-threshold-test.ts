@@ -3,7 +3,7 @@
 // of the planner, from authored edges, so a shared predicate bug cannot pass it.
 import { strict as assert } from "node:assert";
 import { planStructure, planRouteLocal, prepareRouteLocal, routeLocal, localizePoint } from "../shared/structure.js";
-import { WorldAgent } from "../mcpl/agent.ts";
+import { WorldAgent, WALK_ARGS_REASON } from "../mcpl/agent.ts";
 import { handleTool } from "../mcpl/tools.ts";
 process.env.AGENT_BODY_ENGINE = "verlet";
 let checks = 0;
@@ -57,7 +57,8 @@ check(planRouteLocal(planStructure(sealed),.5,-3,3.5,.5).kind==="blocked","windo
 check(routeLocal(planStructure(sealed),.5,-3,3.5,.5)===null,"compatibility route returns null for refusal");
 const sparse = { levels: [{ tiles: [], walls: [[1,0,0],[1,100000000,0]], apertures: [] }] };
 const sparseResult = planRouteLocal(planStructure(sparse),-1,.5,1,.5);
-check(sparseResult.kind==="blocked" && sparseResult.reason!.includes("cells"),"huge sparse bounds return named budget refusal");
+check(sparseResult.kind==="blocked" && sparseResult.reason!.includes("over the 16384-cell routing limit") && sparseResult.reason!.includes("nearer endpoints won't help"),
+  "huge sparse bounds return a named budget refusal that says nearer endpoints won't help");
 check(planRouteLocal(planStructure(sparse),-1,-1,-2,-2).kind==="clear","clear path remains possible beside huge sparse geometry");
 const wallOnly = { levels: [{ tiles: [], walls: [[1,0,0]], apertures: [] }] };
 route(wallOnly,[-.5,.5],[.5,.5],"unfloored exterior wall");
@@ -84,6 +85,15 @@ const courtyard = { levels: [{ tiles: [[0,0],[1,0],[2,0],[0,1],[2,1],[0,2],[1,2]
   walls: [[0,1,1],[0,1,2],[1,1,1],[1,2,1]], apertures: [[0,1,1,"door"]] }] };
 route(courtyard,[1.5,1.5],[3.5,1.5],"unfloored courtyard through its door");
 check(planRouteLocal(p,NaN,0,1,1).kind==="blocked","non-finite endpoints are refused");
+// A terrain leg along a wall's projection is refused even when the wall is
+// overhead: point queries can't bound the terrain over the whole overlap. The
+// walk is routed away from the wall's line instead.
+const overhead={levels:[{y:3,tiles:[],walls:[[0,0,0]],apertures:[]}]};
+check(planRouteLocal(planStructure(overhead),-1,.5,2,.5).kind==="clear","an overhead wall's crossing leaves a terrain leg clear");
+const along=planRouteLocal(planStructure(overhead),-1,0,2,0);
+check(along.kind==="routed"&&!along.points.some((q:number[],i:number)=>i>0&&along.points[i-1][1]===0&&q[1]===0
+  &&Math.min(along.points[i-1][0],q[0])<1&&Math.max(along.points[i-1][0],q[0])>0),
+  "a terrain leg along a projected wall is routed away from its line");
 
 // Floor-mode tests supply an explicit support owner/height. They do not
 // manufacture elevated standing on main, whose body remains terrain-clamped.
@@ -120,11 +130,19 @@ function worldPoint(e: any, p: P): P {
 async function walk(a: WorldAgent, to: P, tolerance=0, iterations=2000) {
   const samples: P[] = [[a.pos.x,a.pos.z]];
   const promise=a.walkTo(...to,true,10000,tolerance);
+  // The waypoints as planned: the first target, then the legs after it.
+  const planned: P[] = (a as any).target ? [(a as any).target,...(a as any).legs].map((q:any)=>[q.x,q.z] as P) : [];
   for (let i=0;i<iterations && (a as any).target;i++) {
     (a as any).tick(); samples.push([a.pos.x,a.pos.z]);
   }
   if ((a as any).target) { a.stop(); throw new Error("walk failed to finish within bounded ticks"); }
-  return { arrived: await promise, samples };
+  return { arrived: await promise, samples, planned };
+}
+// A body held on an upper floor. Main's body stands on terrain only, so these
+// bodies are given the floor support the storey-standing work (#200) supplies,
+// as walkSupport answers it there; walkTo's floor branch serves that answer.
+function standOn(a: WorldAgent, entity: string, level: number, height: number) {
+  (a as any).walkSupport=()=>({kind:"floor",height,entity,level});
 }
 try {
   for (const [label, e] of [["base",entity()],["transformed",entity(house,"house",[10,0,-5],Math.PI/3,2)]] as const) {
@@ -135,6 +153,10 @@ try {
     const local=w.samples.map(([x,z])=>{const [lx,,lz]=localizePoint(e,x,0,z);return [lx,lz];});
     check(valid(house,local),label+": actual tick trajectory with tolerance 0.4 crosses no wall");
     check(Math.hypot(a.pos.x-to[0],a.pos.z-to[1])<=.4,label+": destination tolerance remains honored");
+    // Only the destination takes the caller's tolerance: the body stands on
+    // each corner exactly before it turns.
+    check(w.planned.length>2&&w.planned.slice(0,-1).every(([x,z])=>w.samples.some(([sx,sz])=>sx===x&&sz===z)),
+      label+": every intermediate waypoint is reached exactly despite tolerance 0.4");
   }
   const a=agent(); a.pos={x:.5,y:0,z:-3};
   a.entities.set("junk",entity("junk" as any,"junk",[500,0,500]));
@@ -152,15 +174,18 @@ try {
   const reply=await handleTool(ctx,"walk_to",{x:3.5,z:.5});
   check(reply.content[0].text.includes("no route") && reply.content[0].text.includes("sealed"),"actual walk_to tool explains sealed-building refusal");
 
+  const badArgs=await handleTool(ctx,"walk_to",{x:NaN,z:.5});
+  check(badArgs.isError===true && badArgs.content[0].text===WALK_ARGS_REASON,"the tool and walkTo refuse bad arguments in the same words");
+
   const c=agent(); c.pos={x:-1,y:0,z:.5};
   c.entities.set("sparse",entity(sparse as any,"sparse"));
   const cap=await handleTool({...ctx,agent:c},"walk_to",{x:1,z:.5});
   check(cap.content[0].text.includes("cells") && !(c as any).target,"actual tool reports budget refusal without movement");
 
-  if (typeof (a as any).groundAt === "function") {
-  // Independent review repro: a foreign wall's detour must not discharge
-  // the floor-only constraint imposed by the structure supporting the start.
-  const support=agent(); support.pos={x:.5,y:3.1,z:.5};
+  {
+  // A foreign wall's detour must not discharge the floor-only constraint
+  // imposed by the structure supporting the start.
+  const support=agent(); support.pos={x:.5,y:3.1,z:.5}; standOn(support,"floor",1,3.1);
   const floor={levels:[{y:0,tiles:[],walls:[],apertures:[]},
     {y:3,tiles:[[0,0],[2,0]],walls:[],apertures:[]}]};
   const foreign={levels:[{y:3,tiles:[[10,10]],walls:[[1,1,0]],apertures:[]}]};
@@ -179,7 +204,7 @@ try {
   check(supported.arrived && supported.samples.every(([x,z])=>cells.has(Math.floor(x)+","+Math.floor(z))),
     "longer supported route wins over a shorter foreign unsupported shortcut");
 
-  const nearby=agent(); nearby.pos={x:.2,y:3.1,z:.2};
+  const nearby=agent(); nearby.pos={x:.2,y:3.1,z:.2}; standOn(nearby,"nearby",1,3.1);
   const oneFloor={levels:[{y:0,tiles:[],walls:[],apertures:[]},
     {y:3,tiles:[[0,0]],walls:[],apertures:[]}]};
   nearby.entities.set("nearby",entity(oneFloor as any,"nearby"));
@@ -205,27 +230,75 @@ try {
   d.pos={x:-2,y:0,z:1.5};
   const outcome=await walk(d,[5,1.5]);
   check(!outcome.arrived && !!d.walkRefusal?.includes("multi-building"),"conflicting second structure gets explicit local-search refusal");
-  if (typeof (d as any).groundAt === "function") {
-    // This branch runs in the isolated combination with PR #200. It cannot
-    // claim upstairs product coverage from main's terrain-only body clamp.
+  check(/\[(one|two)\]'s route is obstructed by \[(one|two)\]/.test(d.walkRefusal!),"the refusal names which structure obstructed which route: "+d.walkRefusal);
+  // A third structure, over the search limit, keeps its own reason beside them.
+  d.entities.set("huge",entity({ levels: [{ tiles: [], walls: [[1,3,1],[1,100000000,0]], apertures: [] }] } as any,"huge"));
+  d.pos={x:-2,y:0,z:1.5};
+  const withHuge=await walk(d,[5,1.5]);
+  check(!withHuge.arrived && d.walkRefusal!.includes("multi-building") && d.walkRefusal!.includes("[huge]: its footprint")
+    && d.walkRefusal!.includes("over the 16384-cell routing limit"),"an over-limit structure's own reason survives the generic refusal");
+  {
+    // A body held on an upper floor of a stacked house.
     const u=agent();
     const above=structuredClone(house.levels[0]); above.y=3;
     u.entities.set("stacked",entity({ levels: [structuredClone(house.levels[0]),above] } as any,"stacked"));
-    u.pos={x:.2,y:3.1,z:.2};
+    u.pos={x:.2,y:3.1,z:.2}; standOn(u,"stacked",1,3.1);
     const stationary=await walk(u,[.2,.2]);
     check(stationary.arrived && stationary.samples.every(([x,z])=>x===.2&&z===.2),
-      "#200 combination stays put for an off-center stationary walk request");
+      "a floor-held body stays put for an off-center stationary walk request");
     u.pos={x:.5,y:3.1,z:.5};
     const out=await walk(u,[.5,-2]);
-    check(!out.arrived && !!u.walkRefusal?.includes("floored endpoints"),"#200 combination refuses an upper destination beyond the floor");
-    check(u.pos.x===.5 && u.pos.z===.5 && u.pos.y===3.1,"#200 combination refusal preserves upstairs standing position");
+    check(!out.arrived && !!u.walkRefusal?.includes("floored endpoints"),"a floor-held body is refused an upper destination beyond the floor");
+    check(u.pos.x===.5 && u.pos.z===.5 && u.pos.y===3.1,"and the refusal leaves it standing where it was upstairs");
     above.tiles=[[0,0],[2,0]]; above.walls=[]; above.apertures=[];
     u.entities.set("stacked",entity({ levels: [structuredClone(house.levels[0]),above] } as any,"stacked"));
     const gap=await walk(u,[2.5,.5]);
-    check(!gap.arrived && !(u as any).target,"#200 combination refuses crossing a gap in sparse upper floors");
-  } else {
-    console.log("Main has no #200 standing-height resolver; combined upper-storey product checks are separate.");
+    check(!gap.arrived && !(u as any).target,"a floor-held body is refused crossing a gap in sparse upper floors");
   }
+
+  // A structure the agent can't check (its geometry isn't finite: a 10 m
+  // tile at x = 1e308) is skipped for every walk, and logged once: it
+  // neither refuses an unrelated walk nor stops a real route elsewhere.
+  const warned: string[] = [], warn=console.warn;
+  console.warn=(...args: unknown[])=>{ warned.push(args.map(String).join(" ")); };
+  try {
+    const s=agent(); s.pos={x:.5,y:0,z:-3};
+    s.entities.set("house",entity());
+    s.entities.set("broken",entity({ tile: 10, levels: [{ tiles: [], walls: [[0,1e308,0]], apertures: [] }] } as any,"broken"));
+    check((await walk(s,[3.5,.5])).arrived,"an unplannable structure doesn't stop a real route elsewhere");
+    s.pos={x:-5,y:0,z:-5};
+    check((await walk(s,[-6,-6])).arrived && s.walkRefusal===null,"nor refuse an unrelated walk");
+    check(warned.filter(l=>l.includes("[broken]")).length===1,"and the operator's log names it once");
+  } finally { console.warn=warn; }
+
+  // A structure carried by another is checked where it is now (the carrier's
+  // place), not at its own rest pose.
+  const carried=agent();
+  carried.entities.set("cart",{ id:"cart", lib:"", pos:[10,0,0], yaw:0, scale:1 } as any);
+  carried.entities.set("house",entity());
+  carried.mounts.set("house",{ to:"cart" });
+  carried.pos={x:10.5,y:0,z:-3};
+  const here=await walk(carried,[13.5,.5]);
+  const local=here.samples.map(([x,z])=>[x-10,z] as P);
+  check(here.arrived && here.planned.length>1 && valid(house,local),"a carried structure's walls are checked at its carrier's place");
+  carried.pos={x:.5,y:0,z:-3};
+  const rest=await walk(carried,[3.5,.5]);
+  check(rest.arrived && rest.planned.length===1,"and its rest pose, where nothing stands now, is walked straight across");
+
+  // A body standing in a wall (a door edited to a window under its feet)
+  // steps out to the nearest clear point beside it, and is routed from there.
+  const inWall=agent(); inWall.entities.set("house",entity()); inWall.pos={x:0,y:0,z:1.5};
+  const out2=await walk(inWall,[3.5,.5]);
+  const step=out2.planned[0];
+  check(out2.arrived && Math.hypot(step[0],step[1]-1.5)<=.5 && step[0]>0,"a body standing in a wall steps out beside it, toward its destination");
+  check(valid(house,out2.samples.slice(1)),"and walks on without crossing a wall");
+  const shut={ levels: [{ tiles: [[0,0]], walls: [[0,0,0],[0,0,1],[1,0,0],[1,1,0]], apertures: [] }] };
+  const vault={ levels: [{ tiles: [[0,0]], walls: [[0,0,0],[0,0,1],[1,0,0],[1,1,0]], apertures: [] }] };
+  const stuck=agent(); stuck.entities.set("shut",entity(shut as any,"shut")); stuck.entities.set("vault",entity(vault as any,"vault",[10,0,10]));
+  stuck.pos={x:0,y:0,z:.5};
+  const nowhere=await walk(stuck,[10.5,10.5]);
+  check(!nowhere.arrived && stuck.walkRefusal!.startsWith("the body stands in a wall, and from beside it: ") && stuck.walkRefusal!.includes("[vault]"),
+    "a body in a wall with no route from either side says so: "+stuck.walkRefusal);
   console.log("PASS " + checks + " threshold routing checks");
 } finally { for (const a of agents) a.close(); }
 process.exit(0);

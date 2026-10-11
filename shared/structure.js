@@ -1,4 +1,4 @@
-import { routeLevel, prepareWallCheck, routeGeometryFor, ROUTE_STEP_METRES } from './structure-route.js';
+import { routeLevel, prepareWallCheck, routeGeometryFor, terrainCells, ROUTE_STEP_METRES } from './structure-route.js';
 export { ROUTE_STEP_METRES };
 // structure_field — the griddled-building model's pure half (§11.4 discipline,
 // sibling of models_field.js / flora_field.js / emitter_field.js).
@@ -1058,32 +1058,43 @@ export function routeCells(level, fromKey, toKey) {
 
 /** Prepare one immutable structure-plan snapshot against a supplied walking basis. The standing
  * resolver, not floor ordering or x/z overlap, owns that basis:
- * terrain {heightAt(localX,localZ), step?}; floor {height, level?, step?}.
+ * terrain {heightAt(localX,localZ), step?, scale?}; floor {height, level?, step?, scale?}.
  * A floor's level index identifies THIS structure as the support owner;
  * omit it on other structures, which can constrain walls but offer no support.
  * step is the feet-to-step obstruction band in local metres, not a grant of
- * floor ownership. Callers scale ROUTE_STEP_METRES from world metres. */
+ * floor ownership. Callers scale ROUTE_STEP_METRES from world metres; scale
+ * (world metres per local metre, 1 when omitted) only puts a refusal's
+ * figures in world metres. A preparation that can't be made (no basis, or
+ * geometry that isn't finite) says why in `failed`, so a caller can tell a
+ * structure it can't read from one that refuses a route; its route() refuses
+ * and its clear() is false. */
 export function prepareRouteLocal(plan, basis) {
   // Freeze the chosen mode/identity and function reference for this walk.
   // A caller cannot change a floor into terrain halfway through validation.
   basis = basis ? { ...basis } : basis;
   const blocked = reason => ({ kind: 'blocked', reason, points: [], confined: basis?.kind === 'floor' && basis.level != null });
-  if (!basis || !['terrain','floor'].includes(basis.kind))
-    return { route: () => blocked('walking support basis is required'), clear: () => false, confined: false };
+  const unusable = reason => ({ failed: reason, route: () => blocked(reason), clear: () => false, confined: false });
+  if (!basis || !['terrain','floor'].includes(basis.kind)) return unusable('walking support basis is required');
   let clear;
   try { clear = prepareWallCheck(plan,basis); }
-  catch (e) { return { route: () => blocked(String(e.message)), clear: () => false, confined: false }; }
+  catch (e) { return unusable(String(e.message)); }
   const confined = basis.kind === 'floor' && basis.level != null;
-  // The immutable plan's cached local topology has no support/transform
+  const scale = Number.isFinite(basis.scale) && basis.scale > 0 ? basis.scale : 1;
+  // The immutable plan's cached local geometry has no support/transform
   // state. Each new received component revision produces a different plan.
-  const union = routeGeometryFor(plan).terrain;
   return {
     confined,
     clear: (ax,az,bx,bz) => clear([ax,az],[bx,bz]),
     route(fromX,fromZ,toX,toZ) {
       const from=[fromX,fromZ], to=[toX,toZ];
       if (![...from,...to].every(Number.isFinite)) return blocked('non-finite endpoint');
-      if (basis.kind === 'terrain') return { ...routeLevel(union,plan.grid,from,to,true,clear), confined: false };
+      if (basis.kind === 'terrain') {
+        if (clear(from,to)) return { kind: 'clear', points: [from,to], confined: false };
+        // The search covers every level's geometry; the diagonals that cut its
+        // cells are the ones this walk's terrain meets (terrainCells).
+        const cells = terrainCells(plan, basis.heightAt, basis.step ?? ROUTE_STEP_METRES);
+        return { ...routeLevel(cells,plan.grid,from,to,true,clear,{ bounds: routeGeometryFor(plan).bounds, scale }), confined: false };
+      }
       if (!Number.isFinite(basis.height)) return blocked('non-finite floor height');
       if (!confined) return clear(from,to)
         ? {kind:'clear',points:[from,to],confined:false}
@@ -1091,19 +1102,29 @@ export function prepareRouteLocal(plan, basis) {
       const lv=Number.isInteger(basis.level) ? plan.levels[basis.level] : null;
       if (!lv || Math.abs(lv.y-basis.height)>1e-7)
         return blocked('identified support floor does not match supplied feet height');
-      return { ...routeLevel(lv.level,plan.grid,from,to,false,clear), confined:true };
+      return { ...routeLevel(lv.level,plan.grid,from,to,false,clear,{ scale }), confined:true };
     },
   };
 }
 
-/** Legacy point-list surface. Numeric y is a flat terrain walking plane, not
- * evidence of floor support; elevated callers use prepareRouteLocal explicitly. */
+/** A route over `plan` on a flat terrain basis, `y` being the terrain's height
+ * everywhere (a walking plane, not evidence of floor support; elevated callers
+ * use prepareRouteLocal explicitly). Walls of every level are checked against
+ * that plane's feet-to-step band, and an outdoor endpoint is routed around the
+ * structure rather than refused. The result is prepareRouteLocal's route():
+ * kind 'clear' for a straight leg that clears every wall, 'routed' with the
+ * waypoints, or 'blocked' with the reason. */
 export function planRouteLocal(plan, fromX, fromZ, toX, toZ, y = 0) {
   return prepareRouteLocal(plan,{kind:'terrain',heightAt:()=>y,step:ROUTE_STEP_METRES}).route(fromX,fromZ,toX,toZ);
 }
+/** Whether the straight leg clears every wall, on planRouteLocal's flat terrain basis. */
 export function routeSegmentClear(plan, fromX, fromZ, toX, toZ, y = 0) {
   return prepareRouteLocal(plan,{kind:'terrain',heightAt:()=>y,step:ROUTE_STEP_METRES}).clear(fromX,fromZ,toX,toZ);
 }
+/** planRouteLocal's waypoints in grid-local metres, the true start and the
+ * true destination included, or null when it refuses a route. A straight leg
+ * that clears every wall is just the two endpoints; otherwise the points are
+ * the search's cell centres and edge crossings, with collinear runs merged. */
 export function routeLocal(plan, fromX, fromZ, toX, toZ, y = 0) {
   const result = planRouteLocal(plan, fromX, fromZ, toX, toZ, y);
   return result.kind === 'blocked' ? null : result.points;

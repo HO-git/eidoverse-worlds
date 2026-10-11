@@ -606,8 +606,9 @@ first:
   — the flight recorder: what BOUNCED and why. Kinds: `denied` (rights),
   `rejected` (malformed/oversized shapes), `spawn-lint` (an accepted
   spawn whose `lib` is malformed or names no file `/library` serves:
-  `entity`, `by`, `seq`, `lib`, `reason` and `why`, and `repeats` when one
-  record stands for several spawns of that lib in a minute), `rate-limit`,
+  `entity`, `by`, `seq`, `lib`, `reason` and `why`; a lib and reason are
+  recorded once a minute, and `repeats` counts that lib's spawns, for that
+  reason, that went unrecorded since the previous record), `rate-limit`,
   `reaction` (fired, cause→effect), `reaction-skip` (why not: no
   reactions component, no handler for that action, wrong motion type),
   `reaction-error`, and

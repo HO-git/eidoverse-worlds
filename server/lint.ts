@@ -57,12 +57,21 @@ export function libraryPath(lib: unknown, extension: RegExp): string | null {
 const MODEL = /\.(glb|vrm)$/i;
 const modelPath = (lib: unknown) => libraryPath(lib, MODEL);
 
+/** Whether `p` is a regular file. statSync throws for more than a missing
+ *  entry: a path through a file (ENOTDIR, in bun) and a name past the
+ *  filesystem's limit (ENAMETOOLONG). Each is no file here, as it was to the
+ *  existsSync these lookups used before, and a spawner's long name must not
+ *  turn a lookup into a throw. */
+function isFile(p: string): boolean {
+  try { return statSync(p).isFile(); } catch { return false; }
+}
+
 /** The first rung of the ladder holding `rel` as a regular file, as /library
  *  serves it: a directory named like a model is no model. */
 export function onLadder(rel: string): string | null {
   for (const base of LADDER) {
     const p = normalize(join(base, rel));
-    if (p.startsWith(base) && statSync(p, { throwIfNoEntry: false })?.isFile()) return p;
+    if (p.startsWith(base) && isFile(p)) return p;
   }
   return null;
 }
@@ -84,8 +93,10 @@ export function resolveLibFile(lib: string): string | null {
 
 // The recorder is a 300-entry ring shared by every kind: a script spawning
 // the same unresolvable lib again and again must not evict everything else.
-// One record per world, lib and reason a minute; the next says how many
-// spawns it stands for since the last.
+// One record per world, lib and reason a minute. The next record's `repeats`
+// counts the spawns of that lib, for that reason, that went unrecorded since
+// the previous record; a burst that stops is counted only when the lib is
+// spawned again after the minute.
 const SPAWN_LINT_WINDOW_MS = 60_000;
 const spawnLintSeen = new WeakMap<object, Map<string, { at: number; since: number }>>();
 

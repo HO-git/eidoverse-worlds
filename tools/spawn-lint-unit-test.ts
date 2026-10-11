@@ -4,9 +4,19 @@ import { mock } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Document, NodeIO } from "@gltf-transform/core";
 import { mkCheck } from "./harness.ts";
 import { emptyState } from "../shared/fold.js";
 const { check, tally } = mkCheck();
+/** A one-triangle GLB whose box is [[0,0,0],[size,size,size]]. */
+async function triangleGlb(size: number): Promise<Uint8Array> {
+  const doc = new Document();
+  const position = doc.createAccessor().setType("VEC3").setBuffer(doc.createBuffer())
+    .setArray(new Float32Array([0, 0, 0, size, 0, 0, 0, size, size]));
+  const mesh = doc.createMesh().addPrimitive(doc.createPrimitive().setAttribute("POSITION", position));
+  doc.createScene().addChild(doc.createNode().setMesh(mesh));
+  return new NodeIO().writeBinary(doc);
+}
 const root = mkdtempSync(join(tmpdir(), "ew-spawn-unit-"));
 const ladder = ["patched", "overlay", "library"].map(dir => join(root, dir));
 for (const dir of ladder) mkdirSync(dir);
@@ -40,6 +50,22 @@ try {
   check("a name with two dots is a name, served and resolved", resolveLibFile("robot..v2.glb") === join(ladder[2], "robot..v2.glb"));
   mkdirSync(join(ladder[2], "folder.glb"));
   check("a directory named like a model is no model", resolveLibFile("folder.glb") === null);
+  // statSync throws for these where existsSync said no: a path through a file
+  // (ENOTDIR, in bun) and a name past the filesystem's 255-byte limit
+  // (ENAMETOOLONG; 90 é's are 544 bytes once percent-encoded).
+  const unservable = ["shared.glb/x.glb", "a".repeat(300) + ".glb", "é".repeat(90) + ".glb"];
+  for (const lib of unservable) check("no file, not a throw: " + lib.slice(0, 24), resolveLibFile(lib) === null);
+  // An absolute URL can't leave /library: it is appended to "/library/", so
+  // it names a path inside the library, which /library would 404.
+  check("an absolute URL names a path inside /library, and nothing there",
+    libraryPath("http://evil/x.glb", /\.glb$/i) === "http:/evil/x.glb" && resolveLibFile("http://evil/x.glb") === null);
+  // The box stamped into a spawn comes from the file clients load: the patch,
+  // where one exists, over the base library's model of the same name.
+  writeFileSync(join(ladder[0], "boxed.glb"), await triangleGlb(2));
+  writeFileSync(join(ladder[2], "boxed.glb"), await triangleGlb(1));
+  const { warmBoxes, boxOf } = await import("../server/boxes.ts");
+  await warmBoxes(["boxed.glb"]);
+  check("a patched lib's box is the patch's, the model clients render", JSON.stringify(boxOf("boxed.glb")) === "[[0,0,0],[2,2,2]]");
   const events: any[] = [];
   const w = { state: emptyState(), debug: (kind: string, detail: unknown) => events.push({ kind, ...detail as object }) };
   const entry = { seq: 7, ts: 1, actor: "script-author", verb: "spawn", args: { id: "ghost", lib: "missing.glb" } };
@@ -92,9 +118,14 @@ try {
   lintSpawn(w, { ...entry, args: { id: ["a", "b"], lib: "array-id.glb" } });
   await Bun.sleep(0);
   check("an array id is named as the fold keys it", events.at(-1).entity === "a,b");
+  const linted = events.length;
+  for (const lib of [...unservable, "http://evil/x.glb"]) lintSpawn(w, { ...entry, args: { id: "u", lib } });
+  await Bun.sleep(0);
+  check("each is recorded not-found", events.length === linted + 4
+    && events.slice(linted).every(e => e.reason === "not-found"));
 
-  // Repeats of one lib and reason are recorded once a minute; the next record
-  // says how many spawns it stands for.
+  // Repeats of one lib and reason are recorded once a minute; the next
+  // record's repeats counts the spawns that went unrecorded since the last.
   let clock = 1_000_000;
   const tick = () => clock;
   const recorded = events.length;
@@ -104,7 +135,7 @@ try {
   clock += 61_000;
   lintSpawn(w, { ...entry, seq: 200, args: { id: "r3", lib: "repeated.glb" } }, tick);
   await Bun.sleep(0);
-  check("a minute on, the next record says how many it stands for",
+  check("a minute on, the next record counts the spawns that went unrecorded",
     events.length === recorded + 2 && events.at(-1).entity === "r3" && events.at(-1).repeats === 2);
   lintSpawn(w, { ...entry, seq: 201, args: { id: "r4", lib: "another-missing.glb" } }, tick);
   await Bun.sleep(0);

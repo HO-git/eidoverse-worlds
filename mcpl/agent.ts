@@ -2638,13 +2638,14 @@ export class WorldAgent {
       const sides = stepSides(ok);
       if (!sides.length) continue;
       sides.sort((a, b) => Math.hypot(a.x - to.x, a.z - to.z) - Math.hypot(b.x - to.x, b.z - to.z));
-      let refusal = "";
+      const refusals = new Set<string>();
       for (const p of sides) {
         const route = this.routeFrom(p, to, structures);
         if ("points" in route) return { legs: route.points };
-        refusal ||= route.refusal;
+        refusals.add(route.refusal);
       }
-      return { refusal: `the body stands in a wall, and from beside it: ${refusal}` };
+      // Each side's own reason, so the refusal says why none of them served.
+      return { refusal: `the body stands in a wall, and from beside it: ${[...refusals].join("; from another side: ")}` };
     }
     return { refusal: "the body stands in a wall, with no clear point within half a metre to step out to" };
   }

@@ -297,8 +297,9 @@ try {
   const stuck=agent(); stuck.entities.set("shut",entity(shut as any,"shut")); stuck.entities.set("vault",entity(vault as any,"vault",[10,0,10]));
   stuck.pos={x:0,y:0,z:.5};
   const nowhere=await walk(stuck,[10.5,10.5]);
-  check(!nowhere.arrived && stuck.walkRefusal!.startsWith("the body stands in a wall, and from beside it: ") && stuck.walkRefusal!.includes("[vault]"),
-    "a body in a wall with no route from either side says so: "+stuck.walkRefusal);
+  check(!nowhere.arrived && stuck.walkRefusal!.startsWith("the body stands in a wall, and from beside it: ") && stuck.walkRefusal!.includes("[vault]")
+    && stuck.walkRefusal!.includes("; from another side: "),
+    "a body in a wall with no route from either side gives each side's reason: "+stuck.walkRefusal);
   console.log("PASS " + checks + " threshold routing checks");
 } finally { for (const a of agents) a.close(); }
 process.exit(0);

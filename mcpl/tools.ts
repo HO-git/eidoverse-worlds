@@ -108,7 +108,7 @@ export const TOOLS = [
   { name: "list_library", description: "Search the model library by keywords. Returns library paths for spawn.", inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } },
   { name: "spawn", description: "Spawn a library model. lib (exact) or query (best match); position defaults to 2m in front of you.", inputSchema: { type: "object", properties: { lib: { type: "string" }, query: { type: "string" }, x: { type: "number" }, z: { type: "number" }, y: { type: "number" }, yaw: { type: "number" }, id: { type: "string" } } } },
   { name: "place", description: "Move an entity (id from look) to x,z (y defaults to terrain; pass y to seat on furniture).", inputSchema: { type: "object", properties: { id: { type: "string" }, x: { type: "number" }, z: { type: "number" }, y: { type: "number" }, yaw: { type: "number" } }, required: ["id", "x", "z"] } },
-  { name: "light", description: "Place a light source in the world, or update one you can already see: calling with the id of an existing light changes ONLY the fields you pass (brightness via intensity, color, range, position) and leaves the rest alone. Persists like any placed thing. color is a hex integer (e.g. 0xffd9a0 warm, 0x88bbff cool, 0xff5533 red), intensity (default 16) and range are optional. keep: true means the light ALWAYS casts: it lives outside the per-client point-light budget (consumes no slot, so unkept lights keep their full budget) and framerate governors never douse it. Every casting light has real GPU cost — keep it for lights that matter. Position defaults to just in front of you. A supplied id must contain a non-whitespace character; omit it to generate one. A small glowing sphere marks it; move or remove it by id like any entity.", inputSchema: { type: "object", properties: { color: { type: "number" }, intensity: { type: "number" }, range: { type: "number" }, keep: { type: "boolean" }, x: { type: "number" }, y: { type: "number" }, z: { type: "number" }, id: { type: "string" } } } },
+  { name: "light", description: "Place a light source in the world, or update one you can already see: calling with the id of an existing light changes ONLY the fields you pass (brightness via intensity, color, range, position) and leaves the rest alone. Persists like any placed thing. color is a hex integer (e.g. 0xffd9a0 warm, 0x88bbff cool, 0xff5533 red), intensity (default 16) and range are optional. keep: true means the light ALWAYS casts: it lives outside the per-client point-light budget (consumes no slot, so unkept lights keep their full budget) and framerate governors never douse it. Every casting light has real GPU cost — keep it for lights that matter. Position defaults to just in front of you. A supplied id must be a string with at least one non-whitespace character; omit it (or pass null) to generate one. An id that names something other than a light is refused, since a light would replace it. A small glowing sphere marks it; move or remove it by id like any entity.", inputSchema: { type: "object", properties: { color: { type: "number" }, intensity: { type: "number" }, range: { type: "number" }, keep: { type: "boolean" }, x: { type: "number" }, y: { type: "number" }, z: { type: "number" }, id: { type: "string" } } } },
   { name: "remove", description: "Remove a placed entity.", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] } },
   // Description narrowed to what the implementation actually does (antra
   // review, #3). It previously promised "held pose and posture survive", which
@@ -595,19 +595,28 @@ export const HANDLERS: Record<string, ToolHandler> = {
 
   },
   light: async (ag, a, ctx, name) => {
-      // Omission generates an id; a supplied invalid id is not a placement.
-      if (a.id !== undefined) {
+      // Omission generates an id, and so does null, which hosts that fill
+      // every optional argument send for one left out; a supplied invalid id
+      // is not a placement.
+      if (a.id !== undefined && a.id !== null) {
         const why = lightArgsError(a);
         if (why) return { content: [{ type: "text", text: why }], isError: true };
       }
-      if (a.id && ag.entities.has(a.id)) {
+      const standing = a.id != null ? ag.entities.get(a.id) : undefined;
+      // Only a light is updated: the fold replaces anything else holding the
+      // id with a light wholesale (spec §3.1), so a sparse "update" of a
+      // model would leave a light at the fold's defaults where the model was.
+      if (standing && standing.lib !== "(light)") {
+        return { content: [{ type: "text", text: `"${a.id}" is a model (${standing.lib || "no lib"}), not a light, so light won't update it. Use another id, or omit id to generate one.` }], isError: true };
+      }
+      if (standing) {
         // UPDATE: send only what was given — the fold merges, so absent
         // fields keep their prior value (stamping defaults here would reset
         // a light's color every time someone dims it).
         const patch: any = { id: a.id };
         for (const k of ["color", "intensity", "range", "keep"] as const) if (a[k] != null) patch[k] = a[k];
         if (a.x != null || a.y != null || a.z != null) {
-          const prev = ag.entities.get(a.id)!.pos ?? [0, 1, 0];
+          const prev = standing.pos ?? [0, 1, 0];
           patch.pos = [a.x ?? prev[0], a.y ?? prev[1], a.z ?? prev[2]];
         }
         ag.verb("light", patch);

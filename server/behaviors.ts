@@ -217,9 +217,12 @@ class Instance {
   }
 
   /** Emits are the ONLY way a script touches the world, so this is the whole
-   *  security story: author's live rights, then the capability mask, then
-   *  selfOnly, then rate budgets. Returns "" on success or the refusal —
-   *  which the prelude throws, so a denied emit is LOUD in script land. */
+   *  security story, in the order it runs: the rate budgets (per activation,
+   *  then per minute), the capability mask, the author's live rights,
+   *  selfOnly, then the verb's own shape (light's id). The budgets are
+   *  charged first, so a refused emit has still spent them, and a storm of
+   *  refusals isn't free. Returns "" on success or the refusal — which the
+   *  prelude throws, so a denied emit is LOUD in script land. */
   private hostEmit(json: string): string {
     let verb: string, args: Record<string, unknown>;
     try { [verb, args] = JSON.parse(json); } catch { return "emit: unparseable"; }

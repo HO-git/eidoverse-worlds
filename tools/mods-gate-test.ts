@@ -93,6 +93,18 @@ const e5 = await tryCall(() => mods.modsApi.put({ name: 'after-404', source: 'ex
 await settle();
 check('a failed download ran no world code, so the mod API stays open', !e5 && localMods().some((m) => m.name === 'after-404'), String(e5));
 
+console.log('\nbefore any world code has run: the panel still refuses a scripted click (the isTrusted half of the gate)');
+{ const liveGrants = () => localStorage.getItem('ew-mod-grants') ?? '{}';
+  const sec0 = stub.sections.find((s: any) => /mods/.test(s.title)); const body0 = document.createElement('div'); await sec0.onOpen(body0); await settle();
+  const g0 = liveGrants();
+  (body0.querySelector('[data-wworld="1"]') as HTMLElement | null)?.click(); await settle();
+  check('a scripted "trust all scripts in this world" click grants nothing, even with no world code run yet', liveGrants() === g0, liveGrants());
+  // the control: the same button pressed with a trusted event grants (so the check above is about isTrusted, not a dead button)
+  const ev = new MouseEvent('click', { bubbles: true }); Object.defineProperty(ev, 'isTrusted', { value: true });
+  body0.querySelector('[data-wworld="1"]')?.dispatchEvent(ev); await settle();
+  check('…and the same button, with a trusted click, grants (the control)', liveGrants() !== g0, liveGrants());
+  localStorage.setItem('ew-mod-grants', g0); }
+
 console.log('\na world-offered mod, after the visitor pressed "run once"');
 // the offer: on run it tries to make itself permanent and to trust a second offer forever
 const PLANT = `export default async ({ EW }) => {
@@ -126,6 +138,22 @@ check('…and so does the run-once button itself', !!runOnce && /as you/i.test(r
 stub.behaviors.set('third', { runtime: 'client', src: 'scripts/cccc.js', author: 'someone' });
 stub.bus.emit('behavior-roster', { live: true });
 check('…and so does the chat line announcing a new offer', stub.chat.some((l: string) => /as you/i.test(l)), JSON.stringify(stub.chat));
+
+console.log('\nthe panel\'s buttons refuse a click a script made (review of 4098ff7, Oscar-1808 #1)');
+// a world mod can open the 🧩 tab and press "+ new mod" → save, or "always (this script)", with element.click(); such a
+// click carries isTrusted: false. The buttons that plant or trust code must not answer it. (happy-dom dispatches
+// element.click() as untrusted, as browsers do; a plain dispatchEvent is untrusted too.)
+const grants0 = JSON.stringify(grants), mods0 = localMods().length;
+for (const sel of ['[data-new="1"]', '[data-oalways="offer"]', '[data-wworld="1"]']) {
+  const btn = body.querySelector(sel) as HTMLElement | null;
+  check(`the panel renders ${sel}`, !!btn, sel);
+  btn?.click(); await settle();
+}
+const saveBtn = body.querySelector('[data-save="1"]') as HTMLElement | null;
+check('a scripted "+ new mod" click opened no editor (no save button appeared)', !saveBtn, saveBtn ? 'editor opened' : 'none');
+check('a scripted "always" / "trust all" click granted nothing', JSON.stringify(grants) === grants0, JSON.stringify(grants));
+check('…and nothing was written to the local mod store', localMods().length === mods0, String(localMods().length));
+check('…and the panel said why', stub.toasts.some((t: string) => /reload before|did not come from you/.test(t)), JSON.stringify(stub.toasts.slice(-2)));
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

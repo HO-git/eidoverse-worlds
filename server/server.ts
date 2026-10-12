@@ -396,8 +396,8 @@ function admitJoin(c: Client, ws: { send(d: string): void; close(code?: number, 
     // (Hesperus finding #3: an unauthenticated join as "world" produced
     // entries indistinguishable from the sequencer's own.)
     c.id = c.id.replace(/[\u0000-\u001f\u007f]/g, "").trim();
-    // ...and no markup characters (< > "): a typed name carrying them is refused in words; a name the identity
-    // service gave loses them instead (server/names.ts). Names are shown everywhere; none should ever parse as a tag.
+    // ...and no markup characters (< > "): a typed name carrying them is refused in words; in a name the identity
+    // service gave, each becomes a look-alike (‹ › ″; server/names.ts). Names are shown everywhere; none should ever parse as a tag.
     {
       const door = nameAtDoor(c.id, { typed: !auth });
       if (door.refused) {

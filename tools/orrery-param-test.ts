@@ -22,7 +22,12 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 
 // a value that is not an origin: an attribute break-out after a plausible host
 const HOSTILE = 'https://orrery.example/"><img src=x onerror="globalThis.__pwned=1">';
-(globalThis as any).__ORRERY_QS = `orrery=${encodeURIComponent(HOSTILE)}`;
+// MODE (review of 4098ff7, Oscar-1808 #5b): 'param' = the hostile value arrives in the link; 'stored' = it was REMEMBERED by
+// an earlier visit (localStorage ew-orrery-url holds the raw value) and the link carries nothing — the path that made the
+// old injection persist. The file runs itself again in the second mode at the end.
+const MODE = process.env.ORRERY_MODE ?? 'param';
+if (MODE === 'stored') localStorage.setItem('ew-orrery-url', HOSTILE);
+(globalThis as any).__ORRERY_QS = MODE === 'param' ? `orrery=${encodeURIComponent(HOSTILE)}` : '';
 const fetched: string[] = [];
 let loginUrl = 'javascript:globalThis.__pwned=1';
 let signedIn = false;
@@ -41,8 +46,12 @@ const stub = await import('./orrery-param-stub.mjs') as any;
 const conjure = await import('../client/lib/conjure.js');
 conjure.initConjure();
 const stored = localStorage.getItem('ew-orrery-url');
-check('the remembered value is an origin, never the raw parameter', stored === null || stored === new URL(stored).origin, String(stored));
-check('…and carries no markup', !String(stored ?? '').includes('<'), String(stored));
+// what's remembered (or what a remembered hostile value became) is an http(s) base re-serialised by the URL parser:
+// origin + percent-encoded path, no query, hash or credentials (an Orrery under a path keeps its path; #4)
+const isBase = (v: string) => { try { const u = new URL(v); return /^https?:$/.test(u.protocol) && v === u.origin + u.pathname.replace(/\/$/, '') && /^(\/[A-Za-z0-9._-]+)*$/.test(u.pathname.replace(/\/$/, '')) && !u.search && !u.hash; } catch { return false; } };
+if (MODE === 'param') check('the remembered value is an http(s) base, never the raw parameter', stored === null || isBase(stored), String(stored));
+else check('a hostile remembered value is not rewritten by a link that names nothing (left for the panel to refuse)', stored === HOSTILE, String(stored));
+check('…and what the panel will use carries no markup', !String(stored ?? '').includes('<') || MODE === 'stored', String(stored));
 
 const sec = stub.sections.find((s: any) => /conjure/.test(s.title));
 const body = document.createElement('div');
@@ -77,5 +86,11 @@ check('the signed-in panel painted its Orrery link', !!body2.querySelector('a[ta
 check('…and holds no element smuggled in through the link', body2.querySelector('img') === null, body2.innerHTML.slice(-300));
 check('nothing ran', (globalThis as any).__pwned === undefined);
 
-console.log(`\n${pass} passed, ${fail} failed\n`);
-process.exit(fail ? 1 : 0);
+console.log('\n?orrery= — an Orrery under a path keeps its path (#4)');
+{ const { originOf } = conjure as any;
+  check('originOf keeps origin + path and drops query, hash and credentials', originOf('https://host.example/orrery/?x=1#f') === 'https://host.example/orrery' && originOf('https://u:p@host.example/') === null && originOf('javascript:1') === null && originOf(HOSTILE) === 'https://orrery.example', String(originOf?.('https://host.example/orrery/?x=1#f'))); }
+
+console.log(`\n[${MODE}] ${pass} passed, ${fail} failed\n`);
+if (fail || MODE !== 'param') process.exit(fail ? 1 : 0);   // happy-dom keeps the loop alive: exit explicitly
+const r = Bun.spawnSync(['bun', import.meta.path], { env: { ...process.env, ORRERY_MODE: 'stored' }, stdout: 'inherit', stderr: 'inherit' });
+process.exit(r.exitCode);

@@ -287,6 +287,13 @@ export function initMods() {
         const b = e.target.closest('button');
         if (!b) return;
         const d = b.dataset;
+        // The buttons that plant or trust code are the visitor's own hand, so they skip byHand() — but a world-offered
+        // mod runs in this page and can press them with .click() (review of 4098ff7, Oscar-1808 #1). A scripted click
+        // arrives with isTrusted false; and once world code has run here, these buttons close as EW.mods does.
+        if ((d.new || d.save || d.auto || d.oalways || d.wworld || d.orun) && (e.isTrusted !== true || worldCodeRan)) {
+          toast(worldCodeRan ? 'a world mod has run in this page: reload before installing or trusting mods' : 'that click did not come from you');
+          return;
+        }
         // The built-in toggles answer BEFORE any await. listScripts() touches
         // storage and the network, and this is an async handler with no catch:
         // one rejection there killed every button in the panel silently,

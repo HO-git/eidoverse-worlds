@@ -16,7 +16,7 @@
 // (select: "starred"): candidates render as thumbnails, clicking one stars
 // it, the chain resumes into mesh generation.
 //
-// ?orrery=<url> (or localStorage ew-orrery-url) overrides the service for
+// ?orrery=<http(s) base: origin + path> (or localStorage ew-orrery-url) overrides the service for
 // dev — a MOCK_APIS Orrery instance makes the whole flow testable offline.
 
 import { CONFIG, bus, report } from './base.js';
@@ -26,11 +26,14 @@ import { sendVerb, net } from './net.js';
 import { holdGhost } from './build.js';
 import { logChat } from './chat.js';
 
-// A self-hosted Orrery may be named by ?orrery= (remembered). Only an http(s) ORIGIN is taken: the value is
-// interpolated into this panel's markup and into fetches, and a link someone sends you must not be able to smuggle
-// markup or a javascript: URL in through it (it was a reflected XSS that also persisted via localStorage).
-const originOf = (v) => {
-  try { const u = new URL(String(v ?? '')); return /^https?:$/.test(u.protocol) && !u.username && !u.password ? u.origin : null; }
+// A self-hosted Orrery may be named by ?orrery= (remembered). Only an http(s) BASE is taken — origin plus path, as the
+// URL parser re-serialises them (a path of plain segments only; no query, hash or credentials): the value is interpolated into this
+// panel's markup and into fetches, and a link someone sends you must not be able to smuggle markup or a javascript:
+// URL in through it (it was a reflected XSS that also persisted via localStorage). An Orrery served under a path
+// (https://host/orrery) keeps its path (review of 4098ff7, Oscar-1808 #4).
+export const originOf = (v) => {
+  try { const u = new URL(String(v ?? '')); if (!/^https?:$/.test(u.protocol) || u.username || u.password) return null;
+    const path = u.pathname.replace(/\/$/, ''); return /^(\/[A-Za-z0-9._-]+)*$/.test(path) ? u.origin + path : u.origin; }   // a path of plain segments rides; anything else is dropped to the origin
   catch { return null; }
 };
 const asked = originOf(CONFIG.params.get('orrery'));

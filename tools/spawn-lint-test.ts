@@ -24,11 +24,20 @@ writeFileSync(join(library, "caf%C3%A9-served.glb"), "fixture");
 // the first entry that exists and answers it with an error.
 mkdirSync(join(patched, "shadow.glb")); writeFileSync(join(library, "shadow.glb"), "fixture");
 mkdirSync(join(overlay, "body.vrm")); writeFileSync(join(library, "body.vrm"), "fixture");
+// Animation defs name clips by library path, and the clip roster lists a
+// def's clip only where /library serves it: under its encoded name.
+const defs = join(assets, "defs");
+mkdirSync(join(defs, "animations"), { recursive: true });
+mkdirSync(join(library, "clips"));
+writeFileSync(join(defs, "animations", "encoded-clip.json"), JSON.stringify({ vrma: "clips/space clip.vrma" }));
+writeFileSync(join(library, "clips", "space%20clip.vrma"), "fixture");
+writeFileSync(join(defs, "animations", "literal-clip.json"), JSON.stringify({ vrma: "clips/literal clip.vrma" }));
+writeFileSync(join(library, "clips", "literal clip.vrma"), "literal-only");
 const run = await scratchSequencer("spawn-lint", {
   portFrom: 9180,
   serverEnv: {
     EIDOVERSE_DIR: library, OPT_DIR: overlay, PATCH_DIR: patched, SKIP_OPT_SWEEP: "1",
-    HN_REQUIRE_LOGIN: "0", HN_ISSUER_KEY: "", VERB_RATE: "100",
+    HN_REQUIRE_LOGIN: "0", HN_ISSUER_KEY: "", VERB_RATE: "100", DEFS_DIR: defs,
   },
 });
 const sockets: WebSocket[] = [];
@@ -105,6 +114,14 @@ try {
     const served = await fetch(run.BASE + "/library/" + lib);
     check("the route serves no file where a directory shadows one: " + lib, !served.ok, String(served.status));
   }
+  const clips = await (await fetch(run.BASE + "/animations")).json() as { name: string; path: string }[];
+  const encodedClip = clips.find(c => c.name === "encoded-clip");
+  check("a def's clip is listed where /library serves it, under its encoded name",
+    !!encodedClip && /^clips\/space clip\.vrma\?v=\d+$/.test(encodedClip.path), JSON.stringify(clips));
+  const servedClip = await fetch(run.BASE + "/library/" + encodedClip?.path);
+  check("the listed clip's path is served", servedClip.ok && await servedClip.text() === "fixture");
+  check("a clip only its literal disk name holds is not listed, since /library can't serve it",
+    !clips.some(c => c.name === "literal-clip"), JSON.stringify(clips));
   for (const [lib, available] of [["space model.glb", false], ["café.glb", false],
       ["encoded model.glb", true], ["café-served.glb", true], ["encoded%20model.glb", true]] as const) {
     const served = await fetch(run.BASE + "/library/" + lib);

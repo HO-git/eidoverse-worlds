@@ -52,9 +52,7 @@ gate.roster([{ id: 'other', session: 'boot-b:2' }]);
 check('server restart cannot collide at the same numeric generation', gate.say(say('@tester', { spoken: true, utt: 1 }))); tick();
 gate.roster([]);
 gate.participant({ id: 'other', session: 'boot-b:3' });
-check('roster removal releases departed sender cache', gate.say(say('@tester', { spoken: true, utt: 1 }))); tick();
-gate.forget('other');
-check('live teardown releases sender cache', gate.say(say('@tester', { spoken: true, utt: 1 }))); tick();
+check('a sender back after leaving the roster with a new session is fresh', gate.say(say('@tester', { spoken: true, utt: 1 }))); tick();
 
 gate.roster([{ id: 'other' }]);
 check('first legacy sender without session can chime', gate.say(say('@tester', { spoken: true, utt: 2 }))); tick();
@@ -71,13 +69,17 @@ gate.roster([{ id: 'other', session: 'boot-c:9' }]);
 check('later same known session retains dedup', !gate.say(say('@tester', { spoken: true, utt: 3 })));
 
 // A session is a sender page: a reconnect of the same page arrives with the
-// same session, and its counter goes on.
+// same session, and its counter goes on, even when the listener's snapshot
+// misses it between its two legs.
 gate.participant({ id: 'other', session: 'page-d' });
-check('a new page session can chime its first utterance', gate.say(say('@tester', { spoken: true, utt: 4 }))); tick();
+check("a new page forgets the old page's utterances", gate.say(say('@tester', { spoken: true, utt: 3 }))); tick();
 gate.participant({ id: 'other', session: 'page-d' });
-check('a reconnect of the same page keeps its utterance memory', !gate.say(say('@tester', { spoken: true, utt: 4 })));
+check('a reconnect of the same page keeps its utterance memory', !gate.say(say('@tester', { spoken: true, utt: 3 })));
+gate.roster([]);
+gate.participant({ id: 'other', session: 'page-d' });
+check('a snapshot that misses a reconnecting page keeps its memory', !gate.say(say('@tester', { spoken: true, utt: 3 })));
 gate.participant({ id: 'other', session: 'page-e' });
-check('a new page restarts the counter', gate.say(say('@tester', { spoken: true, utt: 4 }))); tick();
+check('a new page restarts the counter', gate.say(say('@tester', { spoken: true, utt: 3 }))); tick();
 
 let audible = false;
 const silentGate = createAttentionGate({ me: () => 'tester', scope: () => 'silent',

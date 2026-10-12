@@ -35,12 +35,12 @@ try {
     } });
   });
   const packets: any[] = [];
-  async function joinSpeaker() {
+  async function joinSpeaker(session?: string) {
     const ws = new WebSocket(h.BASE.replace('http', 'ws') + '/ws');
     const own: any[] = [];
     ws.onmessage = e => { const m = JSON.parse(String(e.data)); packets.push(m); own.push(m); };
     await until(() => ws.readyState === 1);
-    ws.send(JSON.stringify({ type: 'join', token: 'test-door', world: 'attention', id: 'speaker' }));
+    ws.send(JSON.stringify({ type: 'join', token: 'test-door', world: 'attention', id: 'speaker', ...(session ? { session } : {}) }));
     await until(() => own.some(m => m.type === 'snapshot'));
     return ws;
   }
@@ -61,12 +61,22 @@ try {
     (globalThis as any).__received.some((m: any) => m.type === 'whisper' && m.text === 'held before arrival' && m.replay === true)));
   const beforeControls = packets.filter(m => m.type === 'log').length;
   await page.locator('.chat-gear').click();
-  // Every control must remain hittable within the supported minimum frame.
-  const oldSize = await page.evaluate(async () => {
-    const f = (await import('/lib/chat.js')).chat.frame();
-    const old = { w: f._state.w, h: f._state.h };
-    Object.assign(f._state, { w: 240, h: 100 }); f._paint(); return old;
+  // Every control must remain hittable within a minimal chat frame. Lite's chat
+  // fills the viewport below its top bar (index.html, html.lite
+  // .frame.chat-frame), so the viewport sets the frame's size: a 360 px phone
+  // whose height leaves the chat about 100 px under the bar. The bar's own
+  // height can still move (a card under it), so only a short frame is required.
+  const oldViewport = page.viewportSize()!;
+  await page.setViewportSize({ width: 360, height: oldViewport.height });
+  const chatTop = await page.evaluate(() => (document.querySelector('.chat-frame') as HTMLElement).getBoundingClientRect().top);
+  await page.setViewportSize({ width: 360, height: Math.ceil(chatTop) + 100 });
+  await page.waitForFunction(() => {
+    const r = (document.querySelector('.chat-frame') as HTMLElement).getBoundingClientRect();
+    return r.height > 40 && r.height <= 120;
   });
+  // The resize event (which places the open options again) fires in the
+  // rendering steps before the next animation frame: wait past two frames.
+  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
   check('minimum popup is bounded and user-scrollable', await page.locator('.chat-gearpop').evaluate(e => {
     const r = e.getBoundingClientRect(), f = e.closest('.frame').getBoundingClientRect();
     return r.top >= f.top && r.bottom <= f.bottom && r.left >= f.left && r.right <= f.right
@@ -95,10 +105,7 @@ try {
   for (let i = 0; i < 19; i++) await page.locator('[data-attention="volume"]').press('ArrowRight');
   await page.locator('[data-attention="preview"]').click();
   await page.waitForFunction(() => (globalThis as any).__tones === 1);
-  await page.evaluate(async size => {
-    const f = (await import('/lib/chat.js')).chat.frame();
-    Object.assign(f._state, size); f._paint();
-  }, oldSize);
+  await page.setViewportSize(oldViewport);
   await page.locator('[data-attention="enabled"]').check();
   check('preview uses the real AudioContext', await page.evaluate(async () =>
     (await import('/lib/audioctx.js')).audioContext().state === 'running'));
@@ -142,6 +149,16 @@ try {
   check('unlocked reconnect backlog stays silent', await tones() === 4);
   check('reconnect held whisper is marked as replay', await page.evaluate(() =>
     (globalThis as any).__received.some((m: any) => m.type === 'whisper' && m.text === 'held during reconnect' && m.replay === true)));
+  // The page sends its own session id with every join, the same one after a
+  // reconnect, and the server relays it to the others as its presence session.
+  const joinSessions = await page.evaluate(() => (globalThis as any).__sent
+    .map((s: string) => { try { return JSON.parse(s); } catch { return null; } })
+    .filter((m: any) => m?.type === 'join').map((m: any) => m.session));
+  check('the page sends one session id with each join, across a reconnect',
+    joinSessions.length >= 2 && joinSessions.every((s: unknown) => typeof s === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(s) && s === joinSessions[0]),
+    JSON.stringify(joinSessions));
+  check("the speaker sees the page's id as the listener's session", packets.some(m =>
+    m.type === 'arrive' && m.id === 'listener' && m.session === joinSessions[0]));
   say('@listener same speaker after listener reconnect', { spoken: true, utt: 9001 });
   await seen('same speaker after listener reconnect');
   check('listener reconnect preserves unchanged speaker utterance dedup', await tones() === 4);
@@ -176,13 +193,45 @@ try {
   say('@listener sender restarted while you were away', { spoken: true, utt: 9001 });
   await seen('sender restarted while you were away');
   check('snapshot observes sender rejoin missed during listener absence', await tones() === 7);
+  // A speaker page that reconnects (a leave, then an arrive with the same page
+  // id) keeps its utterance memory in the listener: through the page's real
+  // bus, not the gate alone. A new page id restarts the counter.
+  const leaves = () => page.evaluate(() => (globalThis as any).__received
+    .filter((m: any) => m.type === 'leave' && m.id === 'speaker').length);
+  const rejoin = async (session: string) => {
+    const left = await leaves();
+    sender!.close();
+    await page.waitForFunction(n => (globalThis as any).__received
+      .filter((m: any) => m.type === 'leave' && m.id === 'speaker').length > n, left);
+    const arrived = await page.evaluate(() => (globalThis as any).__received.filter((m: any) => m.type === 'arrive' && m.id === 'speaker').length);
+    sender = await joinSpeaker(session);
+    await page.waitForFunction(([n, id]) => (globalThis as any).__received.filter((m: any) =>
+      m.type === 'arrive' && m.id === 'speaker').length > n
+      && (globalThis as any).__received.filter((m: any) => m.type === 'arrive' && m.id === 'speaker').at(-1).session === id,
+    [arrived, session] as const);
+  };
+  await sleep(3100);
+  await rejoin('probe-page-one');
+  say('@listener page one first', { spoken: true, utt: 9300 });
+  await seen('page one first');
+  check('a speaker page chimes its utterance', await tones() === 8);
+  await sleep(3100);
+  await rejoin('probe-page-one');
+  say('@listener page one continued', { spoken: true, utt: 9300 });
+  await seen('page one continued');
+  check('a reconnect of the same page (a leave, then the same id) keeps its utterance silent', await tones() === 8);
+  await sleep(3100);
+  await rejoin('probe-page-two');
+  say('@listener page two restarted', { spoken: true, utt: 9300 });
+  await seen('page two restarted');
+  check('a new page restarts the counter', await tones() === 9);
   const unrelated = await page.evaluate(async () => JSON.stringify((await import('/lib/voiceconsent.js')).audioPrefs()));
   if (!await page.locator('[data-attention="enabled"]').isVisible()) await page.locator('.chat-gear').click();
   await page.locator('[data-attention="enabled"]').uncheck();
   await sleep(3100);
   say('@listener now muted');
   await seen('now muted');
-  check('attention mute suppresses only its own tones', await tones() === 7);
+  check('attention mute suppresses only its own tones', await tones() === 9);
   check('world/voice/TTS settings stay unchanged', unrelated === await page.evaluate(async () =>
     JSON.stringify((await import('/lib/voiceconsent.js')).audioPrefs())));
   check('muted mention remains visibly highlighted', await page.locator('#chatlog .line.ping').filter({ hasText: 'now muted' }).count() === 1);

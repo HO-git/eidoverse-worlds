@@ -92,7 +92,9 @@ export function initAttention({ bus, me, scope, mentions }) {
   gate = createAttentionGate({ me, scope, mentions, play: playNotice });
   bus.on('participant-session', gate.participant);
   bus.on('participant-sessions', gate.roster);
-  bus.on('participant-teardown', gate.forget);
+  // A departure keeps the sender's utterance memory: a reconnect of the same
+  // page leaves, then arrives with the same session. A changed session, at an
+  // arrival or in a snapshot, clears it (attention-policy.js participant()).
   bus.on('live-entry', gate.say);
   for (const event of ['pointerdown', 'keydown', 'touchend']) addEventListener(event, unlock, { passive: true });
 }

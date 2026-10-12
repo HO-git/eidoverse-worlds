@@ -198,9 +198,10 @@ export function sendDrag(id, pos, yaw) {
 
 /** This page's presence session: one id for as long as the page lives, sent
  *  with every join, so listeners can tell a reconnect (the same page, whose
- *  utterance counter goes on) from a new page (whose counter starts again). */
-const PAGE_SESSION = globalThis.crypto?.randomUUID?.()
-  ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+ *  utterance counter goes on) from a new page (whose counter starts again).
+ *  index.html's early socket sends the first join, with the same id. */
+const PAGE_SESSION = (globalThis.__ewPageSession ??= globalThis.crypto?.randomUUID?.()
+  ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`);
 
 export function sendJoin() {
   const id = CONFIG.renderer ? `renderer-${CONFIG.name}`

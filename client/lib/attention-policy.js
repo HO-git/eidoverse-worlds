@@ -39,11 +39,11 @@ export function createAttentionGate({ me, scope, mentions, now = () => performan
   }
   return {
     participant,
-    forget,
     roster(people) {
       sync();
-      const present = new Set(people.map(p => p.id));
-      for (const actor of sessions.keys()) if (!present.has(actor)) forget(actor);
+      // A sender missing from the snapshot may be between two legs of one page,
+      // so its memory stays until its session changes; the utterance cache is
+      // bounded either way.
       for (const person of people) participant(person, false);
     },
     say(entry) {

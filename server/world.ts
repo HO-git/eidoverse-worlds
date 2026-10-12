@@ -67,11 +67,11 @@ export type Client = {
   auxBound?: boolean;  // this aux leg is bound to the primary's identity authority (token bearer OR matching login sub) — the B1 admission result, reused by the B3 attest gate
   gen?: number;        // surfaceSession (#57 B2): server-issued transport epoch for THIS leg.
   legGen?: number;     // this leg's WORLD-scoped generation (World.legGen): survives sequencer restarts, rides caption entries
-  presenceSession?: string; // `session` on arrive and snapshot.present: the joining page's id, else a token for this leg (server.ts presenceSession)
                        // Monotonic, never reused. Every rtc/attestation message is stamped with
                        // it, and a superseded generation's messages are refused structurally —
                        // takeover retires the GENERATION, not just the socket.
                        // Deferred authored verbs capture it and recheck before committing.
+  presenceSession?: string; // `session` on arrive and snapshot.present: the joining page's id, else a token for this leg (server.ts presenceSession)
   surface?: string;    // (name, surface) session model: "world" = the embodied primary (default);
                        // anything else = an auxiliary media leg (voice, vr-hands, …) — invisible,
                        // poseless, log-mute, rtc-capable, and REAPED when its primary dies.

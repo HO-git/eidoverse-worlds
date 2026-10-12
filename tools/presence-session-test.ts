@@ -70,6 +70,20 @@ try {
   speaker = await join_('speaker');
   await until(() => arrivals().length === 4);
   check('each such leg gets its own token', UUID.test(arrivals()[3].session) && arrivals()[3].session !== token);
+  // A snapshot repeats the token its leg's arrive carried, so a listener
+  // doesn't read it as a new sender.
+  const later = await join_('later-listener');
+  const tokenPresent = later.got.find(m => m.type === 'snapshot').present.find((p: any) => p.id === 'speaker');
+  check("a snapshot repeats a leg's token", tokenPresent?.session === arrivals()[3].session, JSON.stringify(tokenPresent));
+
+  // The id's bounds: 8 and 64 characters of A-Za-z0-9_- are relayed as sent.
+  for (const ok of ['a1_b-C9x', 'Z'.repeat(64)]) {
+    await closeLeg(speaker.ws);
+    const before = arrivals().length;
+    speaker = await join_('speaker', ok);
+    await until(() => arrivals().length === before + 1);
+    check(`a ${ok.length}-character session id is relayed`, arrivals()[before].session === ok, arrivals()[before].session);
+  }
 
   // An unusable id is not relayed.
   for (const bad of ['short', 'has space in it!', 'x'.repeat(65), 42]) {

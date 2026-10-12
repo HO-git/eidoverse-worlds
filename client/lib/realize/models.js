@@ -35,7 +35,11 @@ import { schedule, cancelOwner } from '../scheduler.js';
 import { planReconcile, bandForDistance, mountsTouching, collisionOwnedElsewhere } from './models_field.js';
 
 /** The verbs this realizer owns — the whole flat entity-id namespace. */
-export const PORTED = new Set(['spawn', 'place', 'remove', 'light', 'comp', 'motion', 'mount', 'dismount']);
+// IMPORT then re-export: a bare `export ... from` creates no local binding, and this
+// module uses PORTED itself further down. Same defect as avatar.js/EMOTES, same branch.
+import { PORTED } from './ported.js';   // the taxonomy is data; causes.js needs it without the engine
+import { R_BASE, residencyRadiusFor } from '../../../shared/lod-distance.js';   // shared with the server's LOD budget
+export { PORTED };
 
 /** id → {kind:'model'|'light', lib?, gen} — the realizer's own view of what
  *  it has handled. gen guards a load completion against acting for a
@@ -215,7 +219,7 @@ function scheduleLoad(id, ent, gen, tier = null) {
     key: `entity:${id}`, owner: `entity:${id}`, lane: 'net',
     // live distance from the camera to the entity's CURRENT folded position —
     // re-read at dequeue, so walking toward a thing promotes its load
-    priority: () => bandForDistance(camera.position.distanceTo(
+    priority: () => bandForDistance(camWorld().distanceTo(
       _v.set(...(state.st.entities[id]?.pos ?? [0, 0, 0])))),
     run: async (signal) => {
       // a first load chooses its tier at DEQUEUE, once /version has answered
@@ -325,7 +329,7 @@ function realizeModel(id, cur, obj) {
   if (sc) obj.scale.setScalar(sc);
   obj.userData.base = { pos: obj.position.toArray(), yaw: obj.rotation.y };
   entities.set(id, obj);
-  entityMeta.set(id, { actor: cur.actor, lib: cur.lib, ts: cur.ts });
+  entityMeta.set(id, { actor: cur.actor, lib: cur.lib, ts: cur.ts, ...(cur.placer ? { placer: cur.placer } : {}) });
   scene.add(obj);
   bus.emit('entity', { id, kind: 'spawn' });
   // comps that folded while the GLB was in flight (or that rode the
@@ -397,7 +401,12 @@ function runPromoteTail(id, obj) {
     if (colliders.get(id)?.interior) bus.emit('entity', { id, kind: 'collider' });
   }
   // emissive surfaces become lamp REQUESTS — a request costs nothing until
-  // the rig assigns it a slot, and that is uniform writes
+  // the rig assigns it a slot, and that is uniform writes.
+  //
+  // NO SHADOWS, by the seam's default and on purpose: a placed prop glows, it
+  // does not claim the one casting slot. That slot belongs to a body lit from
+  // inside (avatar.js passes shadows:true), and until this default existed a
+  // closer glowing prop could take it off the avatar standing next to it.
   attachLamps(obj, `entity:${id}`);
   // mounts that were waiting on this id — as child or carrier
   for (const mid of mountsTouching(state.st.entities, id, foldChildren)) execMount(mid);
@@ -430,7 +439,7 @@ function createLight(id, ent) {
   // fold refresh, so create and refresh agree on where "at rest" is
   g.userData.base = { pos: g.position.toArray(), yaw: g.rotation.y };
   entities.set(id, g);
-  entityMeta.set(id, { actor: ent.actor, kind: 'light', ts: ent.ts });
+  entityMeta.set(id, { actor: ent.actor, kind: 'light', ts: ent.ts, ...(ent.placer ? { placer: ent.placer } : {}) });
   scene.add(g);
   bus.emit('entity', { id, kind: 'light' });
   emitCompBag(id);
@@ -482,7 +491,7 @@ function refreshLight(id, ent) {
     if (ent.pos) g.position.set(...ent.pos);
     g.userData.base = { pos: g.position.toArray(), yaw: g.rotation.y };
   }
-  entityMeta.set(id, { actor: ent.actor, kind: 'light', ts: ent.ts });
+  entityMeta.set(id, { actor: ent.actor, kind: 'light', ts: ent.ts, ...(ent.placer ? { placer: ent.placer } : {}) });
   bus.emit('entity', { id, kind: 'light' });
   // comps that folded onto the light and its folded parent re-announce and
   // re-execute, exactly as a join create would (createLight + the tail)
@@ -669,7 +678,7 @@ function tierFor(ent, current = null) {
   // lodNegotiable: transcoder + key + recipe + a .glb) — elsewhere the
   // policy sees no recipe, and nothing is asked or reported as asked
   return chooseTier({ dist: entDist(ent), radius: residencyRadius(ent), quality: modelQuality.quality,
-    recipe: lodNegotiable(ent?.lib) ? lodRecipe : null, pressure: gpuPressure(), shed: modelQuality.shed, current });
+    recipe: lodNegotiable(ent?.lib) ? lodRecipe : null, pressure: gpuPressure(), shed: modelQuality.shed, current, scale: ent?.scale ?? 1 });
 }
 /** The models⚙ row's whole behaviour — skypanel.js binds it to the row and
  *  shows what it returns: set the resident's dial, and say honestly whether
@@ -688,9 +697,7 @@ export function dialModelQuality(v) {
  *  is a demote-and-promote with the placeholder frame skipped. */
 const canRetier = (id, ent) => canDemote(id, ent);
 
-const R_BASE = 80;     // meters: promote below R, demote above R + R_HYST
 const R_HYST = 20;     // the band that keeps a walk along the edge quiet
-const DIAG_K = 4;      // big things stay: radius grows with bbox diagonal
 const DIAG_DEFAULT = 12; // assumed bbox diagonal (m) before the geom
                          // side-channel lands — err LARGE, so a big thing
                          // near the edge still loads at join (§16.2.C)
@@ -699,7 +706,7 @@ const resStats = { demotes: 0, promotes: 0, retiers: 0, retiersRefused: 0 };
 function residencyRadius(ent) {
   const s = ent?.lib ? libGeom.get(ent.lib)?.bbox?.size : null;
   const diag = s ? Math.hypot(s[0] ?? 0, s[1] ?? 0, s[2] ?? 0) : DIAG_DEFAULT;
-  return R_BASE + diag * DIAG_K;
+  return residencyRadiusFor(diag);
 }
 // distance is min(camera, avatar): in photo-mode flight the body may stand
 // on something the camera left behind — demoting its floor drops it through
@@ -707,9 +714,17 @@ function residencyRadius(ent) {
 let residencyFocus = null;
 export function setResidencyFocus(fn) { residencyFocus = fn; }
 const _f = new THREE.Vector3();
+// WORLD position: in XR the camera is a child of the rig (xr.js rig.add(camera)), so camera.position is the head's
+// offset INSIDE the rig — near the origin wherever you stand. With the min() below, everything near spawn read as
+// "close" in VR: loaded at full detail, never demoted, never on its LOD (found in a
+// headset test, 09-24). Desktop: no parent, the same number.
+const _cw = new THREE.Vector3();
+const camWorld = () => camera.getWorldPosition(_cw);
+/** Test seam (tools/camera-world-probe): the residency/LOD distance for a folded entity. */
+export const residencyDistance = (ent) => entDist(ent);
 function entDist(ent) {
   _v.set(...(ent?.pos ?? [0, 0, 0]));
-  let d = camera.position.distanceTo(_v);
+  let d = camWorld().distanceTo(_v);
   const p = residencyFocus?.();
   if (p) d = Math.min(d, _f.set(p.x, p.y, p.z).distanceTo(_v));
   return d;

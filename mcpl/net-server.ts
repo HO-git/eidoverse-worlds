@@ -1134,6 +1134,7 @@ class Session {
       rememberAvatar: (path) => { chosenAvatar[this.auth.id] = path; persistState(); },
       rememberActivity: (cfg) => { activityCfg[this.auth.id] = cfg; persistState(); },
       travel: (world) => this.travelTool(world),
+      worldPolicy: { canJoin: (world) => joinAllowed(this.auth, world), canFound: this.auth.create === true },
     };
   }
 
@@ -1285,7 +1286,7 @@ wss.on("connection", (ws, req) => {
   const token = new URL(req.url ?? "/", "http://localhost").searchParams.get("token");
   const registry = readTokens();
   wire.refreshIndex(displayNameIndex(registry));
-  let auth = token ? lookupToken(registry, token) : undefined;
+  let auth: Auth | undefined = token ? lookupToken(registry, token) : undefined;
   let aidReason: string | null = null;
   if (!auth && token?.startsWith("aid1.") && HN_ISSUER_KEY) {
     const v = verifyToken(token, { issuerId: HN_ISSUER_KEY, iss: HN_ISS, aud: HN_AUD, requireScopes: ["worlds:join"] });

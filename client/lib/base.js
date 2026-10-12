@@ -104,6 +104,9 @@ export function tee(line) {
     if (!teeTimer) teeTimer = setTimeout(teeFlush, 1000);
   } catch { /* never */ }
 }
+/** tee, sent NOW: for the line before something that may freeze the page (a GPU-process compile), so it isn't lost
+ *  in the 1 s batch. */
+export function teeNow(line) { tee(line); try { clearTimeout(teeTimer); teeFlush(); } catch { /* never */ } }
 if (typeof window !== 'undefined') {
   window.addEventListener('error', (e) => tee(`[window.error] ${e.message} @ ${(e.filename ?? '').split('/').pop()}:${e.lineno}`));
   window.addEventListener('unhandledrejection', (e) => tee(`[unhandled] ${e.reason?.message ?? e.reason}`));
@@ -216,3 +219,7 @@ export function assignColors(names) {
   }
   return claimed;
 }
+
+/** The 'avatar-worn' payload's name: mybody.announceWorn emits { name, path }, setMe emits a string. Every listener
+ *  that keys anything by body name goes through here (bodies.js, xr.js). */
+export const wornNameOf = (v) => (typeof v === 'string' ? v : v?.name) ?? '';

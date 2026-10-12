@@ -10,8 +10,11 @@ import { THREE, camera, canvas } from './core.js';
 import { CONFIG, angleDelta, bus } from './base.js';
 import { heightAt } from './terrain.js';
 import { resolveColliders, lastBlockedTop, findSeat, raySegment } from './colliders.js';
+import { scaledSpeed, colliderFor, deskEyeY, canMantle, mantleStep } from './bodyscale.js';   // this body's chosen size: stride, capsule, eye
 import { chat } from './chat.js';
 import { isOverlayOpen, flashHint } from './ui.js';
+import { selectClip } from './locomotion_clip.js';
+import { register as registerAction } from './actions.js';
 import {
   resolveFirstPersonAnchor, FP_FORWARD, FP_EYE_LIFT, FP_GAZE_AHEAD, FP_GAZE_DROP,
 } from './fp_view.js';
@@ -245,11 +248,20 @@ export const myState = {
 };
 
 export const keys = new Set();
+// XR intent — a thumbstick is a keyboard that reports fractions (parity law:
+// every gesture must be sayable). xr.js fills this per-frame while presenting;
+// the same wish/gravity/mantle/seat code below does every bit of the moving.
+export const xrIntent = { fwd: 0, strafe: 0, yawDelta: 0, jump: false, active: false };
+// While an XR session presents, the headset owns the camera (via the rig in
+// xr.js) — the desktop follow-cam must not fight it. Probe pattern as usual.
+let xrPresenting = () => false;
+export function setXrProbe(fn) { xrPresenting = fn; }
 let posture = null;              // 'sit' | 'lie' | null
-let vy = 0, grounded = true, mantle = null, airborneFor = 0;
+let vy = 0, grounded = true, mantle = null, airborneFor = 0, jumped = false, wantMove = false;
 
 // camera
 export let camYaw = 0, camPitch = 0.32, camDist = 4.2;
+const _lastFinitePos = new THREE.Vector3();
 let dragging = false, dragBtn = 0;
 export const mouse = new THREE.Vector2();
 export let firstPerson = false;
@@ -295,11 +307,18 @@ bus.on('key', (e) => {
   // build.js binds R/F and the arrows to nudge/raise/turn, where holding the
   // key to keep moving a thing is the whole interaction.
   if (e.repeat) return;
-  if (e.code === 'KeyX') toggleSit();
-  if (e.code === 'KeyF') { const m = toggleFlight(); if (m) flashHint?.(m); }
-  if (e.code === 'KeyZ') { posture = posture === 'lie' ? null : 'lie'; myState.seat = null; }
-  if (e.code === 'KeyG') { const m = toggleFold(meRef()); if (m) flashHint?.(m); }
+  BODY_KEYS.find((k) => k.code === e.code)?.run();
 });
+
+// The body's keys, as data: the handler above dispatches from this table and the
+// lantern lists it (actions.js), so a key and its row cannot drift apart.
+const BODY_KEYS = [
+  { code: 'KeyX', key: 'X', id: 'sit', title: 'sit / stand', icon: 'armchair', keywords: ['seat', 'chair', 'posture'], run: () => toggleSit() },
+  { code: 'KeyF', key: 'F', id: 'fly', title: 'fly', keywords: ['flight', 'wings', 'land'], run: () => { const m = toggleFlight(); if (m) flashHint?.(m); } },
+  { code: 'KeyZ', key: 'Z', id: 'lie', title: 'lie down', icon: 'bed', keywords: ['posture', 'rest', 'sleep'], run: () => { posture = posture === 'lie' ? null : 'lie'; myState.seat = null; } },
+  { code: 'KeyG', key: 'G', id: 'fold', title: 'fold wings', keywords: ['wings', 'unfold'], run: () => { const m = toggleFold(meRef()); if (m) flashHint?.(m); } },
+];
+for (const { code, ...a } of BODY_KEYS) registerAction({ ...a, id: `body:${a.id}`, group: 'body' });
 
 // Declared seats (the `sockets` component — mount verb, rides motion) live in
 // main.js with the rest of the world vocabulary; the controller only knows
@@ -473,16 +492,18 @@ export function enableTouch() {
   canvas.addEventListener('pointerup', lookEnd);
   canvas.addEventListener('pointercancel', lookEnd);
 
+  // Jump only. The 💬 button predates the dock carrying chat; now that the rail
+  // has a chat icon on every viewport, a second door to the same panel just
+  // spends bottom-right space the thumb wants. Chat is still one tap (rail) or
+  // one key (Enter) away. NOTE: the chat import stays — Enter opens chat and
+  // chat.isOpen gates movement.
   const btns = document.getElementById('touchbtns');
-  for (const [label, code] of [['⤒', 'Space'], ['💬', 'chat']]) {
+  for (const [label, code] of [['⤒', 'Space']]) {
     const b = document.createElement('button');
     b.className = 'panel';
     b.textContent = label;
-    if (code === 'chat') b.onclick = () => chat.open();
-    else {
-      b.addEventListener('pointerdown', () => keys.add(code));
-      b.addEventListener('pointerup', () => keys.delete(code));
-    }
+    b.addEventListener('pointerdown', () => keys.add(code));
+    b.addEventListener('pointerup', () => keys.delete(code));
     btns.appendChild(b);
   }
 }
@@ -502,21 +523,36 @@ export function updateMe(dt, me) {
   let fwd = Number(held(MOVE_KEYS.fwd)) - Number(held(MOVE_KEYS.back));
   let strafe = Number(held(MOVE_KEYS.right)) - Number(held(MOVE_KEYS.left));
   if (touchState.moveX || touchState.moveZ) { strafe = touchState.moveX; fwd = -touchState.moveZ; }
+  if (xrIntent.active) {
+    fwd = xrIntent.fwd; strafe = xrIntent.strafe;
+    if (xrIntent.yawDelta) { camYaw += xrIntent.yawDelta; xrIntent.yawDelta = 0; }
+  }
 
+  // a NaN that got into the accumulators in VR (a stick axis on wake, 09-05 23:13) survives the
+  // session end and blacks out the desktop view: the orbit camera reads camYaw. Every compare
+  // with NaN is false, so nothing below would ever clear it.
+  if (!Number.isFinite(myState.speed)) myState.speed = 0;
+  if (!Number.isFinite(camYaw)) camYaw = 0;
+  if (!(Number.isFinite(myState.pos.x) && Number.isFinite(myState.pos.y) && Number.isFinite(myState.pos.z))) myState.pos.copy(_lastFinitePos); else _lastFinitePos.copy(myState.pos);
   const moving = Math.abs(fwd) > 0.08 || Math.abs(strafe) > 0.08;
+  wantMove = moving;   // INTENT, for the clip choice below: the walk→idle blend starts on key release, not 0.34 s later when the coast ends
   const running = keys.has('ShiftLeft') || keys.has('ShiftRight');
   // A slow walk for precise positioning — placing a chair exactly where you
   // want it at 1.55 m/s is a fight.
   const creeping = keys.has('AltLeft') || keys.has('AltRight');
   const mag = Math.min(1, Math.hypot(fwd, strafe));
-  const target = moving ? (creeping ? 0.55 : running ? 4.0 : 1.55) * mag : 0;
+  // VR stick (owner, 09-06 12:53): half deflection = walking speed, full = sprint — the stick IS the shift key.
+  // Piecewise: 0→0.5 ramps to walk (1.55), 0.5→1 ramps walk→run (4.0). Desktop keeps shift/alt.
+  const vrSpeed = mag <= 0.5 ? 1.55 * (mag / 0.5) : 1.55 + (4.0 - 1.55) * ((mag - 0.5) / 0.5);
+  // the chosen size (Profile › Avatar, bodyscale.js): stride grows with the legs, so a 150% body walks 150% as fast
+  const target = moving ? scaledSpeed(xrIntent.active ? vrSpeed : (creeping ? 0.55 : running ? 4.0 : 1.55) * mag, me.userScale) : 0;
   myState.speed = THREE.MathUtils.lerp(myState.speed, target, 1 - Math.exp(-10 * dt));
   if (myState.speed < 0.02) myState.speed = 0;
 
   if (moving) {
     _dir.set(strafe, 0, -fwd).normalize().applyAxisAngle(UP, camYaw);
     const targetYaw = Math.atan2(_dir.x, _dir.z);
-    myState.yaw += angleDelta(myState.yaw, targetYaw) * Math.min(1, 12 * dt);
+    myState.yaw += angleDelta(myState.yaw, targetYaw) * Math.min(1, 12 * dt); myState.yaw = Math.atan2(Math.sin(myState.yaw), Math.cos(myState.yaw));   // the accumulator wraps too (the owner's recorder: root 7.62 = 1.34 + 2π after setCamYaw already wrapped)
     myState.pos.addScaledVector(_dir, myState.speed * dt);
     const R = 78; // stay on the island
     const r = Math.hypot(myState.pos.x, myState.pos.z);
@@ -524,7 +560,8 @@ export function updateMe(dt, me) {
   }
 
   // ---- vertical
-  const ground = resolveColliders(myState.pos, heightAt);
+  const cap = colliderFor(me.userScale);   // the walking capsule grows and shrinks with the body; it still climbs
+  const ground = resolveColliders(myState.pos, heightAt, cap.r, cap.tall, true);
   const blockedTop = lastBlockedTop();
   // FLIGHT OWNS THE BODY while it lasts -- position, heading and clip -- the
   // same way a mantle or a ragdoll does. Walking resumes the moment she lands.
@@ -639,16 +676,16 @@ export function updateMe(dt, me) {
     myState.pos.lerpVectors(mantle.from, mantle.to, e);
     if (k >= 1) { mantle = null; grounded = true; vy = 0; }
   } else {
-    if (grounded && keys.has('Space')) {
+    if (grounded && (keys.has('Space') || (xrIntent.active && xrIntent.jump))) {
       posture = null; myState.seat = null;
       const reach = blockedTop !== null ? blockedTop - myState.pos.y : 0;
-      if (blockedTop !== null && reach > 0.3 && reach <= 1.7) {
+      if (blockedTop !== null && canMantle(reach, me.userScale)) {
         _facing.set(Math.sin(myState.yaw), 0, Math.cos(myState.yaw));
-        const to = myState.pos.clone().addScaledVector(_facing, 0.6);
+        const to = myState.pos.clone().addScaledVector(_facing, mantleStep(me.userScale));
         to.y = blockedTop;
         mantle = { from: myState.pos.clone(), to, t: 0 };
         grounded = false;
-      } else { vy = 5.6; grounded = false; }
+      } else { vy = 5.6; grounded = false; jumped = true; }   // a DELIBERATE jump: the clip may start this frame, no airborne grace
     }
     if (!mantle) {
       if (!grounded || myState.pos.y > ground + 0.02) {
@@ -660,6 +697,7 @@ export function updateMe(dt, me) {
     }
   }
   airborneFor = grounded || mantle ? 0 : airborneFor + dt;
+  if (grounded || mantle) jumped = false;
   if (myState.speed >= 0.05) {
     posture = null; myState.seat = null; // standing up is just walking away
     // ...and so is escaping a held pose (puppet, restored, or ragdoll-settled).
@@ -668,15 +706,13 @@ export function updateMe(dt, me) {
     if (myState.pose) myState.pose = null;
   }
 
-  const seatedClip = myState.seat?.chair ? 'sitchair' : 'sit';
-  myState.clip = mantle ? 'climb'
-    : airborneFor > 0.09 ? 'jump'
-      : myState.speed >= 0.05 ? (myState.speed < 2.6 ? 'walk' : 'run')
-        : posture === 'sit' ? seatedClip
-          : posture === 'lie' ? 'lie'
-            : 'idle';
+  // The policy itself lives in locomotion_clip.js so it can be driven directly
+  // (#196 review B2: this path selects the clip AND its blend, and nothing bound
+  // it). Flight picks its own clip and returns before this line.
+  const sel = selectClip({ mantle, jumped, airborneFor, wantMove, speed: myState.speed, scale: me.userScale, posture, seat: myState.seat });
+  myState.clip = sel.clip;
 
-  me.setClip(myState.clip, myState.speed);
+  me.setClip(myState.clip, myState.speed, sel.opts);
   me.root.position.copy(myState.pos);
   me.root.rotation.y = myState.yaw;
   // your head follows your camera — you could always look up, your body never
@@ -696,7 +732,8 @@ const STANDING_CLIPS = new Set(['idle', 'walk', 'run', 'jump', 'climb']);
 const _headWp = new THREE.Vector3();
 
 export function updateFollowCamera(dt, me) {
-  const headY = 1.45;
+  if (xrPresenting()) return;   // the rig carries the camera; the body stays visible (own head hidden by layers)
+  const headY = deskEyeY(me?.userScale);   // 1.45 m for a 100% body; the chosen size lifts or lowers the eye
   const focus = _eye.set(myState.pos.x, myState.pos.y + headY, myState.pos.z);
 
   if (firstPerson) {
@@ -724,10 +761,10 @@ export function updateFollowCamera(dt, me) {
     ).normalize();
     camera.lookAt(
       camera.position.x + _dir.x, camera.position.y + _dir.y, camera.position.z + _dir.z);
-    if (me) me.vrm.scene.visible = false;         // don't render the inside of your own head
+    if (me) { me.vrm.scene.visible = false; me.firstPersonView = true; }   // not the inside of your own head, nor your own name over it
     return;
   }
-  if (me) me.vrm.scene.visible = true;
+  if (me) { me.vrm.scene.visible = true; me.firstPersonView = false; }
 
   // desired eye, with a shoulder offset so the body doesn't sit dead-centre
   // over whatever you're aiming at
@@ -881,6 +918,16 @@ export function updateSpectator(dt, remote) {
   camera.lookAt(eye.clone().addScaledVector(_facing, FP_GAZE_AHEAD).add(new THREE.Vector3(0, -FP_GAZE_DROP, 0)));
 }
 
-export function setCamYaw(v) { camYaw = v; }
+export function setCamYaw(v) { camYaw = Math.atan2(Math.sin(v), Math.cos(v)); }   // wrapped: the body's yaw must never carry a full turn (XR pop, 09-05)
 export function setPosture(p) { posture = p; }
+// the emote bar's posture tiles (emotebar.js): sit runs the same seat search as X, stand leaves seat and posture.
+// A declared-seat MOUNT (sockets, localbody.js) is neither posture nor myState.seat — the seat hook dismounts on X —
+// so the tiles ask first: sitting on a swing, 'sit' is a no-op and 'stand' is the dismount
+let mountedHook = () => false;
+export function setMountedHook(fn) { if (typeof fn === 'function') mountedHook = fn; }
+export function sitHere() { if (mountedHook()) return; if (posture !== 'sit') toggleSit(); }
+export function standUp() {
+  if (mountedHook()) { seatHook(); return; }
+  if (posture === 'sit' || posture === 'lie') { posture = null; myState.seat = null; }
+}
 export const getPosture = () => posture;

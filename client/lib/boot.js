@@ -13,7 +13,16 @@
 //      spent learning them instead of watching a bar.
 
 import { bus } from './base.js';
-import { loadingItems, bootBytes } from './assets.js';
+// Injected, not imported: assets.js reaches the engine (GLTFLoader), and this splash
+// is shared with a client that loads no assets and therefore has no bytes to count.
+// The empty defaults are the truth for such a client — its phases finish on their own
+// evidence. main.js wires the real counters.
+let loadingItems = () => [];
+let bootBytes = () => ({ done: 0, total: 0 });
+export function setBootAssets({ items, bytes }) {
+  if (items) loadingItems = items;
+  if (bytes) bootBytes = bytes;
+}
 
 // Phase weights are rough shares of a cold boot, measured rather than guessed
 // (see the timings in the commit that added this). They only need to be
@@ -75,10 +84,43 @@ function paintItems() {
 const prettyLabel = (l) => String(l).split('/').pop().replace(/\.(vrm|glb|gltf|png|jpg|ktx2|json|g|gl)(\?.*)?$/i, '').replace(/[_-]+/g, ' ');   // some labels arrive pre-truncated ('desk.g')
 const escapeHtml = (v) => String(v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// THE PEG IS THE PROGRESS (owner, 09-29 23:53): the new mark's peg enters from the sphere's left skin,
+// passes the doorway, and rests at 1 — the logo notes' splash/doorway.html render(p), verbatim in its
+// numbers — except its START. The peg's front is an arc of the same r = 40 circle, so its TIP (on the centre line,
+// y = 50) is at x = 48 + 40 = 88 and the sphere's leftmost point is 8: D must be at least 80 for nothing to show at
+// rest. (The notes' 79.240 measured the arc's ends at y = 44.5 / 55.5, which left a 0.76-unit sliver of peg inside
+// the sphere while the engine woke — the owner, 10-01: "a teeny speck… looks like an error".) +0.5 clears the
+// anti-aliased edge.
+const PEG_D = 88 - 8 + 0.5;
+/** Mostly honest (linear in progress) with a gentle ease-out on the last stretch, so the peg ARRIVES
+ *  rather than stops. ease(0) = 0, ease(1) = 1 exactly, monotone. */
+export function pegEase(p) { const k = 0.35; return (1 - k) * p + k * (1 - Math.pow(1 - p, 3)); }
+/** The peg's x offset at progress p: −D at 0, exactly 0 at 1. */
+export const pegOffset = (p) => -PEG_D * (1 - pegEase(Math.min(1, Math.max(0, p))));
+/** Put the splash's peg where progress p says. At p ≥ 1 the transform and the sphere clip are
+ *  REMOVED, not zeroed — the loaded mark is exactly the still mark (the clip is a geometric no-op
+ *  there, but a second anti-aliasing pass on the skin edge is not). */
+export function paintPeg(p, root = document.getElementById('splash')) {
+  const peg = root?.querySelector('.sp-peg'); if (!peg) return;
+  const world = peg.parentNode;
+  if (p >= 1) {
+    peg.style.transform = '';
+    // the clip goes once the .3s glide has landed: a peg still gliding home, unclipped, would show
+    // outside the sphere for a moment
+    const drop = () => { if (peg.style.transform === '') world.removeAttribute?.('clip-path'); };
+    if (globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) drop(); else setTimeout(drop, 350);
+  } else {
+    world.setAttribute?.('clip-path', 'url(#sp-sphere)');
+    peg.style.transform = `translateX(${pegOffset(p).toFixed(3)}px)`;
+  }
+}
+
 function paint() {
   if (!el || done) return;
   paintItems();
-  const pct = Math.round(progress() * 100);
+  const p = progress();
+  paintPeg(p, el);
+  const pct = Math.round(p * 100);
   bar.style.width = `${pct}%`;
   phaseEl.textContent = currentLabel();
   const b = bootBytes();
@@ -179,10 +221,12 @@ export function finishBoot(reason = 'ready') {
     if (left > 0) { if (phaseEl) phaseEl.textContent = `holding the splash for a look · ${Math.ceil(left / 1000)}s`; setTimeout(() => finishBoot(reason), Math.min(left, 1000)); return; }
   }
   done = true;
+  disarmTripwire();
   clearInterval(tipTimer);
   clearInterval(itemsTimer);
   if (itemsEl) itemsEl.innerHTML = '';
   bar.style.width = '100%';
+  paintPeg(1, el);   // skipped, timed out, or arrived: the mark comes to rest whatever the count said
   phaseEl.textContent = 'welcome';
   el.classList.add('gone');
   stopRays();
@@ -191,6 +235,52 @@ export function finishBoot(reason = 'ready') {
   console.log(`[boot] ready in ${total}ms (${reason})`, marks);
   bus.emit('booted', { ms: total, reason, marks });
   releaseBoot?.();
+}
+
+/** Disarm the lite-mode tripwire index.html armed before the first engine byte.
+ *
+ *  NOT at finishBoot: arrival means "there is somewhere to stand", and the world's assets
+ *  keep streaming after it. A phone that dies on a busy world dies in that tail, so
+ *  clearing on arrival wipes the flag seconds before the crash it exists to record.
+ *
+ *  The first version of this waited for loadingItems() to go quiet, which does not work
+ *  and hid that it did not: prefetch.js streams the library during idle time and keeps
+ *  entries in that list indefinitely, so the list never empties, the quiet branch was
+ *  dead code, and a ceiling meant for pathological worlds was quietly deciding every
+ *  case. Two signals that actually discriminate:
+ *
+ *  1. PAGEHIDE. Leaving on purpose - navigating away, closing the tab - fires this. An
+ *     out-of-memory kill does not: the renderer is terminated without notice. That
+ *     asymmetry is the whole signal, and it is the honest one, because it says "this
+ *     session ended deliberately" rather than "this session lasted a while".
+ *  2. A DWELL. Surviving the heavy early tail is evidence in its own right, and it
+ *     bounds the false positive from a pagehide that never fires - a backgrounded tab
+ *     discarded by Android, say, which is common and is not the user's doing.
+ *
+ *  Known and accepted: a crash LATER than the dwell, with no pagehide, is not
+ *  remembered. Asset streaming front-loads the risk, so most of the danger is inside it;
+ *  and the cheap direction to be wrong is toward forgetting, because the cost of a false
+ *  demotion is a lite session the person did not ask for, while the cost of a missed
+ *  crash is one more crash and then the flag catches it. */
+const DWELL_MS = 60000;
+function disarmTripwire() {
+  // A LITE session proves nothing about the full client, and it is the full client the
+  // flag is about. lite.js calls finishBoot too (its splash has to come down like any
+  // other), so without this a phone demoted to lite would clear its own evidence by
+  // surviving in lite and walk back into the crash on the next visit.
+  if (globalThis.__ewLite) return;
+  const key = globalThis.__ewTripKey?.(new URLSearchParams(location.search)) ?? 'ew-boot-attempt';
+  // Signal 1 (pagehide) is index.html's, listening since the moment it armed the flag, so a
+  // tab closed MID-LOAD is a clean exit too. What's left here is the dwell. It removes the key
+  // unconditionally and marks the disarm final, because a bfcache restore re-arms (index.html)
+  // and a guard like "already cleared once" would then leave that re-armed flag set forever.
+  setTimeout(() => {
+    globalThis.__ewTripDisarmed = true;
+    try {
+      localStorage.removeItem(key);
+      localStorage.removeItem(globalThis.__ewRetryKey?.(new URLSearchParams(location.search)) ?? 'ew-boot-retried');   // the retry worked
+    } catch { /* storage blocked; never armed either */ }
+  }, DWELL_MS);
 }
 
 export const bootDone = () => done;
@@ -230,11 +320,23 @@ export function startRays(el) {
     cv.width = cv.clientWidth; cv.height = cv.clientHeight;
     const off = cv.transferControlToOffscreen();
     raysWorker = new Worker(new URL('./splashrays.worker.js', import.meta.url), { type: 'module' });
-    raysWorker.onmessage = (e) => { if (e.data?.type === 'nogl') { cv.style.display = 'none'; stopRays(); } };
+    // Three outcomes, kept distinct (antra-tess #185 B4 rereview): ACK = the worker drew a frame
+    // and said so; NOGL = it reached us and declined (legitimate fallback); silence = neither.
+    raysWorker.onmessage = (e) => {
+      const t = e.data?.type;
+      if (t === 'ready') { globalThis.__raysAck = true; return; }
+      if (t === 'nogl') { globalThis.__raysNoGl = true; cv.style.display = 'none'; stopRays(); }
+    };
     raysWorker.postMessage({ type: 'init', canvas: off, calm }, [off]);
     raysResize = () => raysWorker?.postMessage({ type: 'size', w: cv.clientWidth, h: cv.clientHeight });
     addEventListener('resize', raysResize);
     globalThis.__raysWorker = raysWorker;   // harness: postMessage({type:'frames'}) answers with the frame count
+    // CUMULATIVE, never cleared (antra-tess #185 rereview B4, 2026-09-12): the
+    // handle above is transient — stopRays nulls it — and boot-check sampled it
+    // on a 250ms poll, so a worker that started AND finished between two samples
+    // was invisible. 2 of 8 owned runs failed on that race. This flag is the
+    // durable receipt: started is started, whatever the sampler saw.
+    globalThis.__raysStarted = true;
   } catch { cv.style.display = 'none'; stopRays(); }
 }
 export function stopRays() {

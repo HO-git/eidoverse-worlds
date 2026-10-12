@@ -21,6 +21,8 @@ const stubRender = () => { n.render++; }, stubCompile = async () => { n.compile+
 renderer.render = stubRender; renderer.compileAsync = stubCompile;
 renderer.getRenderTarget = () => { n.target++; return null; };
 const { renderWorld } = await import('../client/lib/render.js');
+renderer.domElement = { toDataURL: () => { n.read++; return 'data:image/png;base64,' + 'A'.repeat(4000); } }; n.read = 0;
+const { captureFrame } = await import('../client/lib/capture.js');
 
 let pass = 0, fail = 0;
 const check = (name, ok, note = '') => { if (ok) { pass++; console.log(`  ok    ${name}`); } else { fail++; console.log(`  FAIL  ${name}${note ? `  -- ${note}` : ''}`); } };
@@ -32,6 +34,14 @@ const legs = {
 };
 check('render.js wrapped both methods (the test drives the shipping wrappers)',
   renderer.render !== stubRender && renderer.compileAsync !== stubCompile);
+
+// a snapshot after a handled loss refuses rather than reading the stale canvas (round 3)
+console.log('CAPTUREFRAME()');
+globalThis.__gpuLost = { fired: false }; zero(); n.read = 0;
+check('flag down: captureFrame renders and reads the canvas', typeof captureFrame() === 'string' && n.read === 1 && n.render > 0);
+globalThis.__gpuLost = { fired: true }; zero(); n.read = 0;
+{ let threw = null; try { captureFrame(); } catch (e) { threw = e; }
+  check('flag up: captureFrame throws (GPU lost) and never reads the canvas', /GPU lost/.test(String(threw?.message)) && n.read === 0 && n.render === 0, `read ${n.read} render ${n.render} err ${threw?.message}`); }
 
 for (const [name, leg] of Object.entries(legs)) {
   console.log(name.toUpperCase());

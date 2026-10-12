@@ -1,5 +1,5 @@
 // gpulost's decisions, headless: reload once, never loop; the XR boot flag is dropped. `node tools/gpulost-test.mjs`
-import { gpuLostAction, recoveryUrl, GPU_LOST_WINDOW_MS, GPU_LOST_LONG_MS } from '../client/lib/gpulost.js';
+import { gpuLostAction, recoveryUrl, recentGpuLosses, GPU_LOST_KEY, GPU_LOST_WINDOW_MS, GPU_LOST_LONG_MS } from '../client/lib/gpulost.js';
 let pass = 0, fail = 0;
 const ok = (n, c, d = '') => { if (c) pass++; else { fail++; console.log(`  FAIL ${n} ${d}`); } };
 const now = 1_000_000;
@@ -17,4 +17,9 @@ ok('…a loss inside 15 min is kept (the long window counts it)', JSON.stringify
   ok('…and says why', /3 losses inside 15 min/.test(gpuLostAction(now + 260000, [now, now + 130000]).why ?? ''), gpuLostAction(now + 260000, [now, now + 130000]).why); }
 ok('control: two losses 16 min apart both reload (the long window forgets)', gpuLostAction(now + GPU_LOST_LONG_MS + 60000, [now]).reload === true);
 ok('recovery drops ?xr and ?why, keeps world/name/key', recoveryUrl('https://h:1/?world=commons&name=Ada&key=K&xr=1&why=vr-webgl&vrprobe=1') === 'https://h:1/?world=commons&name=Ada&key=K&vrprobe=1');
+// the count the graphics chip shows: losses inside the long window, junk and stale entries not counted
+{ const store = (v) => ({ sessionStorage: { getItem: (k) => (k === GPU_LOST_KEY ? v : null) } });
+  ok('recentGpuLosses counts the losses inside 15 min', recentGpuLosses(store(JSON.stringify([now - 1000, now - 60000])), now) === 2);
+  ok('…not stale, future or junk entries', recentGpuLosses(store(JSON.stringify([now - GPU_LOST_LONG_MS - 1, now + 5, 'x', now])), now) === 1);
+  ok('…and 0 for nothing or garbage', recentGpuLosses(store(null), now) === 0 && recentGpuLosses(store('{bad'), now) === 0 && recentGpuLosses({}, now) === 0); }
 console.log(`${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

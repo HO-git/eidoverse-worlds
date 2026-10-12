@@ -74,3 +74,11 @@ export function takeGpuRecovered(win = globalThis) {
   if (win.__gpuLost?.fired) return null;
   try { const v = win.sessionStorage?.getItem(GPU_RECOVERED_KEY); if (v) win.sessionStorage.removeItem(GPU_RECOVERED_KEY); return v || null; } catch { return null; }
 }
+
+/** How many losses this tab has recorded inside the long window (GPU_LOST_KEY) — the count a notice can show. */
+export function recentGpuLosses(win = globalThis, now = Date.now()) {
+  try {
+    const recent = JSON.parse(win.sessionStorage?.getItem(GPU_LOST_KEY) || '[]');
+    return Array.isArray(recent) ? recent.filter((t) => Number.isFinite(t) && now - t >= 0 && now - t < GPU_LOST_LONG_MS).length : 0;
+  } catch { return 0; }
+}

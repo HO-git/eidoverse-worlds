@@ -75,6 +75,9 @@ async function paintBuild(body) {
     if (!row) {
       row = document.createElement('div');
       row.className = 'opt-row';
+      // the chips are hoverable (tooltips) and sit INSIDE the card's <button>: a click on any of them is the chip's,
+      // never the card's (the card's click holds a placement ghost — owner, 09-24: a chip click placed the model)
+      row.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); });
       row.style.cssText = 'position:absolute;bottom:6px;right:6px;display:flex;gap:4px;align-items:center;pointer-events:none';
       (card.querySelector('.pv') ?? card).appendChild(row);
     }
@@ -92,15 +95,23 @@ async function paintBuild(body) {
     chip.className = 'opt-rebuild';
     chip.textContent = '↻';
     chip.setAttribute('role', 'button');
+    chip.tabIndex = 0;
     chip.title = 'rebuild GPU textures + LOD (re-asks a refused pass)';
-    chip.style.cssText = 'display:inline-block;width:auto;font-size:10px;line-height:1;padding:1px 4px;border-radius:4px;'
+    chip.setAttribute('aria-label', chip.title);
+    chip.style.cssText = 'position:relative;display:inline-block;width:auto;font-size:10px;line-height:1;padding:1px 5px;border-radius:4px;'
       + `pointer-events:auto;cursor:pointer;background:rgba(0,0,0,.55);color:#e8e8e8;opacity:${bad ? 1 : 0.55}`;
+    // a hit area ≥ 22 px for a finger (and, with htmlmesh's one-target click, a VR laser), without growing the drawn chip (the corner row's layout); 3 px on the
+    // left, less than the row's 4 px gap, so it never covers the chip beside it
+    const hit = document.createElement('i');   // not a <span>: a card's name is its first span
+    hit.style.cssText = 'position:absolute;inset:-6px -8px -6px -3px';
+    chip.appendChild(hit);
+    chip.onmousedown = (e) => e.preventDefault();   // Tab focuses it; a mouse press leaves focus where it was, as before
     chip.onpointerenter = () => { chip.style.opacity = '1'; };
     chip.onpointerleave = () => { chip.style.opacity = bad ? '1' : '0.55'; };
     chip.onclick = async (e) => {
       e.stopPropagation(); e.preventDefault();
       if (chip.dataset.busy) return;
-      chip.dataset.busy = '1'; chip.textContent = '…';
+      chip.dataset.busy = '1'; chip.firstChild.data = '…';
       try {
         const q = new URLSearchParams({ path });
         // the door key rides a header, never the URL; a signed-in session rides its cookie (same-origin fetch sends it)
@@ -109,25 +120,34 @@ async function paintBuild(body) {
         toast(j ? (j.busy ? 'the encoder is busy with other rebuilds — try again in a minute' : j.cooldownS ? `rebuilt recently — this model can be rebuilt again in ${Math.ceil(j.cooldownS / 60)} min` : j.queued.length ? `rebuilding ${j.queued.map((k) => PASS[k] ?? k).join(' + ')} — the card updates on the next search`
           : 'nothing to rebuild on this server (no texture encoder)') : `rebuild refused (${r.status})`);
       } catch { toast('rebuild failed — server unreachable'); }
-      chip.textContent = '↻'; delete chip.dataset.busy;
+      chip.firstChild.data = '↻'; delete chip.dataset.busy;
     };
+    // keyboard: the card's <button> would take Enter/Space as a placement, so the chip keeps them
+    chip.onkeydown = (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.stopPropagation(); e.preventDefault(); chip.onclick(e);
+    };
+    chip.onkeyup = (e) => { if (e.key === ' ') { e.stopPropagation(); e.preventDefault(); } };   // Space activates a button on keyup
     chipRow(card).appendChild(chip);
   };
-  const optBadge = (card, opt, perf, perfOriginal, path, rebuildable) => {
-    const rows = [];
+  // tooltips live ON the thing they explain (owner, 09-24): the pill carries the perf numbers, the LOD/⚠ chips each pass's
+  // status and reason; the card itself just names the model (its full name — the label under it truncates at 48)
+  const optBadge = (card, opt, perf, perfOriginal, path, rebuildable, fullName) => {
+    if (fullName) card.title = fullName;
     if (perf) {
-      rows.push(perfLine(`perf if loaded (${perf.servedAs ?? 'served'})`, perf));
-      if (perfOriginal) rows.push(perfLine('original upload', perfOriginal));
+      const perfRows = [perfLine(`perf if loaded (${perf.servedAs ?? 'served'})`, perf)];
+      if (perfOriginal) perfRows.push(perfLine('original upload', perfOriginal));
       const pill = document.createElement('b');   // not a span: the card's label rule (.card span) is full-width
       pill.className = 'opt-rank';
       pill.dataset.rank = String(perf.rank);
       pill.style.cssText = `display:inline-block;width:14px;height:8px;border-radius:4px;background:${TIER_COLORS[perf.rank]};`
-        + 'box-shadow:0 0 0 1px rgba(0,0,0,.45)';
+        + 'box-shadow:0 0 0 1px rgba(0,0,0,.45);pointer-events:auto;cursor:help';
+      // + every pass's status: a card with no LOD/⚠ chip would otherwise show its status nowhere
+      pill.title = [...perfRows, ...(opt ? [Object.entries(opt).map(([k, v]) => `${PASS[k] ?? k}: ${WORD[v.state] ?? v.state}${v.reason ? ` — ${v.reason}` : ''}`).join('\n')] : [])].join('\n');
       chipRow(card).appendChild(pill);
     }
-    if (opt) rows.push(...Object.entries(opt).map(([k, v]) => `${PASS[k] ?? k}: ${WORD[v.state] ?? v.state}${v.reason ? ` — ${v.reason}` : ''}`));
-    if (rows.length) card.title = rows.join('\n');
-    if (!opt) return;
+    if (!opt) { if (path && rebuildable !== false) rebuildChip(card, path, false); return; }
+    const statusRows = Object.entries(opt).map(([k, v]) => `${PASS[k] ?? k}: ${WORD[v.state] ?? v.state}${v.reason ? ` — ${v.reason}` : ''}`).join('\n');
     const bad = Object.values(opt).some((v) => v.state === 'refused' || v.state === 'deferred' || v.state === 'stale');
     const lod = opt.lod?.state === 'built';
     for (const [on, text, css] of [[lod, 'LOD', 'background:rgba(143,232,200,.18);color:#8fe8c8'], [bad, '⚠', 'background:#6b4a12;color:#ffd68a']]) {
@@ -135,7 +155,8 @@ async function paintBuild(body) {
       const chip = document.createElement('b');
       chip.className = 'opt-chip';
       chip.textContent = text;
-      chip.style.cssText = `display:inline-block;width:auto;font-size:9px;line-height:1;padding:2px 4px;border-radius:4px;font-weight:600;${css}`;
+      chip.style.cssText = `display:inline-block;width:auto;font-size:9px;line-height:1;padding:2px 4px;border-radius:4px;font-weight:600;pointer-events:auto;cursor:help;${css}`;
+      chip.title = statusRows;
       chipRow(card).appendChild(chip);
     }
     if (path && rebuildable !== false) rebuildChip(card, path, bad);   // no source to rebuild from → no button (it would 400)
@@ -154,7 +175,7 @@ async function paintBuild(body) {
       // label strip Skye's previews carry along their top edge and of the name below (owner, 09-24)
       card.innerHTML = `<div class="pv" style="position:relative;width:100%;line-height:0">${img}</div><span>${escapeHtml(it.name)}</span>`;   // server-supplied name (§24k hygiene)
       card.onclick = () => holdGhost(it.path, it.name);
-      optBadge(card, it.opt, it.perf, it.perfOriginal, it.path, it.rebuildable);
+      optBadge(card, it.opt, it.perf, it.perfOriginal, it.path, it.rebuildable, (it.path?.split('/').pop() ?? it.name).replace(/\.glb$/i, '').replace(/_/g, ' '));
       grid.appendChild(card);
     }
     if (!items.length) grid.innerHTML = '<div style="color:var(--dim);font-size:11px">nothing matched</div>';
@@ -208,13 +229,19 @@ bus.on('asset', ({ name, path }) => {
 // ---- avatars ---------------------------------------------------------------
 
 let onSwitchAvatar = null;
+const AV_CAT = { tris: 'triangles', draws: 'draw calls', texMB: 'texture memory', bones: 'bones', mats: 'materials', alpha: 'transparent materials' };
 export function wireAvatarSwitch(fn) { onSwitchAvatar = fn; }
 /** The one body-switch, for every surface (the desktop cards, the bodies panel, its quad). */
 export function switchAvatar(path, name) { return onSwitchAvatar?.(path, name); }
 let myAvatarPath = '';
 export function setMyAvatarPath(p) { myAvatarPath = p; }
 
+// a confirmed perf stamp (avatar.js) repaints an open avatar section — the pill appears without a reload (owner, 09-24:
+// wore tigerbee + aporia, the panel painted before the stamps landed and only claude showed a pill)
+let avatarBody = null;
+bus.on('avatar-perf', () => { if (avatarBody?.isConnected) paintAvatars(avatarBody); });
 async function paintAvatars(body) {
+  avatarBody = body;
   const list = await fetch('/avatars').then((r) => r.json()).catch(() => []);
   body.innerHTML = '';
   // the door's proven recipe (09-05): dense grid, every card a 3:4 portrait
@@ -222,7 +249,7 @@ async function paintAvatars(body) {
   // used to give it its own size, so cards came out at two sizes (R's shot)
   const grid = document.createElement('div');
   grid.className = 'grid dense av-grid';
-  for (const { name, path } of list) {
+  for (const { name, path, perf } of list) {
     const card = document.createElement('button');
     card.className = `card panel ${path === myAvatarPath ? 'on' : ''}`;
     // the portrait BOX sizes the card, never the image: a lazy <img> that has
@@ -234,6 +261,21 @@ async function paintAvatars(body) {
        <span>${escapeHtml(name)}</span>`;
     const img = card.querySelector('img');
     img.addEventListener('error', () => { img.remove(); });
+    card.title = name;   // the portrait names itself; the perf numbers live on the pill
+    // the loupe's rank of this body AS LOADED (stamped by a wearer's client — routes.ts avatarRoster; absent until
+    // someone has worn this version): the same pill as the library cards, on the portrait's bottom-right
+    if (perf) {
+      const pill = document.createElement('b');
+      pill.className = 'opt-rank';
+      pill.dataset.rank = String(perf.rank);
+      pill.style.cssText = `position:absolute;right:6px;bottom:6px;z-index:1;display:inline-block;width:14px;height:8px;border-radius:4px;`
+        + `background:${TIER_COLORS[perf.rank]};box-shadow:0 0 0 1px rgba(0,0,0,.45)`;
+      pill.style.cursor = 'help';
+      card.querySelector('.av-shot').appendChild(pill);
+      // the tooltip lives ON the pill (owner: the whole portrait saying perf on hover was noise)
+      pill.title = `perf: ${perf.rankName} — set by ${AV_CAT[perf.worst] ?? perf.worst}\n  ${perf.tris.toLocaleString()} tris · ${perf.draws} draws · `
+        + `${perf.mats} materials · ${perf.texMB} MB textures${perf.bones ? ` · ${perf.bones} bones` : ''}${perf.alpha ? ` · ${perf.alpha} transparent` : ''}`;
+    }
     card.onclick = () => onSwitchAvatar?.(path, name);
     grid.appendChild(card);
   }

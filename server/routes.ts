@@ -16,6 +16,7 @@ import { randomBytes } from "node:crypto";
 import { ROOT, WORLDS_DIR, LIBRARY_DIR, OPT_DIR, PATCH_DIR, LADDER, JOIN_TOKEN, STORE_MIN } from "./config.ts";
 import { isStoreOriginal, isServingArtifact, variantStatus, variantSource, freshOver } from "./store-variants.ts";
 import { glbPerfOfFile } from "./glbperf.ts";
+import { rankOf, TIER_NAMES } from "../shared/perfrank.js";
 import { wantsKtx2, KTX2_KEY } from "../shared/ktx2.js";
 import { LOD_RECIPE, lodVariantPath, lodVerdictKind, lodVerdictFinal } from "./store-variants.ts";
 import { hnSessions, hnJti, sessionFromCookie, saveSessions, SESSION_TTL_MS, HN_ISSUER_KEY, HN_ISS, HN_AUD, HN_LOGIN_URL, HN_REQUIRE_LOGIN } from "./auth.ts";
@@ -94,8 +95,25 @@ function requestSnap(world: World, follow: string, view = "first"): Promise<{ ok
  *  the join snapshot, so a joiner needs no separate round-trip before it
  *  can resolve a body name (the /avatars top-level await used to gate the
  *  client's entire module graph). */
-export function avatarRoster(): { name: string; path: string; height: number | null; seat?: unknown }[] {
-  const seen = new Map<string, { url: string; file: string }>();
+export type AvatarPerf = { tris: number; draws: number; mats: number; alpha: number; bones: number; texMB: number;
+  rank: number; rankName: string; worst: string; v: string };
+/** POST /thumb's `perf` (JSON of the loupe's numbers) + `v` → a validated record with the rank recomputed here, or
+ *  null. Every field must be a finite, non-negative, sane number — this is client-written. */
+export function avatarPerfParam(raw: string | null, v: string | null): AvatarPerf | null {
+  if (!raw || !v || !/^\d{1,16}$/.test(v) || raw.length > 400) return null;
+  let o: any; try { o = JSON.parse(raw); } catch { return null; }
+  const LIM = { tris: 5e7, draws: 1e5, mats: 1e4, alpha: 1e4, bones: 1e4, texMB: 1e5 } as const;
+  const n: any = {};
+  for (const [k, max] of Object.entries(LIM)) {
+    const x = o?.[k];   // a number, not something that coerces to one (Number(null), Number([]), Number("") are all 0)
+    if (typeof x !== "number" || !Number.isFinite(x) || x < 0 || x > max) return null;
+    n[k] = k === "texMB" ? Math.round(x * 100) / 100 : Math.round(x);
+  }
+  const r = rankOf(n);
+  return { ...n, rank: r.rank, rankName: TIER_NAMES[r.rank], worst: r.worst, v };
+}
+export function avatarRoster(): { name: string; path: string; height: number | null; perf?: AvatarPerf | null; seat?: unknown }[] {
+  const seen = new Map<string, { url: string; file: string; v: string }>();
   for (const base of [LIBRARY_DIR, OPT_DIR]) {
     const dir = join(base, "eidoverse/assets/vrms");
     if (!existsSync(dir)) continue;
@@ -103,10 +121,8 @@ export function avatarRoster(): { name: string; path: string; height: number | n
       // .ktx2.vrm files are §20c texture variants living beside overlay
       // originals — negotiated serving artifacts, not bodies of their own
       if (f.endsWith(".vrm") && !f.endsWith(".ktx2.vrm")) {
-        seen.set(f.replace(".vrm", ""), {
-          url: `eidoverse/assets/vrms/${f}?v=${Math.round(Bun.file(join(dir, f)).lastModified)}`,
-          file: join(dir, f),
-        });
+        const v = String(Math.round(Bun.file(join(dir, f)).lastModified));
+        seen.set(f.replace(".vrm", ""), { url: `eidoverse/assets/vrms/${f}?v=${v}`, file: join(dir, f), v });
       }
     }
   }
@@ -119,11 +135,12 @@ export function avatarRoster(): { name: string; path: string; height: number | n
     if (!d.vrm) continue;
     const file = resolveLibFile(d.vrm);
     if (!file) { console.error(`[defs] avatar "${name}": vrm not found in library — ${d.vrm}`); continue; }
-    seen.set(name, { url: `${d.vrm}?v=${Math.round(Bun.file(file).lastModified)}`, file });
+    const v = String(Math.round(Bun.file(file).lastModified));
+    seen.set(name, { url: `${d.vrm}?v=${v}`, file, v });
   }
   // stature metadata, contributed alongside portraits (see POST /thumb);
   // a def's declared height wins over the measured sidecar
-  let hmeta: Record<string, { h: number }> = {};
+  let hmeta: Record<string, { h?: number; perf?: AvatarPerf }> = {};
   try {
     const mp = join(OPT_DIR, "thumbs", "meta.json");
     if (existsSync(mp)) hmeta = JSON.parse(readFileSync(mp, "utf8"));
@@ -133,8 +150,10 @@ export function avatarRoster(): { name: string; path: string; height: number | n
   // never rehash a VRM and can never read a stale value as fresh). The sha
   // work behind judge() is mtime-cached, so a roster read costs hashing only
   // when a body's bytes actually changed.
-  return [...seen].map(([name, { url, file }]) => ({ name, path: url,
+  return [...seen].map(([name, { url, file, v }]) => ({ name, path: url,
     height: defs[name]?.height ?? hmeta[name.replace(/[^a-zA-Z0-9_-]/g, "_")]?.h ?? null,
+    // the loupe's rank of THIS version only (the v its URL carries): a stamp from an older export is withheld until a wearer re-measures
+    perf: ((p) => p && p.v === v ? p : null)(hmeta[name.replace(/[^a-zA-Z0-9_-]/g, "_")]?.perf),
     seat: seatStore.judge(name, file) }));
 }
 
@@ -797,7 +816,11 @@ const ROUTES: Route[] = [
   {
     match: (u, req) => u.pathname === "/thumb" && req.method === "POST",
     handler: async ({ req, url }) => {
-      if (JOIN_TOKEN && url.searchParams.get("token") !== JOIN_TOKEN)
+      // The door key rides `Authorization: Bearer`, never the URL (access logs; see /clientlog). The old ?token= shape
+      // is refused outright so a stale client cannot keep leaking it.
+      if (url.searchParams.has("token")) return new Response("key belongs in the Authorization header", { status: 400 });
+      const auth = req.headers.get("authorization") ?? "";
+      if (JOIN_TOKEN && (auth.startsWith("Bearer ") ? auth.slice(7).trim() : "") !== JOIN_TOKEN)
         return new Response("token required", { status: 401 });
       const safe = (url.searchParams.get("name") ?? "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 48);
       if (!safe) return new Response("name required", { status: 400 });
@@ -808,19 +831,26 @@ const ROUTES: Route[] = [
       // client-side) — kept beside the images so /avatars can hand catalogs a
       // roster drawn to a common scale.
       const height = Number(url.searchParams.get("height"));
-      if (Number.isFinite(height) && height > 0.2 && height < 20) {
+      const hOk = Number.isFinite(height) && height > 0.2 && height < 20;
+      // …and the body's loupe numbers, measured by the wearer's client on the LOADED body (perfscope.statsOf — the
+      // runtime draws a GLB parse can't see: MToon outline groups). Tied to the body version `v` (the roster's ?v=
+      // mtime) so a re-export shows no stale rank. The rank is recomputed HERE from the numbers (shared/perfrank.js);
+      // a client-sent rank would be ignored.
+      const perf = avatarPerfParam(url.searchParams.get("perf"), url.searchParams.get("v"));
+      if (hOk || perf) {
         const metaPath = join(dir, "meta.json");
-        let meta: Record<string, { h: number }> = {};
+        let meta: Record<string, { h?: number; perf?: AvatarPerf }> = {};
         try { if (existsSync(metaPath)) meta = JSON.parse(readFileSync(metaPath, "utf8")); } catch { /* fresh */ }
-        meta[safe] = { h: Math.round(height * 100) / 100 };
+        meta[safe] = { ...meta[safe], ...(hOk ? { h: Math.round(height * 100) / 100 } : {}), ...(perf ? { perf } : {}) };
         atomicWrite(metaPath, JSON.stringify(meta));
       }
       // First contributor wins (re-posting on every join would be pointless
       // write traffic) — unless a re-mint pass explicitly forces the refresh.
       const force = url.searchParams.get("force") === "1";
-      if (existsSync(dest) && !force) return new Response(JSON.stringify({ ok: true, existed: true }),
+      if (existsSync(dest) && !force) return new Response(JSON.stringify({ ok: true, existed: true, perf: !!perf }),
         { headers: { "content-type": "application/json" } });
       const body = new Uint8Array(await req.arrayBuffer());
+      if (body.length === 0 && perf) return new Response(JSON.stringify({ ok: true, meta: true, perf: true }), { headers: { "content-type": "application/json" } });
       if (body.length > 400_000) return new Response("thumb too large", { status: 413 });
       if (body.length < 8 || body[0] !== 0x89 || body[1] !== 0x50) return new Response("not a PNG", { status: 415 });
       writeFileSync(dest, body);
@@ -1130,10 +1160,13 @@ const ROUTES: Route[] = [
       // answered 500, so every page load logged a server error for a file
       // nobody asked us to have.
       new Response(
+        // the mark's hand-set 32 px master — the same drawing as index.html's <link rel="icon">, for pages
+        // (captions.html, AGENTS.md in a tab) that don't carry one
         `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-           <rect width="32" height="32" rx="7" fill="#0c1720"/>
-           <circle cx="16" cy="16" r="6" fill="#8fe8c8"/>
-           <circle cx="16" cy="16" r="10.5" fill="none" stroke="#8fe8c8" stroke-opacity=".45" stroke-width="1.5"/>
+           <style>path{fill:#8fe8c8}@media (prefers-color-scheme:light){path{fill:#1d7a5f}}</style>
+           <path d="M6.361 4 L25 4 L25 12 L21 12 L21 8 L2.407 8 A14.5 14.5 0 0 1 6.361 4 Z"/>
+           <path d="M2.407 24 L21 24 L21 20 L25 20 L25 28 L6.361 28 A14.5 14.5 0 0 1 2.407 24 Z"/>
+           <path d="M9.335 14 L28.861 14 A14.5 14.5 0 0 1 28.861 18 L9.335 18 A5.539 5.539 0 0 1 9.335 14 Z"/>
          </svg>`,
         { headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" } },
       ),

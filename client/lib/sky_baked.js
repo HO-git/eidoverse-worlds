@@ -176,13 +176,14 @@ let lastCycleMs = 0;   // how long the last bake cycle took (bands + pump spacin
 let refreshing = false;
 export const bakedRefreshing = () => refreshing;
 // DRIFT (owner 09-27: 'if drift is almost free, do that for medium'; after a look: 'looks nice … an easy win'). On by
-// default on every baked tier; ?skydrift=0 turns it off. A bake is a snapshot, so
+// default on every baked tier until 10-01, when the owner saw it carry the STARS along with the clouds (the bake is one
+// picture, so the shift moves everything in it): OFF by default now, ?skydrift=1 to see it again. A bake is a snapshot, so
 // between bakes the clouds stood still and then dissolved to where they'd moved. The engine moves them by sampling its
 // cloud field at p + wind·time, so the dome can do the same to the picture: each view ray is carried to the cloud
 // layer, shifted by wind × (sky time since THAT texture was baked), and the shifted direction is sampled. The next bake
 // then lands where the drifted picture already is. The shift fades out toward the horizon (no layer hit, tiny angles)
 // and around the sun (the bake includes the disc and its glow, which must not travel).
-const DRIFT = CONFIG.params.get('skydrift') !== '0';
+const DRIFT = CONFIG.params.get('skydrift') === '1';   // opt-in since 10-01 (the stars drifted with the clouds)
 let sysRef = null, cycleSkyT = 0, cycleSnap = null;
 const bakeSkyT = [0, 0];               // sky time each target's picture shows (mid-bake)
 let driftDt = null;                    // [uniform, uniform]: dt for A and B

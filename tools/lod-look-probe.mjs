@@ -30,7 +30,7 @@ try {
   await pg.waitForFunction(() => globalThis.__ewEngineUp, null, { timeout: 60000 });
   const rows = [];
   for (const [orig, lod] of pairs) {
-    const r = await Promise.race([pg.evaluate(async ([orig, lod]) => {
+    const r = await Promise.race([pg.evaluate(async ([orig, lod, dists]) => {
       const { THREE, renderer } = await import('./lib/core.js');
       const { makeLoader } = await import('./lib/assets.js');
       const load = async (f) => (await makeLoader().loadAsync(`/__look/${encodeURIComponent(f)}`)).scene;
@@ -57,7 +57,9 @@ try {
         return px;
       };
       const out = { R: +R.toFixed(1), diag: +sz.length().toFixed(2) };
-      for (const [label, d] of [['auto', near], ['eco', near * PRESSURE_EDGE]]) {
+      // LOD_LOOK_DISTS="a,b" (metres) overrides both views — e.g. an avatar close-up, where LOD distances are meaningless
+      const dd = (dists ?? '').split(',').map(Number).filter((x) => x > 0);
+      for (const [label, d] of [['auto', dd[0] ?? near], ['eco', dd[1] ?? near * PRESSURE_EDGE]]) {
         const pa = await shoot(a, d), pb = await shoot(b, d);
         let n = 0, sum = 0, bad = 0;
         const img = new ImageData(W * 3, W);
@@ -74,7 +76,7 @@ try {
       }
       renderer.setClearColor(cc, ca);
       return out;
-    }, [orig, lod]), new Promise((_, rej) => setTimeout(() => rej(new Error('pinned 150 s')), 150000))]);
+    }, [orig, lod, process.env.LOD_LOOK_DISTS ?? null]), new Promise((_, rej) => setTimeout(() => rej(new Error('pinned 150 s')), 150000))]);
     rows.push([orig, r]);
     for (const k of ['auto', 'eco']) writeFileSync(`${OUT.replace(/\.png$/, '')}-${rows.length}-${k}.png`, Buffer.from(r[k].png.split(',')[1], 'base64'));
     const name = orig.split('/').pop().slice(0, 40);

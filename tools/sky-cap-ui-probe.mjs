@@ -24,7 +24,7 @@ try {
   await pg.waitForTimeout(1500);
   const ui = () => pg.evaluate(async () => {
     const wdom = [...document.querySelectorAll('#sec-sky')][0];
-    if (!wdom?.querySelector('.cloud-cap-note')) document.querySelector('#sec-sky .head')?.click();
+    if (!wdom?.querySelector('.cloud-cap-note')) document.querySelector('#sec-sky-tab')?.click();
     await new Promise((r) => setTimeout(r, 300));
     const sel = [...document.querySelectorAll('#sec-sky select')].find((s) => [...s.options].some((o) => o.value === 'high'));
     const note = document.querySelector('#sec-sky .cloud-cap-note');

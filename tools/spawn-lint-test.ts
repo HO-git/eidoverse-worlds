@@ -20,6 +20,10 @@ writeFileSync(join(library, "space model.glb"), "literal-only");
 writeFileSync(join(library, "café.glb"), "literal-only");
 writeFileSync(join(library, "encoded%20model.glb"), "fixture");
 writeFileSync(join(library, "caf%C3%A9-served.glb"), "fixture");
+// A directory on a higher rung shadows the file below it: the route stops at
+// the first entry that exists and answers it with an error.
+mkdirSync(join(patched, "shadow.glb")); writeFileSync(join(library, "shadow.glb"), "fixture");
+mkdirSync(join(overlay, "body.vrm")); writeFileSync(join(library, "body.vrm"), "fixture");
 const run = await scratchSequencer("spawn-lint", {
   portFrom: 9180,
   serverEnv: {
@@ -78,6 +82,8 @@ try {
     ["encoded-unicode", "café-served.glb", null],
     ["already-encoded", "encoded%20model.glb", null],
     ["patched", "patched-only.glb", null],
+    ["patched-directory", "shadow.glb", "not-found"],
+    ["overlay-directory", "body.vrm", "not-found"],
   ] as const;
   for (const [id, lib] of cases) {
     author.send({ type: "verb", verb: "spawn", args: { id, lib, pos: [0, 0, 0] } });
@@ -94,6 +100,10 @@ try {
   for (const lib of ["library.glb?v=123", "library.glb#mesh", "library.glb?v=123#mesh", "patched-only.glb"]) {
     const served = await fetch(run.BASE + "/library/" + lib);
     check("lint matches the actual asset route for " + lib, served.ok && await served.text() === "fixture");
+  }
+  for (const lib of ["shadow.glb", "body.vrm"]) {
+    const served = await fetch(run.BASE + "/library/" + lib);
+    check("the route serves no file where a directory shadows one: " + lib, !served.ok, String(served.status));
   }
   for (const [lib, available] of [["space model.glb", false], ["café.glb", false],
       ["encoded model.glb", true], ["café-served.glb", true], ["encoded%20model.glb", true]] as const) {

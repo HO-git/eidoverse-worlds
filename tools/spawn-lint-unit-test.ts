@@ -50,6 +50,14 @@ try {
   check("a name with two dots is a name, served and resolved", resolveLibFile("robot..v2.glb") === join(ladder[2], "robot..v2.glb"));
   mkdirSync(join(ladder[2], "folder.glb"));
   check("a directory named like a model is no model", resolveLibFile("folder.glb") === null);
+  // The route stops at the first rung where any entry exists, so a directory
+  // there shadows a file of the same name on a lower rung.
+  mkdirSync(join(ladder[0], "shadow.glb"));
+  writeFileSync(join(ladder[2], "shadow.glb"), "shadowed");
+  check("a patched directory shadows the library's file of that name", resolveLibFile("shadow.glb") === null);
+  mkdirSync(join(ladder[1], "body.vrm"));
+  writeFileSync(join(ladder[2], "body.vrm"), "shadowed");
+  check("an overlay directory shadows the library's VRM of that name", resolveLibFile("body.vrm") === null);
   // statSync throws for these where existsSync said no: a path through a file
   // (ENOTDIR, in bun) and a name past the filesystem's 255-byte limit
   // (ENAMETOOLONG; 90 é's are 544 bytes once percent-encoded).

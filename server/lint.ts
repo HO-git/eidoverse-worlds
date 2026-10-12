@@ -57,21 +57,26 @@ export function libraryPath(lib: unknown, extension: RegExp): string | null {
 const MODEL = /\.(glb|vrm)$/i;
 const modelPath = (lib: unknown) => libraryPath(lib, MODEL);
 
-/** Whether `p` is a regular file. statSync throws for more than a missing
- *  entry: a path through a file (ENOTDIR, in bun) and a name past the
- *  filesystem's limit (ENAMETOOLONG). Each is no file here, as it was to the
- *  existsSync these lookups used before, and a spawner's long name must not
+/** What a rung holds at `p`, as the route's existsSync sees it: a regular
+ *  file, some other entry (a directory named like a model), or nothing.
+ *  statSync throws for more than a missing entry: a path through a file
+ *  (ENOTDIR, in bun) and a name past the filesystem's limit (ENAMETOOLONG).
+ *  existsSync reports each as nothing, and a spawner's long name must not
  *  turn a lookup into a throw. */
-function isFile(p: string): boolean {
-  try { return statSync(p).isFile(); } catch { return false; }
+function entryAt(p: string): "file" | "other" | null {
+  try { return statSync(p).isFile() ? "file" : "other"; } catch { return null; }
 }
 
-/** The first rung of the ladder holding `rel` as a regular file, as /library
- *  serves it: a directory named like a model is no model. */
+/** The file /library serves for `rel`. The route takes the first rung where
+ *  any entry exists, so a directory named like a model there is no model,
+ *  even over a file of that name on a lower rung: the route answers it with
+ *  an error, not the lower file. */
 export function onLadder(rel: string): string | null {
   for (const base of LADDER) {
     const p = normalize(join(base, rel));
-    if (p.startsWith(base) && isFile(p)) return p;
+    if (!p.startsWith(base)) continue;
+    const entry = entryAt(p);
+    if (entry !== null) return entry === "file" ? p : null;
   }
   return null;
 }

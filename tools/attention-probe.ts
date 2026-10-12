@@ -1,6 +1,10 @@
 // bun run tools/attention-probe.ts
 // Real browser chat + shared AudioContext + owned scratch sequencer. Counts
 // actual oscillator starts, not a mock "play" callback; no audio device needed.
+// The browser is harness.ts's CHROME. On macOS, point CHROME at the Chromium
+// Playwright installs (`bunx playwright install chromium`, under
+// ~/Library/Caches/ms-playwright): with system Chrome headless, the wheel never
+// reaches the options popup and the wheel-scroll check times out.
 import { chromium } from 'playwright';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';

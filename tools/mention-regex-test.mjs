@@ -42,6 +42,10 @@ check('control: the unescaped form does throw', oldThrew);
   check('"hey artie-kube" reaches artie-kube', rx.test('hey artie-kube'));
   check('"artie is over there" reaches artie-kube (the qualifier-dropped name is the feature)', rx.test('artie is over there'));
   check('the full display name still matches in any case', rx.test('artie (KUBE) are you there'));
+  check('an explicit different qualifier does not match the short alias', !rx.test('@Artie (cloud), over here'));
+  check('a bare qualified name also requires the right qualifier', !rx.test('Artie (cloud) is here'));
+  check('an equal unqualified id cannot bypass qualifier matching', !mentionRegexFor(['artie', 'Artie (kube)']).test('@Artie (cloud)'));
+  check('a later valid mention still matches after another qualified name', rx.test('@Artie (cloud), ask @Artie (kube)'));
   check('a prefix of the id is a different body', !rx.test('artie-kubernetes is a different body'));
   check('a prefix of the dropped name is a different body', !rx.test('artiest of them all'));
   check('an id with a trailing qualifier gets the same treatment', mentionRegexFor(['zed (two)']).test('@zed hi'));
@@ -51,6 +55,17 @@ check('control: the unescaped form does throw', oldThrew);
   check('the dropped form collapses with an equal id', mentionRegexFor(['artie', 'Artie (kube)']).source.split('|').length === 2);
   check('malformed entries are skipped, not fatal', mentionRegexFor([undefined, 42, 'zed']).test('@zed'));
   check('no usable name yields null', mentionRegexFor([undefined, '']) === null);
+}
+
+// Enrollment reserves a complete name, not every alias it could shorten to.
+{
+  const rx = mentionRegexFor(['antra-anything', 'Antra (anything)'], { dropQualifiers: false });
+  check('self-enrolled name does not acquire another resident\'s short handle', !rx.test('@Antra, over here'));
+  check('self-enrolled full display name remains mentionable', rx.test('@Antra (anything), over here'));
+  check('self-enrolled id remains mentionable', rx.test('@antra-anything, over here'));
+  check('self-enrolled name cannot match a different qualifier', !rx.test('@Antra (elsewhere)'));
+  check('self-enrolled policy also applies to qualified ids', !mentionRegexFor(['Antra (anything)'], { dropQualifiers: false }).test('@Antra'));
+  check('operator-configured names retain short mentions', mentionRegexFor(['antra-anything', 'Antra (anything)']).test('@Antra'));
 }
 
 // ── malformed ids must DEGRADE, never throw ────────────────────────────────

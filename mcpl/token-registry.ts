@@ -90,28 +90,39 @@ export function lookupToken(registry: Record<string, TokenAuth>, token: string):
 
 /** id -> display name for every accepted credential, so a remote participant's
  *  token name can ride the wire as `author.name`. Ids
- *  without a distinct name are absent; callers fall back to the id. Never
+ *  without a distinct name are absent; callers fall back to the id. Conflicting
+ *  names for one id are omitted rather than choosing by registry order. Never
  *  keyed by the secret. */
 export function displayNameIndex(registry: Record<string, TokenAuth>): Map<string, string> {
   const index = new Map<string, string>();
+  const ambiguous = new Set<string>();
   for (const auth of Object.values(registry)) {
-    if (auth.name && auth.name !== auth.id) index.set(auth.id, auth.name);
+    const name = auth.name || auth.id;
+    if (index.has(auth.id) && index.get(auth.id) !== name) ambiguous.add(auth.id);
+    index.set(auth.id, name);
   }
+  for (const [id, name] of index) if (ambiguous.has(id) || name === id) index.delete(id);
   return index;
 }
 
 export type WireAuthor = { id: string; name: string };
 
-/** The wire contract for "who said this", built over one display-name index:
- *  `authorOf(id)` carries the token display name in `author.name` (the id when
- *  the registry has no distinct name), and `renderLine` writes the ID, the
+/** The wire contract for "who said this": admitted credentials take precedence
+ *  over the registry index, including aid1 identities absent from tokens.json.
+ *  Keep the last admitted name after disconnect for replay; this is current
+ *  identity metadata, not a historical-name ledger or an authorization cache.
+ *  A failed registry reload cannot erase a name an admitted session supplied.
+ *  `renderLine` writes the ID, the
  *  addressing handle, into the text (world lines render bare). The prefix is
  *  never the display name: a host that matches its own name against the text
  *  must not be woken by another body whose display name merely contains it.
  *  Every line a host receives, live or replayed, goes through these two. */
 export function wireAuthors(index: ReadonlyMap<string, string>) {
+  const admitted = new Map<string, string>();
   return {
-    authorOf: (id: string): WireAuthor => ({ id, name: index.get(id) ?? id }),
+    refreshIndex: (next: ReadonlyMap<string, string>): void => { index = next; },
+    rememberAuthor: ({ id, name }: WireAuthor): void => { admitted.set(id, name); },
+    authorOf: (id: string): WireAuthor => ({ id, name: admitted.get(id) ?? index.get(id) ?? id }),
     renderLine: (author: WireAuthor, text: string): string => (author.id === "world" ? text : `${author.id}: ${text}`),
   };
 }

@@ -15,7 +15,6 @@
 // Tokens: mcpl/tokens.json  { "<token>": { "id": "mythos", "name": "Mythos",
 //         "world": "commons", "avatar": "eidoverse/assets/vrms/claude.vrm" } }
 
-import { mentionRegexFor } from "./mention.ts";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import { readFileSync, existsSync, writeFileSync, renameSync, rmSync } from "node:fs";
@@ -57,7 +56,7 @@ const ts = () => new Date().toISOString().slice(11, 19);
 const TOKENS_PATH = process.env.MCPL_TOKENS ?? fileURLToPath(new URL("./tokens.json", import.meta.url));
 const TOKENS_EXAMPLE_PATH = process.env.MCPL_TOKENS_EXAMPLE ?? fileURLToPath(new URL("./tokens.example.json", import.meta.url));
 
-type Auth = TokenAuth;
+type Auth = TokenAuth & { dropMentionQualifiers?: boolean };
 // Tokens are read PER CONNECTION ATTEMPT — minting/revoking is a file edit,
 // never a restart (the no-restart rule applies to the door, not just the world).
 function readTokens(): Record<string, Auth> {
@@ -181,17 +180,23 @@ class Session {
 
   constructor(private auth: Auth, ws: WebSocket, private agentToken = "") {
     this.conn = McplConnection.fromWebSocket(ws as never);
-    this.agent = new WorldAgent({
-      name: auth.id,
-      displayName: auth.name,
-      world: auth.world ?? "commons",
-      avatar: chosenAvatar[auth.id] ?? auth.avatar,
+    this.agent = this.createAgent(auth.world ?? "commons");
+    this.channelId = `world:${this.agent.world}`;
+  }
+
+  /** Initial attachment and travel preserve the same authenticated identity. */
+  private createAgent(world: string): WorldAgent {
+    return new WorldAgent({
+      name: this.auth.id,
+      displayName: this.auth.name,
+      dropMentionQualifiers: this.auth.dropMentionQualifiers ?? true,
+      world,
+      avatar: chosenAvatar[this.auth.id] ?? this.auth.avatar,
       url: process.env.WORLD_URL ?? "ws://127.0.0.1:8940/ws",
       // the same bearer that opened THIS door — the sequencer verifies the
       // name against it (agent names are reserved there)
-      agentToken,
+      agentToken: this.agentToken,
     });
-    this.channelId = `world:${this.agent.world}`;
   }
 
   /** The loopback media bridge. One sidecar at a time: a second connection
@@ -434,13 +439,7 @@ class Session {
     // The epoch increments only once the new attachment is LIVE: it names the
     // cutoff instant, so a transition that dies mid-flight must not advance it.
     const old = this.agent;
-    const next = new WorldAgent({
-      name: this.auth.id,
-      world: w,
-      avatar: chosenAvatar[this.auth.id] ?? this.auth.avatar,
-      url: process.env.WORLD_URL ?? "ws://127.0.0.1:8940/ws",
-      agentToken: this.agentToken,
-    });
+    const next = this.createAgent(w);
     next.onEvent = old.onEvent;
     next.onPing = old.onPing;
     // 🔴 The resident's activity dial is THEIRS, not the world's (antra review,
@@ -682,7 +681,7 @@ class Session {
         // A whisper is a DM, not a mention: nobody said your name, they came to
         // you. `chat:dm` ⇒ addressed + private under §16.3's closure, emitted
         // directly here as §16.3 recommends.
-        this.deliver(`(whispers to you) ${ev.text}`, { id: ev.who, name: ev.who },
+        this.deliver(`(whispers to you) ${ev.text}`, authorOf(ev.who),
           { tags: tags(CHAT.dm, CHAT.private, CHAT.addressed, EIDO.whisper, from), mentioned: true });
       } else if (ev.kind === "act") {
         // embodied transitions — an emote, a pose struck or released, someone
@@ -786,12 +785,10 @@ class Session {
     // the gap are delivered explicitly below; scrollback stays on catch_up.
     if (sinceSeq != null) this.agent.skipInboxThrough(sinceSeq);
     if (sinceSeq != null) {
-      // mentionRegex returns null for an id with no matchable form — its
-      // documented contract, honoured by agent.ts and violated here: a null
-      // threw inside the prelude and killed the session at connect.
-      const rxSeq = mentionRegexFor([this.auth.id, this.auth.name]);
+      // Use the live body's matcher: catch-up must honor the same alias policy
+      // and degrade safely when no name has a matchable form.
       const said = await this.agent.missedSince(sinceSeq);
-      const missedSeq = said.filter((m) => m.who !== this.auth.id && !!rxSeq?.test(m.text));
+      const missedSeq = said.filter((m) => m.who !== this.auth.id && this.agent.mentionsMe(m.text));
       if (missedSeq.length) {
         this.deliver(`While you were away, ${missedSeq.length} message${missedSeq.length === 1 ? "" : "s"} mentioned you:`,
           { id: "world", name: this.agent.world }, { tags: tags(CHAT.ambient, EIDO.catchup) });
@@ -807,8 +804,7 @@ class Session {
     }
     const since = sinceSeq != null ? null : lastSeen[this.auth.id];
     if (since != null) {
-      const rx = mentionRegexFor([this.auth.id, this.auth.name]);   // null-safe: see rxSeq above
-      const missed = this.agent.inbox.filter((m) => m.kind === "say" && m.ts > since && m.who !== this.auth.id && !!rx?.test(m.text ?? ""));
+      const missed = this.agent.inbox.filter((m) => m.kind === "say" && m.ts > since && m.who !== this.auth.id && this.agent.mentionsMe(m.text ?? ""));
       if (missed.length) {
         this.deliver(`While you were away, ${missed.length} message${missed.length === 1 ? "" : "s"} mentioned you:`,
           { id: "world", name: this.agent.world }, { tags: tags(CHAT.ambient, EIDO.catchup) });
@@ -1280,15 +1276,15 @@ function joinAllowed(auth: Auth, world: string): boolean {
  *  Legacy bare-id entries are read as a fallback so existing residents don't
  *  get a full replay on the first post-upgrade connect. */
 const seqKey = (id: string, world: string) => `${id}@${world}`;
-// Refreshed on every connection attempt from the same registry read that
-// authorizes it; a remote id the registry does not name renders as itself.
-let wire = wireAuthors(new Map<string, string>());
+// Registry hints refresh per attempt; admitted identities survive reloads and
+// disconnects for replay. Neither source grants authentication authority.
+const wire = wireAuthors(new Map<string, string>());
 const authorOf = (id: string) => wire.authorOf(id);
 const sessions = new Map<string, Session>(); // identity → live session (newest wins)
 wss.on("connection", (ws, req) => {
   const token = new URL(req.url ?? "/", "http://localhost").searchParams.get("token");
   const registry = readTokens();
-  wire = wireAuthors(displayNameIndex(registry));
+  wire.refreshIndex(displayNameIndex(registry));
   let auth = token ? lookupToken(registry, token) : undefined;
   let aidReason: string | null = null;
   if (!auth && token?.startsWith("aid1.") && HN_ISSUER_KEY) {
@@ -1300,6 +1296,8 @@ wss.on("connection", (ws, req) => {
       auth = {
         id: aid1Slug(p),
         name: p.name,
+        // Enrollment reserves only the whole name, never a shortened alias.
+        dropMentionQualifiers: false,
         world: typeof p.claims?.world === "string" ? (p.claims.world as string) : undefined,
         avatar: typeof p.claims?.avatar === "string" ? (p.claims.avatar as string) : undefined,
         worlds: Array.isArray(p.claims?.worlds) && (p.claims.worlds as unknown[]).every((w) => typeof w === "string")
@@ -1397,6 +1395,7 @@ wss.on("connection", (ws, req) => {
     const prev = sessions.get(auth!.id);
     if (prev) { console.log(`[${ts()}] [mcpl] ${auth!.id} reconnected — taking over previous session`); prev.close(); }
     const session = new Session(auth!, ws, token ?? "");
+    wire.rememberAuthor(auth!);
     sessions.set(auth!.id, session);
     startSession(session, ws, auth!);
     ws.off("message", hold);

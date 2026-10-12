@@ -45,8 +45,11 @@ const TRAILING_QUALIFIER = /\s*\([^()]*\)\s*$/u;
  *  of one (`artie-kube` handles exist), so neither `artie` nor `artie-kube`
  *  matches inside `artie-kubernetes`. Malformed or empty entries are skipped,
  *  duplicates collapse case-insensitively, and a list with no usable name
- *  returns null exactly like `mentionRegex`. */
-export function mentionRegexFor(names: readonly unknown[]): RegExp | null {
+ *  returns null exactly like `mentionRegex`. Self-enrolled names must pass
+ *  dropQualifiers:false: ownership of a full name does not grant its alias.
+ *  An explicit qualifier in the text must match too; a short form cannot
+ *  consume the start of a different resident's qualified name. */
+export function mentionRegexFor(names: readonly unknown[], { dropQualifiers = true }: { dropQualifiers?: boolean } = {}): RegExp | null {
   const seen = new Set<string>();
   const parts: string[] = [];
   const add = (form: string) => {
@@ -58,8 +61,8 @@ export function mentionRegexFor(names: readonly unknown[]): RegExp | null {
   for (const candidate of names) {
     if (typeof candidate !== "string" || !candidate) continue;
     add(candidate);
-    add(candidate.replace(TRAILING_QUALIFIER, ""));
+    if (dropQualifiers) add(candidate.replace(TRAILING_QUALIFIER, ""));
   }
   if (parts.length === 0) return null;
-  return new RegExp(`(?<![\\w@-])@?(?:${parts.join("|")})(?![\\w-])`, "i");
+  return new RegExp(`(?<![\\w@-])@?(?:${parts.join("|")})(?![\\w-])(?!\\s*\\([^()]*\\))`, "i");
 }

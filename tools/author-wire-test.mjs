@@ -30,5 +30,26 @@ check('the rendered prefix is the id, not the display name', line === 'artie-kub
 check('the display name never reaches the rendered text', !line.includes('Artie'));
 check('world lines render bare', wire.renderLine({ id: 'world', name: 'commons' }, 'the sun sets') === 'the sun sets');
 
+for (const names of [['First', 'Second'], ['First', 'shared'], ['shared', 'First'], ['First', 'Second', 'First']]) {
+  const duplicates = Object.fromEntries(names.map((name, i) => [`key-${i}`, { id: 'shared', name }]));
+  check(`conflicting registry names fall back to id (${names.join(', ')})`, wireAuthors(displayNameIndex(duplicates)).authorOf('shared').name === 'shared');
+}
+check('duplicate credentials with the same name remain unambiguous', displayNameIndex({
+  a: { id: 'shared', name: 'Same' }, b: { id: 'shared', name: 'Same' },
+}).get('shared') === 'Same');
+
+wire.rememberAuthor({ id: 'visitor-anywhere', name: 'Visitor (anywhere)' });
+check('admitted aid1 name is available without a registry entry', wire.authorOf('visitor-anywhere').name === 'Visitor (anywhere)');
+wire.rememberAuthor({ id: 'artie-kube', name: 'Artie (admitted)' });
+check('the actual admitted credential takes precedence over registry names', wire.authorOf('artie-kube').name === 'Artie (admitted)');
+wire.refreshIndex(new Map());
+check('failed reload preserves admitted legacy names', wire.authorOf('artie-kube').name === 'Artie (admitted)');
+check('failed reload preserves admitted aid1 names', wire.authorOf('visitor-anywhere').name === 'Visitor (anywhere)');
+wire.refreshIndex(new Map([['artie-kube', 'Other credential'], ['offline', 'Offline Resident']]));
+check('registry reload cannot relabel an admitted identity', wire.authorOf('artie-kube').name === 'Artie (admitted)');
+check('registry hints still name residents not yet admitted', wire.authorOf('offline').name === 'Offline Resident');
+wire.rememberAuthor({ id: 'artie-kube', name: 'Artie (reconnected)' });
+check('a new admission updates the identity used for live and replayed authors', wire.authorOf('artie-kube').name === 'Artie (reconnected)');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

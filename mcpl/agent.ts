@@ -156,6 +156,7 @@ const DOWNED_POSE: Record<string, number[]> = {
 
 export class WorldAgent {
   url: string; name: string; displayName: string; world: string; avatar: string; agentToken = "";
+  private dropMentionQualifiers: boolean;
   ws: WebSocket | null = null;
   joined = false;
   pos = { x: 0, y: 0, z: 0 };
@@ -409,12 +410,17 @@ export class WorldAgent {
   private pendingDebug = new Map<string, (m: any) => void>();
   private histId = 0;
 
-  constructor(opts: { url?: string; name?: string; displayName?: string; world?: string; avatar?: string; agentToken?: string } = {}) {
+  mentionsMe(text: string): boolean {
+    return !!mentionRegexFor([this.name, this.displayName], { dropQualifiers: this.dropMentionQualifiers })?.test(text);
+  }
+
+  constructor(opts: { url?: string; name?: string; displayName?: string; dropMentionQualifiers?: boolean; world?: string; avatar?: string; agentToken?: string } = {}) {
     this.url = opts.url ?? process.env.WORLD_URL ?? "ws://127.0.0.1:8940/ws";
     this.name = opts.name ?? process.env.AGENT_NAME ?? "claude";
     // The token's display name ("Artie (kube)"): a second form the body
     // answers to in chat. The id stays the addressing handle everywhere else.
     this.displayName = opts.displayName ?? process.env.AGENT_DISPLAY_NAME ?? "";
+    this.dropMentionQualifiers = opts.dropMentionQualifiers ?? true;
     this.world = opts.world ?? process.env.WORLD_NAME ?? "commons";
     this.avatar = opts.avatar ?? process.env.AGENT_AVATAR ?? "eidoverse/assets/vrms/claude.vrm";
     // The agent's own bearer (the one that opened the MCPL door). Forwarded at
@@ -1309,8 +1315,7 @@ export class WorldAgent {
         // A null regex means this body has no usable name (a malformed tokens
         // entry). Not being mentionable is degraded, not fatal — the body still
         // hears the room; it just cannot be addressed by name.
-        const rx = mentionRegexFor([this.name, this.displayName]);
-        const mention = rx ? rx.test(String(args.text)) : false;
+        const mention = this.mentionsMe(String(args.text));
         if (mention) this.ping({ ts, kind: "mention", who: actor, text: args.text });
         this.onEvent?.({ ts, kind: "say", who: actor, text: args.text, mention });
       }

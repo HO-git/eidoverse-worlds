@@ -15,10 +15,13 @@ export function createAttentionGate({ me, scope, mentions, now = () => performan
   function participant({ id, session } = {}, arrived = true) {
     sync();
     if (!id) return;
-    // A live arrival is a boundary even on older servers. A snapshot without
-    // session cannot establish a changed sender; preserve the existing cache.
-    // A rejoin missed while disconnected needs the new server's session field.
-    if (arrived || (typeof session === 'string' && sessions.get(id) !== session)) forget(id);
+    // A changed session is a new sender page, whose utterance counter starts
+    // again; the same session again is a reconnect of the same page, whose
+    // counter goes on, so its utterance memory stays. An arrival without a
+    // session (an older server) can't be told apart and counts as a boundary;
+    // a snapshot without one preserves the existing cache. A rejoin missed
+    // while disconnected shows as the snapshot's changed session.
+    if (typeof session === 'string' ? sessions.get(id) !== session : arrived) forget(id);
     if (typeof session === 'string' || !sessions.has(id)) sessions.set(id, session);
   }
   function sync() {

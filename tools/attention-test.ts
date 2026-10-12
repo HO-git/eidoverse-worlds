@@ -70,6 +70,15 @@ check('known to sessionless snapshot does not invent a lifetime', !gate.say(say(
 gate.roster([{ id: 'other', session: 'boot-c:9' }]);
 check('later same known session retains dedup', !gate.say(say('@tester', { spoken: true, utt: 3 })));
 
+// A session is a sender page: a reconnect of the same page arrives with the
+// same session, and its counter goes on.
+gate.participant({ id: 'other', session: 'page-d' });
+check('a new page session can chime its first utterance', gate.say(say('@tester', { spoken: true, utt: 4 }))); tick();
+gate.participant({ id: 'other', session: 'page-d' });
+check('a reconnect of the same page keeps its utterance memory', !gate.say(say('@tester', { spoken: true, utt: 4 })));
+gate.participant({ id: 'other', session: 'page-e' });
+check('a new page restarts the counter', gate.say(say('@tester', { spoken: true, utt: 4 }))); tick();
+
 let audible = false;
 const silentGate = createAttentionGate({ me: () => 'tester', scope: () => 'silent',
   mentions: () => true, now: () => now, play: () => audible });

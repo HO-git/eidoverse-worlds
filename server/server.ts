@@ -332,11 +332,14 @@ const clients = new Map<unknown, Client>();
 // #57 B2: transport-epoch source. Global (not per-world) so a generation number
 // never collides across worlds or after a world reload; never persisted — an
 // epoch outliving the process would defeat its purpose.
-// Presence consumers need a sender lifetime that survives counter reuse on restart.
-// Opaque observation only: authority still uses the existing credential/leg checks.
-const PRESENCE_BOOT = crypto.randomUUID();
-const presenceSession = (c: Client) => `${PRESENCE_BOOT}:${c.gen}`;
 let GEN = 0;
+// The sender lifetime presence consumers scope a speaker's utterance counter
+// by (`session` on arrive and snapshot.present): the joining page's own id,
+// which outlives a reconnect as its counter does, else a fresh token for this
+// leg. Opaque and observational: authority still uses the credential and leg
+// checks, and nothing here reveals the process's connection count.
+const PAGE_SESSION_RE = /^[A-Za-z0-9_-]{8,64}$/;
+const presenceSession = (c: Client) => (c.presenceSession ??= crypto.randomUUID());
 
 /** The placeholder tier's bbox side-channel, sent AFTER the snapshot as its
  *  own message: summaries are async, and the join handler's synchronous
@@ -432,6 +435,7 @@ function admitJoin(c: Client, ws: { send(d: string): void; close(code?: number, 
       }
     }
     c.spectator = Boolean(msg.spectate) || c.surface !== "world";
+    if (typeof msg.session === "string" && PAGE_SESSION_RE.test(msg.session)) c.presenceSession = msg.session;
     c.agent = Boolean(msg.agent);
     c.renderer = Boolean(msg.renderer);
     if (c.renderer) c.spectator = true; // renderers are invisible by definition

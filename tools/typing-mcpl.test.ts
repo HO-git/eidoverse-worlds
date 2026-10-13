@@ -12,6 +12,13 @@ import { join } from "node:path";
 const WPORT = 8955, MPORT = 8956;
 const worldsDir = mkdtempSync(join(tmpdir(), "eido-typing-"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// Positive waits poll with a deadline, so a slow machine delays a pass instead
+// of failing one.
+const waitUntil = async (pred: () => boolean, ms: number) => {
+  const until = Date.now() + ms;
+  while (Date.now() < until) { if (pred()) return true; await sleep(50); }
+  return pred();
+};
 let pass = 0, fail = 0;
 const check = (name: string, ok: boolean, extra = "") => {
   console.log(`  ${ok ? "\x1b[32m✓\x1b[0m" : "\x1b[31m✗\x1b[0m"} ${name}${ok ? "" : "  " + extra}`);
@@ -72,52 +79,78 @@ try {
   const typingSeen = () => seen.filter((m) => m.type === "typing" && m.id === "claude").length;
   const typingFor = (channelId: string, op?: "start" | "stop") =>
     rpc({ jsonrpc: "2.0", method: "channels/typing", params: { channelId, ...(op ? { op } : {}) } });
+  let nextId = 100;
+  const sayInWorld = (text: string) => rpc({ jsonrpc: "2.0", id: nextId++, method: "channels/publish",
+    params: { channelId: "world:commons", content: [{ type: "text", text }] } });
+  // The body sends at most one typing signal a second. Before each check that
+  // expects none, wait that out, so a throttled signal isn't what keeps it quiet.
+  const throttleClear = () => sleep(1200);
+  // After a check that expects no dots, the host's start for this world must
+  // raise them: the door handles notifications in order, so this shows the one
+  // before it was taken and ignored, not lost.
+  const control = async (what: string) => {
+    seen.length = 0;
+    typingFor("world:commons", "start");
+    check(`…and a start for this world then raises the dots (${what})`, await waitUntil(() => typingSeen() >= 1, 3000));
+    typingFor("world:commons", "stop");
+  };
 
-  // The host says the agent has begun composing for this world.
+  // The host says the agent's turn has begun for this world.
   typingFor("world:commons", "start");
-  await sleep(400);
-  check("the host's typing start surfaces as an in-world typing signal", typingSeen() >= 1,
+  check("the host's typing start surfaces as an in-world typing signal", await waitUntil(() => typingSeen() >= 1, 3000),
     `saw types: ${[...new Set(seen.map((m) => m.type))].join(",")}`);
 
   // The world's dots last 4 s and the host repeats start only every 7 s, so
-  // the door must keep them up in between on its own.
+  // the door must keep them up in between on its own, about every 2.5 s.
   seen.length = 0;
-  await sleep(5200);
-  check("the dots are kept up between the host's starts", typingSeen() >= 2, `typing signals in 5.2 s: ${typingSeen()}`);
+  check("the dots are kept up between the host's starts", await waitUntil(() => typingSeen() >= 2, 6500),
+    `typing signals: ${typingSeen()}`);
 
-  // stop lets them go: no signal after it.
-  typingFor("world:commons", "stop");
+  // The agent speaks: its bubble ends the dots, and the relay stays quiet
+  // until the host's next start.
+  sayInWorld("hello from the typing test");
   await sleep(300);
+  seen.length = 0;
+  await sleep(3500);
+  check("speaking ends the dots: no typing signal follows the say", typingSeen() === 0, `typing signals after the say: ${typingSeen()}`);
+  await control("after a say");
+
+  // stop: no signal after it. (A tick already in flight lands within the first second.)
+  typingFor("world:commons", "start");
+  await waitUntil(() => typingSeen() >= 1, 3000);
+  typingFor("world:commons", "stop");
+  await sleep(1000);
   seen.length = 0;
   await sleep(3200);
-  check("stop ends the dots", typingSeen() === 0, `typing signals after stop: ${typingSeen()}`);
+  check("after stop, no typing signal follows", typingSeen() === 0, `typing signals after stop: ${typingSeen()}`);
 
   // A start with no op is a start.
+  await throttleClear();
+  seen.length = 0;
   typingFor("world:commons");
-  await sleep(400);
-  check("a typing signal with no op starts the dots", typingSeen() >= 1);
+  check("a typing signal with no op starts the dots", await waitUntil(() => typingSeen() >= 1, 3000));
   typingFor("world:commons", "stop");
-  await sleep(300);
 
-  // Typing for a DIFFERENT channel must not light up this world. The body
-  // sends at most one typing signal a second, so wait that out first: a
-  // throttled signal must not be what keeps this check quiet.
-  await sleep(1200);
+  // Typing for a DIFFERENT channel must not light up this world.
+  await throttleClear();
   seen.length = 0;
   typingFor("dm:someone", "start");
-  await sleep(400);
+  await sleep(600);
   check("typing for another channel does not type in this world", typingSeen() === 0);
   typingFor("dm:someone", "stop");
+  await throttleClear();
+  await control("after another channel's start");
 
-  // The generation stream no longer draws the dots: a host may hold it back
-  // until it publishes, and dots then would mean "published". (The same wait
-  // out of the body's one-a-second throttle first.)
-  await sleep(1200);
+  // The generation stream draws no dots: a host may hold it back until it
+  // publishes, and dots then would mean "published".
+  await throttleClear();
   seen.length = 0;
   rpc({ jsonrpc: "2.0", method: "channels/outgoing/chunk",
     params: { inferenceId: "inf1", conversationId: "c1", channelId: "world:commons", index: 0, delta: "Hel" } });
-  await sleep(400);
-  check("a chunk of the generation stream no longer types in this world", typingSeen() === 0);
+  await sleep(600);
+  check("a chunk of the generation stream does not type in this world", typingSeen() === 0);
+  await throttleClear();
+  await control("after a chunk");
 
   watcher.close(); host.close();
 } catch (e) {

@@ -141,9 +141,10 @@ class Session {
    *  surface stays static. */
   private manifestAnnouncer: ManifestAnnouncer | null = null;
   private channelOpen = true;
-  /** The dots while the host says the agent is composing for this world.
-   *  It signals through whichever body is current, so travel stops it. */
-  private typing = new TypingRelay(() => this.agent.typing());
+  /** The dots while the host says the agent's turn runs for this world. Each
+   *  `start` names the body it signals through; the body's speech, travel and
+   *  the session's close stop it. */
+  private typing = new TypingRelay();
   /** Did the client declare capabilities.experimental.mcpl at initialize?
    *  Plain-MCP hosts (llmcord, Claude Code, …) get tools ONLY: no
    *  channels/register, no channels/incoming pushes, no mention replay —
@@ -195,6 +196,10 @@ class Session {
       agentToken,
     });
     this.channelId = `world:${this.agent.world}`;
+    // The body's speech ends the dots the relay keeps up; if the turn goes on,
+    // the host's next `start` raises them again. Travel hands this to the next
+    // body.
+    this.agent.onSaid = () => this.typing.stop();
   }
 
   /** The loopback media bridge. One sidecar at a time: a second connection
@@ -447,6 +452,7 @@ class Session {
     });
     next.onEvent = old.onEvent;
     next.onPing = old.onPing;
+    next.onSaid = old.onSaid;
     // 🔴 The resident's activity dial is THEIRS, not the world's (antra review,
     // #3). serve() restores it before the body first joins; a transition that
     // silently reset it would make travel quietly destroy a setting the agent
@@ -459,8 +465,10 @@ class Session {
     // attribute a late commons say to the annex channel (review B1).
     old.onEvent = null;
     old.onPing = null;
+    old.onSaid = null;
     // The host's typing named the old world's channel; the new world hears
-    // dots only when the host starts typing there.
+    // dots only when the host starts typing there. (The relay signals through
+    // the old body, which close() below silences anyway; this stops its timer.)
     this.typing.stop();
     old.close();                       // detach: persists exactly what a disconnect persists
     this.agent = next;
@@ -532,7 +540,11 @@ class Session {
    *  declaration.ts's own §5.4 comment: "absence is denial and there is no
    *  unspecified state, so an ambiguous entry fails closed." A peer with no
    *  declaration (plain MCP) keeps everything, exactly as toolsAllowed does;
-   *  this binds only hosts that bothered to declare. */
+   *  this binds only hosts that bothered to declare.
+   *
+   *  Today it gates `channels.publish` and `channels.lifecycle` at their verbs
+   *  and `channels.typing` at its notification. The door no longer advertises
+   *  `channels.streaming`, and nothing reads the stream. */
   private capAllowed(cap: string): boolean {
     // 🔴 SAME SEMANTICS AS granted(), deliberately (review agent, 2026-08-17).
     // The first version was `this.grant ? this.granted(cap) : true` — the
@@ -861,20 +873,25 @@ class Session {
           // (channels/outgoing/chunk), one per delta. A host can hold its
           // stream back until delivery decides where the text goes, and then
           // the chunks arrive only as the reply is published, so dots drawn
-          // from them would mean "published", not "composing". Chunks are
-          // accepted and dropped.
+          // from them would mean "published", not "composing". The door no
+          // longer advertises the stream, and a chunk that arrives anyway is
+          // dropped here with every other notification it doesn't handle.
           if (msg.notification.method === method.CHANNELS_TYPING) {
             // A NOTIFICATION, so there is no response to refuse with: without
-            // the grant it is dropped silently, as §14.1 has the host withhold
-            // it in the first place. Ungated, a host that never granted
-            // `channels.typing` could still raise the dots.
+            // the grant it is dropped silently. §14.1 has the host withhold
+            // typing from a server without the grant, but agent-framework can
+            // still send a `stop` there, and a host may not withhold at all.
+            // Ungated, a host that never granted `channels.typing` could raise
+            // the dots.
             if (!this.capAllowed(CAP.channelsTyping)) continue;
             const p = msg.notification.params as { channelId?: string; op?: string } | undefined;
             if (p?.channelId !== this.channelId) continue;
-            // A missing `op` reads as `start`, as discord-mcpl reads it;
-            // agent-framework always names one.
+            // `op` is agent-framework's field, which always names one; the
+            // spec's params carry only `channelId`. A missing `op` reads as
+            // `start`, as discord-mcpl reads it, and a host that never sends
+            // `stop` has its dots ended by the relay's overdue stop.
             if (p?.op === "stop") this.typing.stop();
-            else this.typing.start();
+            else this.typing.start(this.agent);
           }
           continue;
         }

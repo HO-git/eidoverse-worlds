@@ -2821,16 +2821,22 @@ export class WorldAgent {
       if (Number.isFinite(extra.t0)) args.t0 = extra.t0;
     }
     this.verb("say", args);
+    this.onSaid?.();
   }
+
+  /** Called after each say(), so whoever keeps this body's typing dots up
+   *  (the door's TypingRelay) can let them end with the bubble. */
+  onSaid: (() => void) | null = null;
 
   /** Show "composing" over this body. Presence-only (never logged), the same
    *  signal a human client sends while typing in the chat box. The world relays
    *  it and renderers draw the dots above the head for ~4s. Called repeatedly
-   *  while the host says the agent is composing (MCPL channels/typing, through
+   *  while the host says the agent's turn runs (MCPL channels/typing, through
    *  the door's TypingRelay), so it is throttled to one packet per second — the
-   *  world extends the 4s window on each, so a long generation keeps the dots
-   *  up continuously. `say()` clears it, because the bubble that follows is the
-   *  natural end of composing. */
+   *  world extends the 4s window on each, so a long turn keeps the dots up
+   *  continuously. `say()` clears the throttle and calls `onSaid`, which stops
+   *  the relay: the bubble that follows ends the dots, and the host's next
+   *  `start` raises them again if the turn goes on. */
   private _typingUntil = 0;
   typing() {
     if (!this.joined || this.ws?.readyState !== 1) return;

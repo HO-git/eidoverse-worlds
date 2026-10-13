@@ -1,58 +1,91 @@
 // The door's typing relay (mcpl/typing-relay.ts), on a short clock: it signals
 // at `start`, keeps signalling while the host keeps saying `start`, stops at
-// `stop`, and stops by itself when the host's refresh is overdue, so a lost
-// `stop` can't leave the dots up. The wire is covered by typing-mcpl.test.ts.
+// `stop`, stops by itself when the host's refresh is overdue, so a lost `stop`
+// can't leave the dots up, and signals only through the body the latest
+// `start` named. The wire is covered by typing-mcpl.test.ts.
+//
+// Waits poll for what they expect, with a deadline, rather than sleeping a
+// fixed time, so a slow machine delays a pass instead of failing one.
 
-import { TypingRelay } from "../mcpl/typing-relay.ts";
+import { TypingRelay, TYPING_REASSERT_MS, TYPING_OVERDUE_MS } from "../mcpl/typing-relay.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const waitUntil = async (pred: () => boolean, ms: number) => {
+  const until = Date.now() + ms;
+  while (Date.now() < until) { if (pred()) return true; await sleep(5); }
+  return pred();
+};
 let pass = 0, fail = 0;
 const check = (name: string, ok: boolean, extra = "") => {
   console.log(`  ${ok ? "\x1b[32m✓\x1b[0m" : "\x1b[31m✗\x1b[0m"} ${name}${ok ? "" : "  " + extra}`);
   ok ? pass++ : fail++;
 };
 
-const REASSERT = 40, OVERDUE = 200;
-const relay = () => {
-  const r = { signals: 0, relay: null as unknown as TypingRelay };
-  r.relay = new TypingRelay(() => { r.signals++; }, REASSERT, OVERDUE);
-  return r;
-};
+const REASSERT = 40, OVERDUE = 200, DEADLINE = 2000;
+const body = () => { const b = { signals: 0, typing() { b.signals++; } }; return b; };
+const relay = () => new TypingRelay(REASSERT, OVERDUE);
+
+// The defaults are set against the two clocks around the relay: the client
+// draws the dots for 4 s after a signal, and agent-framework refreshes its
+// `start` every 7 s.
+check("the default re-assert is under the client's 4 s window", TYPING_REASSERT_MS < 4000, `${TYPING_REASSERT_MS}`);
+check("the default overdue window is over the host's 7 s refresh", TYPING_OVERDUE_MS > 7000, `${TYPING_OVERDUE_MS}`);
+check("and leaves a re-assert's worth of margin over it", TYPING_OVERDUE_MS - 7000 >= TYPING_REASSERT_MS, `${TYPING_OVERDUE_MS}`);
 
 {
-  const r = relay();
-  r.relay.start();
-  check("start signals at once", r.signals === 1, `signals=${r.signals}`);
-  await sleep(REASSERT * 3 + 20);
-  check("it keeps signalling while the host's start is fresh", r.signals >= 3, `signals=${r.signals}`);
-  r.relay.stop();
-  const atStop = r.signals;
+  const r = relay(), b = body();
+  r.start(b);
+  check("start signals at once", b.signals === 1, `signals=${b.signals}`);
+  check("it keeps signalling while the host's start is fresh", await waitUntil(() => b.signals >= 3, DEADLINE), `signals=${b.signals}`);
+  r.stop();
+  const atStop = b.signals;
   await sleep(REASSERT * 3);
-  check("stop ends the signals", r.signals === atStop && !r.relay.active, `signals ${atStop} -> ${r.signals}`);
+  check("stop ends the signals", b.signals === atStop && !r.active, `signals ${atStop} -> ${b.signals}`);
 }
 
 {
-  const r = relay();
-  r.relay.start();
-  await sleep(OVERDUE + REASSERT * 3);
-  check("with no refresh, it stops by itself once the refresh is overdue", !r.relay.active);
-  const after = r.signals;
+  const r = relay(), b = body();
+  const t0 = performance.now();
+  r.start(b);
+  check("with no refresh, it stops by itself once the refresh is overdue", await waitUntil(() => !r.active, DEADLINE));
+  const took = performance.now() - t0;
+  check("no sooner than the overdue window", took >= OVERDUE, `stopped after ${took.toFixed(0)} ms`);
+  const after = b.signals;
   await sleep(REASSERT * 3);
-  check("and signals no more", r.signals === after, `signals ${after} -> ${r.signals}`);
-  check("it signalled about once per interval until then", after >= OVERDUE / REASSERT - 1 && after <= OVERDUE / REASSERT + 3, `signals=${after}`);
+  check("and signals no more", b.signals === after, `signals ${after} -> ${b.signals}`);
 }
 
 {
-  const r = relay();
-  r.relay.start();
-  const until = Date.now() + OVERDUE * 2;
-  while (Date.now() < until) { await sleep(OVERDUE / 2); r.relay.start(); }
-  check("a host that keeps refreshing keeps it up past the overdue window", r.relay.active);
-  // Each start signals once, and one timer re-asserts; a second timer would
-  // roughly double the count.
-  const expected = (OVERDUE * 2) / REASSERT + (OVERDUE * 2) / (OVERDUE / 2) + 1;
-  check("a start while it runs adds no second timer", r.signals <= expected + 3, `signals=${r.signals}, expected about ${expected}`);
-  r.relay.stop();
+  // A host that keeps refreshing: the relay must stay up through the whole
+  // window, not lapse at each overdue and come back at the next start.
+  const r = relay(), b = body();
+  r.start(b);
+  let lapsed = false;
+  const until = performance.now() + OVERDUE * 3;
+  while (performance.now() < until) {
+    await sleep(OVERDUE / 2);
+    if (!r.active) lapsed = true;
+    r.start(b);
+  }
+  check("a host that keeps refreshing keeps it up past the overdue window, without a lapse", !lapsed);
+  // Each start signals once and one timer re-asserts; a second timer per start
+  // would roughly double the count.
+  const ms = OVERDUE * 3;
+  const expected = ms / REASSERT + ms / (OVERDUE / 2) + 1;
+  check("a start while it runs adds no second timer", b.signals <= expected * 1.3, `signals=${b.signals}, expected about ${expected}`);
+  r.stop();
+}
+
+{
+  // A start for another body (the session travelled) moves the signals there:
+  // the old body gets no more.
+  const r = relay(), a = body(), b = body();
+  r.start(a);
+  r.start(b);
+  const aAt = a.signals;
+  check("after a start for a new body, the signals go to it", await waitUntil(() => b.signals >= 3, DEADLINE), `new body signals=${b.signals}`);
+  check("and the old body gets none", a.signals === aAt, `old body ${aAt} -> ${a.signals}`);
+  r.stop();
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

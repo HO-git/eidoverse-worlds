@@ -105,9 +105,9 @@ for (const [caseName, capConst] of [
 // it has no gate to check.)
 {
   const at = src.indexOf('method.CHANNELS_TYPING');
-  const body = at >= 0 ? src.slice(at, at + 900) : '';
+  const body = at >= 0 ? src.slice(at, at + 1400) : '';
   const gate = body.indexOf('capAllowed(CAP.channelsTyping)');
-  const start = body.indexOf('this.typing.start()');
+  const start = body.indexOf('this.typing.start(');
   ok('channels/typing is gated on channelsTyping', gate >= 0);
   ok('the typing gate precedes the relay starting', gate >= 0 && start >= 0 && gate < start);
   ok('nothing acts on a chunk of the generation stream', !src.includes('method.CHANNELS_OUTGOING_CHUNK'));
@@ -115,11 +115,30 @@ for (const [caseName, capConst] of [
 
 // A host sends channels/typing only to a server whose grant has
 // channels.typing, and grants only what the server advertises, so the
-// advertisement and the feature set are what turn the dots on.
+// advertisement and the feature set are what turn the dots on. Nothing reads
+// the generation stream, so the door doesn't ask for it.
 {
   const { MCPL_ADVERTISEMENT, FEATURE_SETS } = await import('../mcpl/declaration.ts');
   ok('the door advertises channels.typing', MCPL_ADVERTISEMENT.channels.typing === true);
   ok('eidoverse.typing uses channels.typing', FEATURE_SETS['eidoverse.typing'].uses.includes(CAP.channelsTyping));
+  ok('the door does not advertise channels.streaming', MCPL_ADVERTISEMENT.channels.streaming === false);
+  ok('no feature set uses channels.streaming',
+     Object.values(FEATURE_SETS).every((fs) => !fs.uses.includes('channels.streaming')));
+}
+
+// The body's speech ends the dots: the session hands each body a hook that
+// stops the relay, and travel hands it on to the next body. (The live test
+// covers the say itself; these pin the wiring for a travelled body, which no
+// test drives.)
+{
+  const ctorAt = src.indexOf('this.channelId = `world:${this.agent.world}`;');
+  const ctor = ctorAt >= 0 ? src.slice(ctorAt, ctorAt + 400) : '';
+  ok('the session gives its first body a say hook that stops the relay',
+     ctor.includes('this.agent.onSaid = () => this.typing.stop();'));
+  const travelAt = src.indexOf('next.onEvent = old.onEvent;');
+  const travel = travelAt >= 0 ? src.slice(travelAt, travelAt + 1600) : '';
+  ok('travel hands the say hook to the next body and takes it from the old one',
+     travel.includes('next.onSaid = old.onSaid;') && travel.includes('old.onSaid = null;'));
 }
 
 // tools/list and tools/call were the original offenders — keep them pinned.

@@ -591,6 +591,10 @@ class Session {
       const both = eff.filter((c) => denied.includes(c));
       if (both.length) return { error: `capability in both effectiveCapabilities and deniedCapabilities: ${both.join(", ")}` };
       this.grant = new Set(eff);
+      // A grant that withdraws channels.typing ends the relay now, not at
+      // its overdue stop: the dots it keeps up were granted under the old
+      // policy. A start under a later grant raises them again.
+      if (!this.capAllowed(CAP.channelsTyping)) this.typing.stop();
     }
     // `enabled`/`disabled` name FEATURE SETS, which carry no authority of their
     // own (§6.4) — they are recorded for the log and for the receipt, and are

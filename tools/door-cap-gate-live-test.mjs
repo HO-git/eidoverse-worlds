@@ -382,6 +382,29 @@ try {
   await pause(1200);   // the body's one-a-second typing throttle
   check("granted: channels/typing raises the dots, from the same host and body",
     await typingRaised(full, 3000));
+  // A grant that withdraws channels.typing while the dots are up ends them:
+  // after a moment for a signal already in flight, no new one arrives.
+  await pause(1200);
+  let before = typings.length;
+  full.notify("channels/typing", { channelId: "world:commons", op: "start" });
+  check("…and they're up again before the grant changes", await waitUntil(() => typings.length > before, 3000));
+  r = await full.request("featureSets/update", {
+    effectiveCapabilities: ["tools", "channels.register", "channels.lifecycle",
+      "channels.publish", "channels.incoming"] });
+  check("a grant that withdraws channels.typing is accepted, eidoverse.typing unavailable",
+    r.result?.accepted === true && r.result?.unavailableFeatures?.some((u) => u.featureSet === "eidoverse.typing"),
+    JSON.stringify(r).slice(0, 200));
+  await pause(1000);
+  before = typings.length;
+  await pause(5500);
+  check("…and the dots it was keeping up get no new signal", typings.length === before,
+    `typing signals after the grant changed: ${typings.length - before}`);
+  // Granted again for the rest of the run.
+  r = await full.request("featureSets/update", {
+    effectiveCapabilities: ["tools", "channels.register", "channels.lifecycle",
+      "channels.publish", "channels.incoming", "channels.typing"] });
+  check("granted again, mode full", r.result?.accepted === true && r.result?.mode === "full",
+    JSON.stringify(r).slice(0, 160));
   r = await full.request("channels/publish", {
     channelId: "world:commons", content: [{ type: "text", text: "granted-hello-from-the-door" }] });
   check("granted: channels/publish delivers", r.result?.delivered === true, JSON.stringify(r).slice(0, 120));

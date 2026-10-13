@@ -52,6 +52,7 @@ import { OPT_DIR, PATCH_DIR } from "./config.ts";
 // Relay-floor (#104): transport selection + durable voice-service identity.
 import { relayEnabled, bootIncarnation, currentIncarnation, voiceTransport } from "./transport.ts";
 import { installSfuTransportGuard } from "./sfuguard.ts";
+import { nameAtDoor } from "./names.ts";
 import { onVoiceServiceChange, markVoiceDegraded, voiceServiceState } from "./sfusupervisor.ts";
 import { mintSfuCredential, setSfuConsent, setSfuModeratorMute, revokeSfuLeg, sfuDiag,
   sfuAcceptAnswer, sfuAcceptIce, sfuNegotiate, sfuSetPosition, registerSfuSender, admitSfuLeg, liveLegState, sfuLegAdmitted, markSfuLegAdmitted } from "./sfuadapter.ts";
@@ -399,6 +400,17 @@ function admitJoin(c: Client, ws: { send(d: string): void; close(code?: number, 
     // (Hesperus finding #3: an unauthenticated join as "world" produced
     // entries indistinguishable from the sequencer's own.)
     c.id = c.id.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+    // ...and no markup characters (< > "): a typed name carrying them is refused in words; in a name the identity
+    // service gave, each becomes a look-alike (‹ › ″; server/names.ts). Names are shown everywhere; none should ever parse as a tag.
+    {
+      const door = nameAtDoor(c.id, { typed: !auth });
+      if (door.refused) {
+        ws.send(JSON.stringify({ type: "error", error: door.refused }));
+        ws.close(4004, "bad name");
+        return null;
+      }
+      c.id = door.name;
+    }
     if (!c.id || /^(world|\*)$/i.test(c.id) || /^bhv:/i.test(c.id)) {
       ws.send(JSON.stringify({ type: "error", error: `that name is reserved for the world itself` }));
       ws.close(4004, "reserved name");

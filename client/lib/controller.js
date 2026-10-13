@@ -13,6 +13,7 @@ import { resolveColliders, lastBlockedTop, findSeat, raySegment } from './collid
 import { scaledSpeed, colliderFor, deskEyeY, canMantle, mantleStep } from './bodyscale.js';   // this body's chosen size: stride, capsule, eye
 import { chat } from './chat.js';
 import { isOverlayOpen, flashHint } from './ui.js';
+import { html } from './markup.js';   // hint markup is opt-in: html`` escapes what it interpolates
 import { selectClip } from './locomotion_clip.js';
 import { register as registerAction } from './actions.js';
 import {
@@ -340,7 +341,7 @@ function toggleSit() {
     myState.yaw = seat.yaw;
     myState.seat = { id: seat.id, chair: true };
     grounded = true; vy = 0;
-    flashHint('seated — <kbd>X</kbd> to stand');
+    flashHint(html`seated — <kbd>X</kbd> to stand`);
   } else {
     myState.seat = null;
   }
@@ -398,7 +399,7 @@ document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === canvas;
   if (locked) {
     mouse.set(0, 0);
-    if (!lockHinted) { flashHint('mouselook — <kbd>M</kbd> toggles · <kbd>Esc</kbd> frees the cursor'); lockHinted = true; }
+    if (!lockHinted) { flashHint(html`mouselook — <kbd>M</kbd> toggles · <kbd>Esc</kbd> frees the cursor`); lockHinted = true; }
   }
 });
 bus.on('edit-mode', (on) => { if (on && locked) document.exitPointerLock(); });
@@ -421,7 +422,7 @@ function relock() {
   if (document.pointerLockElement === canvas) return;
   try { canvas.focus?.({ preventScroll: true }); } catch { /* not focusable, fine */ }
   const p = canvas.requestPointerLock();
-  p?.catch?.(() => flashHint('press <kbd>M</kbd> again to look'));
+  p?.catch?.(() => flashHint(html`press <kbd>M</kbd> again to look`));
 }
 
 addEventListener('mousemove', (e) => {
@@ -842,7 +843,7 @@ export function togglePhotoMode() {
     photo.yaw = camYaw; photo.pitch = camPitch;
     photo.vel.set(0, 0, 0);          // enter at rest — no inherited drift
     photo.fov = camera.fov;
-    flashHint('photo mode — <kbd>WASD</kbd>+<kbd>QE</kbd> fly · <kbd>[</kbd><kbd>]</kbd> lens · <kbd>F1</kbd> hide UI · <kbd>F2</kbd> save · <kbd>P</kbd> exit', 6000);
+    flashHint(html`photo mode — <kbd>WASD</kbd>+<kbd>QE</kbd> fly · <kbd>[</kbd><kbd>]</kbd> lens · <kbd>F1</kbd> hide UI · <kbd>F2</kbd> save · <kbd>P</kbd> exit`, 6000);
   } else {
     camera.fov = 55; camera.updateProjectionMatrix();
     document.body.classList.remove('photo');

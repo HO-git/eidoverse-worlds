@@ -113,6 +113,15 @@ for (const [caseName, capConst] of [
   ok('nothing acts on a chunk of the generation stream', !src.includes('method.CHANNELS_OUTGOING_CHUNK'));
 }
 
+// A host sends channels/typing only to a server whose grant has
+// channels.typing, and grants only what the server advertises, so the
+// advertisement and the feature set are what turn the dots on.
+{
+  const { MCPL_ADVERTISEMENT, FEATURE_SETS } = await import('../mcpl/declaration.ts');
+  ok('the door advertises channels.typing', MCPL_ADVERTISEMENT.channels.typing === true);
+  ok('eidoverse.typing uses channels.typing', FEATURE_SETS['eidoverse.typing'].uses.includes(CAP.channelsTyping));
+}
+
 // tools/list and tools/call were the original offenders — keep them pinned.
 for (const m of ['tools/list', 'tools/call']) {
   const at = src.indexOf(`case "${m}"`);

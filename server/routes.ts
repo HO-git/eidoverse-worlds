@@ -21,7 +21,7 @@ import { wantsKtx2, KTX2_KEY } from "../shared/ktx2.js";
 import { LOD_RECIPE, lodVariantPath, lodVerdictKind, lodVerdictFinal } from "./store-variants.ts";
 import { hnSessions, hnJti, sessionFromCookie, saveSessions, SESSION_TTL_MS, HN_ISSUER_KEY, HN_ISS, HN_AUD, HN_LOGIN_URL, HN_REQUIRE_LOGIN } from "./auth.ts";
 import { verifyToken } from "./aid1.ts";
-import { resolveLibFile } from "./lint.ts";
+import { resolveLibFile, libraryPath, onLadder } from "./lint.ts";
 import { summarizeGlb } from "./geometry.ts";
 import { worlds, getWorld, type World } from "./world.ts";
 import { handleUpload, optStatus, rebuildAsset } from "./upload.ts";
@@ -193,16 +193,11 @@ export function animationRoster(): { name: string; path: string; size: number }[
   // named clip; an unresolvable path is refused loudly and the discovered
   // roster stands. Non-path metadata (tags, doc) rides /defs, not here —
   // this roster stays the prefetcher's byte-budget shape. Resolution walks
-  // the clip ladder above (resolveLibFile is the glb/vrm resolver and
-  // deliberately doesn't know .vrma or PATCH_DIR).
+  // the clip ladder above: the same path parsing and ladder as the model
+  // resolver, for .vrma, so a clip is listed only where /library serves it.
   const resolveClip = (lib: string): string | null => {
-    const rel = normalize(lib).replace(/^\/+/, "");
-    if (rel.includes("..") || !/\.vrma$/i.test(rel)) return null;
-    for (const base of LADDER) {
-      const p = normalize(join(base, rel));
-      if (p.startsWith(base) && existsSync(p)) return p;
-    }
-    return null;
+    const rel = libraryPath(lib, /\.vrma$/i);
+    return rel === null ? null : onLadder(rel);
   };
   const defs = animationDefs();
   for (const [name, d] of Object.entries(defs)) {

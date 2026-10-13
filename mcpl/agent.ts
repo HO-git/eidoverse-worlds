@@ -2736,6 +2736,12 @@ export class WorldAgent {
   verb(verb: string, args: Record<string, unknown>) {
     if (!this.joined) throw new Error("not joined");
     this.ws!.send(JSON.stringify({ type: "verb", verb, args }));
+    // Speech ends composing, by whichever route it's sent: say(), or a raw
+    // `say` through the world_verb tool.
+    if (verb === "say") {
+      this._typingUntil = 0;
+      this.onSaid?.();
+    }
   }
 
   // ---- moderation ----
@@ -2813,7 +2819,6 @@ export class WorldAgent {
   // disagree on well-formed are one layer). Malformed trio → plain say: an
   // internal caller's bug must not silently ride protocol keys.
   say(text: string, extra?: { spoken?: boolean; utt?: number; t0?: number }) {
-    this._typingUntil = 0;
     const args: Record<string, unknown> = { text };
     if (extra?.spoken === true && Number.isSafeInteger(extra.utt) && (extra.utt as number) >= 0) {
       args.spoken = true;
@@ -2821,11 +2826,11 @@ export class WorldAgent {
       if (Number.isFinite(extra.t0)) args.t0 = extra.t0;
     }
     this.verb("say", args);
-    this.onSaid?.();
   }
 
-  /** Called after each say(), so whoever keeps this body's typing dots up
-   *  (the door's TypingRelay) can let them end with the bubble. */
+  /** Called after each `say` verb this body sends (say() or a raw world_verb
+   *  `say`), so whoever keeps its typing dots up (the door's TypingRelay) can
+   *  let them end with the bubble. */
   onSaid: (() => void) | null = null;
 
   /** Show "composing" over this body. Presence-only (never logged), the same
@@ -2834,13 +2839,14 @@ export class WorldAgent {
    *  while the host says the agent's turn runs (MCPL channels/typing, through
    *  the door's TypingRelay), so it is throttled to one packet per second — the
    *  world extends the 4s window on each, so a long turn keeps the dots up
-   *  continuously. `say()` clears the throttle and calls `onSaid`, which stops
-   *  the relay: the bubble that follows ends the dots, and the host's next
-   *  `start` raises them again if the turn goes on. */
+   *  continuously. A `say` verb clears the throttle and calls `onSaid`, which
+   *  stops the relay: the bubble that follows ends the dots, and the host's
+   *  next `start` raises them again if the turn goes on. The throttle runs on a
+   *  monotonic clock, so a wall clock stepping back can't hold the signals. */
   private _typingUntil = 0;
   typing() {
     if (!this.joined || this.ws?.readyState !== 1) return;
-    const now = Date.now();
+    const now = performance.now();
     if (now < this._typingUntil) return;   // throttle: at most ~1/s
     this._typingUntil = now + 1000;
     this.ws.send(JSON.stringify({ type: "typing", to: null }));

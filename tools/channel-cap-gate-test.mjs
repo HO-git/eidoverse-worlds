@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 // The channel capability gates — do denied capabilities actually refuse?
 //
-// 🔴 WHY. `channels.publish`, `channels.lifecycle` and `channels.streaming` are
-// declared in CAP and were checked NOWHERE (found 2026-08-16). Only
+// 🔴 WHY. `channels.publish`, `channels.lifecycle` and `channels.streaming` were
+// declared in CAP and were checked NOWHERE (found 2026-08-16; the stream is no
+// longer advertised or declared, since nothing reads it). Only
 // `channels.register` and `channels.incoming` had gates. So a host granting
 // `channels.incoming` alone — "receive, do not send" — still had its agent's
 // channels/publish answered: the DOOR SPOKE IN THE WORLD on behalf of an agent
@@ -137,8 +138,10 @@ for (const [caseName, capConst] of [
      ctor.includes('this.agent.onSaid = () => this.typing.stop();'));
   const travelAt = src.indexOf('next.onEvent = old.onEvent;');
   const travel = travelAt >= 0 ? src.slice(travelAt, travelAt + 1600) : '';
-  ok('travel hands the say hook to the next body and takes it from the old one',
-     travel.includes('next.onSaid = old.onSaid;') && travel.includes('old.onSaid = null;'));
+  const handed = travel.indexOf('next.onSaid = old.onSaid;');
+  const taken = travel.indexOf('old.onSaid = null;');
+  ok('travel hands the say hook to the next body before taking it from the old one',
+     handed >= 0 && taken >= 0 && handed < taken);
 }
 
 // tools/list and tools/call were the original offenders — keep them pinned.

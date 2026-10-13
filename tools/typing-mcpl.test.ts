@@ -73,10 +73,13 @@ try {
     };
   });
 
-  // give the agent body time to actually join the world
-  await sleep(1500);
+  // The agent's body joins the world: wait until the watcher sees it arrive.
+  if (!(await waitUntil(() => seen.some((m) => m.type === "arrive" && m.id === "claude"), 15000))) {
+    throw new Error("the agent's body never arrived in the world");
+  }
 
   const typingSeen = () => seen.filter((m) => m.type === "typing" && m.id === "claude").length;
+  const saidSeen = (text: string) => seen.some((m) => m.type === "log" && m.entry?.verb === "say" && m.entry?.actor === "claude" && m.entry?.args?.text === text);
   const typingFor = (channelId: string, op?: "start" | "stop") =>
     rpc({ jsonrpc: "2.0", method: "channels/typing", params: { channelId, ...(op ? { op } : {}) } });
   let nextId = 100;
@@ -107,17 +110,33 @@ try {
     `typing signals: ${typingSeen()}`);
 
   // The agent speaks: its bubble ends the dots, and the relay stays quiet
-  // until the host's next start.
+  // until the host's next start. Count from once the say has reached the
+  // world, plus a moment for a signal already in flight.
   sayInWorld("hello from the typing test");
-  await sleep(300);
+  check("the say reaches the world", await waitUntil(() => saidSeen("hello from the typing test"), 5000));
+  await sleep(500);
   seen.length = 0;
   await sleep(3500);
   check("speaking ends the dots: no typing signal follows the say", typingSeen() === 0, `typing signals after the say: ${typingSeen()}`);
   await control("after a say");
 
-  // stop: no signal after it. (A tick already in flight lands within the first second.)
+  // The same for a say sent as a raw world verb, the other route to speech.
   typingFor("world:commons", "start");
-  await waitUntil(() => typingSeen() >= 1, 3000);
+  check("the dots are up again before the raw say", await waitUntil(() => typingSeen() >= 1, 3000));
+  rpc({ jsonrpc: "2.0", id: nextId++, method: "tools/call",
+    params: { name: "world_verb", arguments: { verb: "say", args: { text: "a raw say from the typing test" } } } });
+  check("the raw say reaches the world", await waitUntil(() => saidSeen("a raw say from the typing test"), 5000));
+  await sleep(500);
+  seen.length = 0;
+  await sleep(3500);
+  check("a say sent as a raw world verb ends the dots too", typingSeen() === 0, `typing signals after the raw say: ${typingSeen()}`);
+  await control("after a raw say");
+
+  // stop: no signal after it. (A tick already in flight lands within the first second.)
+  await throttleClear();
+  seen.length = 0;
+  typingFor("world:commons", "start");
+  check("the dots are up before the stop", await waitUntil(() => typingSeen() >= 1, 3000));
   typingFor("world:commons", "stop");
   await sleep(1000);
   seen.length = 0;
@@ -130,6 +149,15 @@ try {
   typingFor("world:commons");
   check("a typing signal with no op starts the dots", await waitUntil(() => typingSeen() >= 1, 3000));
   typingFor("world:commons", "stop");
+
+  // An op other than start or stop is ignored, not taken as a start.
+  await throttleClear();
+  seen.length = 0;
+  rpc({ jsonrpc: "2.0", method: "channels/typing", params: { channelId: "world:commons", op: "end" } });
+  await sleep(600);
+  check("a typing signal with an unknown op raises no dots", typingSeen() === 0);
+  await throttleClear();
+  await control("after an unknown op");
 
   // Typing for a DIFFERENT channel must not light up this world.
   await throttleClear();

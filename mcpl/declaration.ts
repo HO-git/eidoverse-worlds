@@ -280,7 +280,7 @@ export const FEATURE_SETS: Record<string, FeatureSetDecl> = {
   },
   "eidoverse.typing": {
     description:
-      "Relays the host's typing signal (channels/typing), which runs from the start of the agent's turn to its end, into the world as dots above the body's head. Cosmetic: its loss costs the dots, nothing else.",
+      "Relays the host's typing signal (channels/typing) into the world as dots above the body's head while the agent works on a turn, until it speaks. Cosmetic: its loss costs the dots, nothing else.",
     uses: [CAP.channelsTyping],
   },
 };

@@ -530,7 +530,7 @@ class Session {
    *  negotiated tools at initialize without any help from MCPL. */
   /** §5.4 for the CHANNEL verbs, which had no gate at all (found 2026-08-16).
    *
-   *  `channels.publish`, `channels.lifecycle` and `channels.streaming` are all
+   *  `channels.publish`, `channels.lifecycle` and `channels.streaming` were all
    *  declared in CAP and were checked NOWHERE — only `channels.register` and
    *  `channels.incoming` were. So a host that granted `channels.incoming` alone
    *  (receive, do not send) still had its agent's `channels/publish` answered:
@@ -889,9 +889,10 @@ class Session {
             // `op` is agent-framework's field, which always names one; the
             // spec's params carry only `channelId`. A missing `op` reads as
             // `start`, as discord-mcpl reads it, and a host that never sends
-            // `stop` has its dots ended by the relay's overdue stop.
+            // `stop` has its dots ended by the relay's overdue stop. Any other
+            // `op` is ignored rather than guessed at.
             if (p?.op === "stop") this.typing.stop();
-            else this.typing.start(this.agent);
+            else if (p?.op === undefined || p.op === "start") this.typing.start(this.agent);
           }
           continue;
         }

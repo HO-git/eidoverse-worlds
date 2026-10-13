@@ -50,28 +50,51 @@ check("and leaves a re-assert's worth of margin over it", TYPING_OVERDUE_MS - 70
   check("with no refresh, it stops by itself once the refresh is overdue", await waitUntil(() => !r.active, DEADLINE));
   const took = performance.now() - t0;
   check("no sooner than the overdue window", took >= OVERDUE, `stopped after ${took.toFixed(0)} ms`);
+  // The overdue check runs at each re-assert, so the stop comes at the first
+  // one past the window: the start's signal and one per interval inside it.
+  // A loaded machine only delays ticks, which lowers the count; a stop checked
+  // less often raises it.
+  check("at the first re-assert past the window", b.signals <= OVERDUE / REASSERT + 1, `signals=${b.signals}`);
   const after = b.signals;
   await sleep(REASSERT * 3);
   check("and signals no more", b.signals === after, `signals ${after} -> ${b.signals}`);
 }
 
 {
+  // The default clock is monotonic: a wall clock stepped back an hour after
+  // the start must not hold off the overdue stop.
+  const r = new TypingRelay(REASSERT, OVERDUE), b = body();
+  const wall = Date.now;
+  try {
+    r.start(b);
+    Date.now = () => wall() - 3_600_000;
+    check("a wall clock stepped back doesn't hold off the overdue stop", await waitUntil(() => !r.active, DEADLINE));
+  } finally {
+    Date.now = wall;
+    r.stop();
+  }
+}
+
+{
   // A host that keeps refreshing: the relay must stay up through the whole
-  // window, not lapse at each overdue and come back at the next start.
-  const r = relay(), b = body();
+  // window, not lapse at each overdue and come back at the next start. The
+  // window here is ten refresh intervals wide, so only a missed refresh, not
+  // a slow one, can end it.
+  const WIDE = 1000, REFRESH = 100;
+  const r = new TypingRelay(REASSERT, WIDE), b = body();
   r.start(b);
   let lapsed = false;
-  const until = performance.now() + OVERDUE * 3;
+  const until = performance.now() + WIDE * 1.5;
   while (performance.now() < until) {
-    await sleep(OVERDUE / 2);
+    await sleep(REFRESH);
     if (!r.active) lapsed = true;
     r.start(b);
   }
   check("a host that keeps refreshing keeps it up past the overdue window, without a lapse", !lapsed);
   // Each start signals once and one timer re-asserts; a second timer per start
-  // would roughly double the count.
-  const ms = OVERDUE * 3;
-  const expected = ms / REASSERT + ms / (OVERDUE / 2) + 1;
+  // would add a timer's worth of signals for every refresh.
+  const ms = WIDE * 1.5;
+  const expected = ms / REASSERT + ms / REFRESH + 1;
   check("a start while it runs adds no second timer", b.signals <= expected * 1.3, `signals=${b.signals}, expected about ${expected}`);
   r.stop();
 }

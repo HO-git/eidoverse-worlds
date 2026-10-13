@@ -337,7 +337,7 @@ try {
   await full.init(true);
   r = await full.request("featureSets/update", {
     effectiveCapabilities: ["tools", "channels.register", "channels.lifecycle",
-      "channels.publish", "channels.incoming", "channels.streaming"] });
+      "channels.publish", "channels.incoming", "channels.streaming", "channels.typing"] });
   check("full grant accepted, mode full", r.result?.accepted === true && r.result?.mode === "full",
     JSON.stringify(r).slice(0, 160));
   // the takeover from phase 1's dead session needs a beat to settle the body

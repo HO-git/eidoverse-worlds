@@ -99,15 +99,18 @@ for (const [caseName, capConst] of [
   ok(`${caseName} is gated on ${capConst}`, r.ok, r.why);
 }
 
-// The streaming path is a NOTIFICATION — no response, so the gate must drop it
-// silently rather than refuse. Assert the drop happens before agent.typing().
+// The typing path is a NOTIFICATION — no response, so the gate must drop it
+// silently rather than refuse. Assert the drop happens before the relay starts.
+// (The generation stream, channels/outgoing/chunk, drives nothing any more, so
+// it has no gate to check.)
 {
-  const at = src.indexOf('CHANNELS_OUTGOING_CHUNK');
-  const body = src.slice(at, at + 900);
-  const gate = body.indexOf('capAllowed(CAP.channelsStreaming)');
-  const typing = body.indexOf('this.agent.typing()');
-  ok('channels/outgoing/chunk is gated on channelsStreaming', gate >= 0);
-  ok('the streaming gate precedes agent.typing()', gate >= 0 && typing >= 0 && gate < typing);
+  const at = src.indexOf('method.CHANNELS_TYPING');
+  const body = at >= 0 ? src.slice(at, at + 900) : '';
+  const gate = body.indexOf('capAllowed(CAP.channelsTyping)');
+  const start = body.indexOf('this.typing.start()');
+  ok('channels/typing is gated on channelsTyping', gate >= 0);
+  ok('the typing gate precedes the relay starting', gate >= 0 && start >= 0 && gate < start);
+  ok('nothing acts on a chunk of the generation stream', !src.includes('method.CHANNELS_OUTGOING_CHUNK'));
 }
 
 // tools/list and tools/call were the original offenders — keep them pinned.

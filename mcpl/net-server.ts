@@ -39,6 +39,7 @@ import {
 import { WorldAgent } from "./agent.ts";
 import { toolList, handleTool, type ToolCtx } from "./tools.ts";
 import { pingDelivery, type WirePing } from "./ping-wire.ts";
+import { TypingRelay } from "./typing-relay.ts";
 import { MANIFEST_WITH_REVISION, ManifestAnnouncer } from "./manifest.ts";
 import { verifyToken, aid1Slug } from "../server/aid1.ts";
 import { atomicWrite } from "../server/fsutil.ts";
@@ -140,6 +141,9 @@ class Session {
    *  surface stays static. */
   private manifestAnnouncer: ManifestAnnouncer | null = null;
   private channelOpen = true;
+  /** The dots while the host says the agent is composing for this world.
+   *  It signals through whichever body is current, so travel stops it. */
+  private typing = new TypingRelay(() => this.agent.typing());
   /** Did the client declare capabilities.experimental.mcpl at initialize?
    *  Plain-MCP hosts (llmcord, Claude Code, …) get tools ONLY: no
    *  channels/register, no channels/incoming pushes, no mention replay —
@@ -281,6 +285,7 @@ class Session {
   }
 
   close() {
+    this.typing.stop();
     this.agent.close(); // deliberate death — stops the body's auto-reconnect
     this.conn.close();
     // 🔴 RELEASE THE MEDIA PORT. Without this the listener outlives the
@@ -454,6 +459,9 @@ class Session {
     // attribute a late commons say to the annex channel (review B1).
     old.onEvent = null;
     old.onPing = null;
+    // The host's typing named the old world's channel; the new world hears
+    // dots only when the host starts typing there.
+    this.typing.stop();
     old.close();                       // detach: persists exactly what a disconnect persists
     this.agent = next;
     this.channelId = `world:${w}`;
@@ -844,23 +852,29 @@ class Session {
       while (!this.conn.isClosed) {
         const msg = await this.conn.nextMessage();
         if (msg.type === "notification") {
-          // The host streams an agent's generation as it produces it
-          // (channels/outgoing/chunk). Each delta means the body is composing —
-          // exactly the discord-mcpl "typing indicator all the time" signal.
-          // Relay it into the world so renderers draw the dots above the head.
-          // Scoped to this world's channel (or an unaddressed stream); the
-          // agent.typing() call is throttled and the world extends a 4s window
-          // on each, so a long generation keeps the dots up continuously.
-          if (msg.notification.method === method.CHANNELS_OUTGOING_CHUNK) {
-            // 🔴 `channels.streaming` was the fourth declared-but-unchecked
-            // capability (2026-08-16). This is a NOTIFICATION, so there is no
-            // response to refuse with — it is dropped silently, which is the
-            // correct shape for a stream the host never asked to send. Ungated,
-            // a host that declared only `channels.incoming` still made the
-            // world draw typing dots over its agent's head.
-            if (!this.capAllowed(CAP.channelsStreaming)) continue;
-            const cid = (msg.notification.params as { channelId?: string } | undefined)?.channelId;
-            if (!cid || cid === this.channelId) this.agent.typing();
+          // The host's typing signal (channels/typing): `start` when the agent
+          // begins a turn whose typing channel is this world, again every 7 s
+          // while it composes, and `stop` when the turn ends. The relay keeps
+          // the dots above the body's head up in between (typing-relay.ts).
+          //
+          // The dots used to come from the generation stream
+          // (channels/outgoing/chunk), one per delta. A host can hold its
+          // stream back until delivery decides where the text goes, and then
+          // the chunks arrive only as the reply is published, so dots drawn
+          // from them would mean "published", not "composing". Chunks are
+          // accepted and dropped.
+          if (msg.notification.method === method.CHANNELS_TYPING) {
+            // A NOTIFICATION, so there is no response to refuse with: without
+            // the grant it is dropped silently, as §14.1 has the host withhold
+            // it in the first place. Ungated, a host that never granted
+            // `channels.typing` could still raise the dots.
+            if (!this.capAllowed(CAP.channelsTyping)) continue;
+            const p = msg.notification.params as { channelId?: string; op?: string } | undefined;
+            if (p?.channelId !== this.channelId) continue;
+            // A missing `op` reads as `start`, as discord-mcpl reads it;
+            // agent-framework always names one.
+            if (p?.op === "stop") this.typing.stop();
+            else this.typing.start();
           }
           continue;
         }

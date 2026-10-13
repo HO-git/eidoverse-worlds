@@ -121,6 +121,7 @@ export const CAP = {
   channelsPublish: "channels.publish",
   channelsIncoming: "channels.incoming",
   channelsStreaming: "channels.streaming",
+  channelsTyping: "channels.typing",
 } as const;
 
 /**
@@ -280,8 +281,8 @@ export const FEATURE_SETS: Record<string, FeatureSetDecl> = {
   },
   "eidoverse.typing": {
     description:
-      "Relays the host's outgoing generation stream into the world as a live typing signal above the body's head. Cosmetic: its loss costs the dots, nothing else.",
-    uses: [CAP.channelsStreaming],
+      "Relays the host's typing signal (channels/typing) into the world as dots above the body's head while the agent composes. Cosmetic: its loss costs the dots, nothing else.",
+    uses: [CAP.channelsTyping],
   },
 };
 
@@ -303,8 +304,11 @@ for (const [name, fs] of Object.entries(FEATURE_SETS)) {
  * §5.1: the advertisement mirrors the capability paths, and a capability with
  * sub-capabilities is a nested object whose members are §6.2's leaves. `channels`
  * is therefore spelled out leaf by leaf rather than `true` — `true` would claim
- * `acknowledge` and `typing`, which this door does not implement, and a claim it
- * cannot honour is a lie the host would have to discover by timeout.
+ * `acknowledge`, which this door does not implement, and a claim it cannot
+ * honour is a lie the host would have to discover by timeout. `streaming` stays
+ * claimed though nothing here acts on a chunk any more: the door accepts the
+ * stream and drops it, and the host's speech reaches the world through
+ * `channels/publish` either way.
  *
  * No `revision` member: this door does not implement §17 manifest changes, and
  * §5.1 says a server that does not may omit it — its manifest is then fixed for
@@ -320,7 +324,7 @@ export const MCPL_ADVERTISEMENT = {
     incoming: true,
     streaming: true,
     acknowledge: false,
-    typing: false,
+    typing: true,
   },
   featureSets: FEATURE_SETS,
 } as const;

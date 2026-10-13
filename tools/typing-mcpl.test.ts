@@ -1,8 +1,9 @@
-// Integration test for the MCPL typing bridge: a host streaming an agent's
-// generation (channels/outgoing/chunk) must surface as an in-world typing
-// signal. Starts its own world + MCPL servers on temp ports, connects a raw
-// MCP websocket host, drives one chunk notification, and a raw world-WS
-// watcher confirms the world broadcasts `{type:"typing", id:<agent>}`.
+// Integration test for the MCPL typing bridge: the host's typing signal
+// (channels/typing) must surface as an in-world typing signal, kept up while
+// the host says the agent is composing and let go at `stop`. Starts its own
+// world + MCPL servers on temp ports, connects a raw MCP websocket host, sends
+// typing notifications, and a raw world-WS watcher confirms what the world
+// broadcasts as `{type:"typing", id:<agent>}`.
 
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -68,24 +69,50 @@ try {
   // give the agent body time to actually join the world
   await sleep(1500);
 
-  // The host streams the agent's generation destined for the world channel.
-  const chunk = (delta: string, i: number) => rpc({ jsonrpc: "2.0", method: "channels/outgoing/chunk",
-    params: { inferenceId: "inf1", conversationId: "c1", channelId: "world:commons", index: i, delta } });
-  chunk("Hel", 0); await sleep(150);
-  chunk("lo", 1); await sleep(150);
+  const typingSeen = () => seen.filter((m) => m.type === "typing" && m.id === "claude").length;
+  const typingFor = (channelId: string, op?: "start" | "stop") =>
+    rpc({ jsonrpc: "2.0", method: "channels/typing", params: { channelId, ...(op ? { op } : {}) } });
 
+  // The host says the agent has begun composing for this world.
+  typingFor("world:commons", "start");
   await sleep(400);
-  const typing = seen.filter((m) => m.type === "typing" && m.id === "claude");
-  check("streaming an agent's generation surfaces as an in-world typing signal", typing.length >= 1,
+  check("the host's typing start surfaces as an in-world typing signal", typingSeen() >= 1,
     `saw types: ${[...new Set(seen.map((m) => m.type))].join(",")}`);
 
-  // A chunk for a DIFFERENT channel must not light up this world.
+  // The world's dots last 4 s and the host repeats start only every 7 s, so
+  // the door must keep them up in between on its own.
+  seen.length = 0;
+  await sleep(5200);
+  check("the dots are kept up between the host's starts", typingSeen() >= 2, `typing signals in 5.2 s: ${typingSeen()}`);
+
+  // stop lets them go: no signal after it.
+  typingFor("world:commons", "stop");
+  await sleep(300);
+  seen.length = 0;
+  await sleep(3200);
+  check("stop ends the dots", typingSeen() === 0, `typing signals after stop: ${typingSeen()}`);
+
+  // A start with no op is a start.
+  typingFor("world:commons");
+  await sleep(400);
+  check("a typing signal with no op starts the dots", typingSeen() >= 1);
+  typingFor("world:commons", "stop");
+  await sleep(300);
+
+  // Typing for a DIFFERENT channel must not light up this world.
+  seen.length = 0;
+  typingFor("dm:someone", "start");
+  await sleep(400);
+  check("typing for another channel does not type in this world", typingSeen() === 0);
+  typingFor("dm:someone", "stop");
+
+  // The generation stream no longer draws the dots: a host may hold it back
+  // until it publishes, and dots then would mean "published".
   seen.length = 0;
   rpc({ jsonrpc: "2.0", method: "channels/outgoing/chunk",
-    params: { inferenceId: "inf2", conversationId: "c2", channelId: "dm:someone", index: 0, delta: "x" } });
+    params: { inferenceId: "inf1", conversationId: "c1", channelId: "world:commons", index: 0, delta: "Hel" } });
   await sleep(400);
-  check("a chunk for another channel does not type in this world",
-    seen.filter((m) => m.type === "typing" && m.id === "claude").length === 0);
+  check("a chunk of the generation stream no longer types in this world", typingSeen() === 0);
 
   watcher.close(); host.close();
 } catch (e) {

@@ -287,10 +287,10 @@ export function initMods() {
         const b = e.target.closest('button');
         if (!b) return;
         const d = b.dataset;
-        // The buttons that plant or trust code are the visitor's own hand, so they skip byHand() — but a world-offered
+        // The buttons that plant, publish, trust or delete code are the visitor's own hand, so they skip byHand() — but a world-offered
         // mod runs in this page and can press them with .click() (review of 4098ff7, Oscar-1808 #1). A scripted click
         // arrives with isTrusted false; and once world code has run here, these buttons close as EW.mods does.
-        if ((d.new || d.save || d.auto || d.oalways || d.wworld || d.orun) && (e.isTrusted !== true || worldCodeRan)) {
+        if ((d.new || d.save || d.auto || d.oalways || d.wworld || d.orun || d.promote != null || d.del != null) && (e.isTrusted !== true || worldCodeRan)) {
           toast(worldCodeRan ? 'a world mod has run in this page: reload before installing or trusting mods' : 'that click did not come from you');
           return;
         }

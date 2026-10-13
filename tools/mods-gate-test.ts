@@ -155,5 +155,21 @@ check('a scripted "always" / "trust all" click granted nothing', JSON.stringify(
 check('…and nothing was written to the local mod store', localMods().length === mods0, String(localMods().length));
 check('…and the panel said why', stub.toasts.some((t: string) => /reload before|did not come from you/.test(t)), JSON.stringify(stub.toasts.slice(-2)));
 
+console.log('\npromote and delete refuse a scripted click too (review of 759d35b, Basil-1007)');
+// promote uploads the visitor's own mod and offers it to the whole world under their token; ✕ deletes it
+{
+  let uploads = 0; const f0 = globalThis.fetch;
+  globalThis.fetch = (async (u: string, o?: any) => { if (String(u).includes('/upload')) uploads++; return f0(u, o); }) as any;
+  const nMine = localMods().filter((m) => m.name === 'mine').length;
+  for (const sel of ['[data-promote="mine"]', '[data-del="mine"]']) {
+    const btn = body.querySelector(sel) as HTMLElement | null;
+    check(`the panel renders ${sel}`, !!btn, sel);
+    btn?.click(); await settle();
+  }
+  check('a scripted "promote" click uploaded nothing', uploads === 0, `uploads=${uploads}`);
+  check('a scripted "✕" click deleted nothing', nMine === 1 && localMods().filter((m) => m.name === 'mine').length === 1, JSON.stringify(localMods().map((m) => m.name)));
+  globalThis.fetch = f0;
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

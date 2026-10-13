@@ -864,42 +864,26 @@ class Session {
     };
     prelude().catch((e) => console.error(`[${ts()}] [mcpl:${this.auth.id}] prelude failed: ${(e as Error).message?.slice(0, 160)}`));
 
+    // The host's typing signal is taken as it arrives, not when this loop
+    // next reads: the loop serves one request at a time, and a tool call can
+    // run for a minute (walk_to waits for the body to arrive), long enough
+    // for the relay's overdue stop to drop the dots while the host's
+    // refreshes wait unread behind the call.
+    this.conn.on("notification", (n) => {
+      if (n.method !== method.CHANNELS_TYPING) return;
+      try {
+        this.onTyping(n.params);
+      } catch (e) {
+        // A listener's throw would land in the connection's line reader.
+        console.error(`[${ts()}] [mcpl:${this.auth.id}] typing signal failed: ${(e as Error).message?.slice(0, 160)}`);
+      }
+    });
+
     try {
       while (!this.conn.isClosed) {
         const msg = await this.conn.nextMessage();
-        if (msg.type === "notification") {
-          // The host's typing signal (channels/typing): `start` when the agent
-          // begins a turn whose typing channel is this world, again every 7 s
-          // while it composes, and `stop` when the turn ends. The relay keeps
-          // the dots above the body's head up in between (typing-relay.ts).
-          //
-          // The dots used to come from the generation stream
-          // (channels/outgoing/chunk), one per delta. A host can hold its
-          // stream back until delivery decides where the text goes, and then
-          // the chunks arrive only as the reply is published, so dots drawn
-          // from them would mean "published", not "composing". The door no
-          // longer advertises the stream, and a chunk that arrives anyway is
-          // dropped here with every other notification it doesn't handle.
-          if (msg.notification.method === method.CHANNELS_TYPING) {
-            // A NOTIFICATION, so there is no response to refuse with: without
-            // the grant it is dropped silently. §14.1 has the host withhold
-            // typing from a server without the grant, but agent-framework can
-            // still send a `stop` there, and a host may not withhold at all.
-            // Ungated, a host that never granted `channels.typing` could raise
-            // the dots.
-            if (!this.capAllowed(CAP.channelsTyping)) continue;
-            const p = msg.notification.params as { channelId?: string; op?: string } | undefined;
-            if (p?.channelId !== this.channelId) continue;
-            // `op` is agent-framework's field, which always names one; the
-            // spec's params carry only `channelId`. A missing `op` reads as
-            // `start`, as discord-mcpl reads it, and a host that never sends
-            // `stop` has its dots ended by the relay's overdue stop. Any other
-            // `op` is ignored rather than guessed at.
-            if (p?.op === "stop") this.typing.stop();
-            else if (p?.op === undefined || p.op === "start") this.typing.start(this.agent);
-          }
-          continue;
-        }
+        // Notifications were taken as they arrived (above); any other is
+        // dropped, the generation stream's chunks among them.
         if (msg.type !== "request") continue;
         const req = msg.request;
         const params = (req.params ?? {}) as Record<string, unknown>;
@@ -1140,6 +1124,34 @@ class Session {
   private async registerChannels() {
     const params: ChannelsRegisterParams = { channels: this.channelDescriptors() };
     try { await this.conn.sendRequest(method.CHANNELS_REGISTER, params); } catch { /* non-MCPL host: tools still work */ }
+  }
+
+  /** The host's typing signal (channels/typing): `start` when the agent begins
+   *  a turn whose typing channel is this world, again every 7 s while it runs,
+   *  and `stop` when the turn ends. The relay keeps the dots above the body's
+   *  head up in between (typing-relay.ts).
+   *
+   *  The dots used to come from the generation stream
+   *  (channels/outgoing/chunk), one per delta. A host can hold its stream back
+   *  until delivery decides where the text goes, and then the chunks arrive
+   *  only as the reply is published, so dots drawn from them would mean
+   *  "published", not "composing". The door no longer advertises the stream. */
+  private onTyping(params: unknown): void {
+    // A NOTIFICATION, so there is no response to refuse with: without the
+    // grant it is dropped silently. §14.1 has the host withhold typing from a
+    // server without the grant, but agent-framework can still send a `stop`
+    // there, and a host may not withhold at all. Ungated, a host that never
+    // granted `channels.typing` could raise the dots.
+    if (!this.capAllowed(CAP.channelsTyping)) return;
+    const p = params as { channelId?: string; op?: string } | undefined;
+    if (p?.channelId !== this.channelId) return;
+    // `op` is agent-framework's field, which always names one; the spec's
+    // params carry only `channelId`. A missing `op` reads as `start`, as
+    // discord-mcpl reads it, and a host that never sends `stop` has its dots
+    // ended by the relay's overdue stop. Any other `op` is ignored rather than
+    // guessed at.
+    if (p?.op === "stop") this.typing.stop();
+    else if (p?.op === undefined || p.op === "start") this.typing.start(this.agent);
   }
 
   private handlePublish(params: ChannelsPublishParams): ChannelsPublishResult & { error?: string } {

@@ -105,13 +105,19 @@ for (const [caseName, capConst] of [
 // (The generation stream, channels/outgoing/chunk, drives nothing any more, so
 // it has no gate to check.)
 {
-  const at = src.indexOf('method.CHANNELS_TYPING');
+  const at = src.indexOf('private onTyping(');
   const body = at >= 0 ? src.slice(at, at + 1400) : '';
   const gate = body.indexOf('capAllowed(CAP.channelsTyping)');
   const start = body.indexOf('this.typing.start(');
   ok('channels/typing is gated on channelsTyping', gate >= 0);
   ok('the typing gate precedes the relay starting', gate >= 0 && start >= 0 && gate < start);
   ok('nothing acts on a chunk of the generation stream', !src.includes('method.CHANNELS_OUTGOING_CHUNK'));
+  // The signal is taken as it arrives, from the connection's notification
+  // event, and only there: the serve loop also reads every notification from
+  // its queue, and must not act on the same signal a second time.
+  ok('the typing signal is handled in one place, the notification listener',
+     src.split('method.CHANNELS_TYPING').length === 2 && src.split('this.onTyping(').length === 2 &&
+     /this\.conn\.on\("notification"[\s\S]{0,200}method\.CHANNELS_TYPING[\s\S]{0,200}this\.onTyping\(/.test(src));
 }
 
 // A host sends channels/typing only to a server whose grant has

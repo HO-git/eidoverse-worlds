@@ -73,6 +73,8 @@ try {
 
   // A raw MCP host connecting to the MCPL door as the "claude" agent (dev-token).
   const host = new WebSocket(`ws://127.0.0.1:${MPORT}/?token=typing-test-token`);
+  // Each response the door sends, by request id.
+  const responses = new Map<number, any>();
   const rpc = (obj: any) => host.send(JSON.stringify(obj));
   await new Promise<void>((res, rej) => {
     const t = setTimeout(() => rej(new Error("mcpl init timeout")), 6000);
@@ -80,6 +82,7 @@ try {
       params: { protocolVersion: "2024-11-05", capabilities: { experimental: { mcpl: {} } }, clientInfo: { name: "test", version: "0" } } });
     host.onmessage = (ev) => {
       const m = JSON.parse(String(ev.data));
+      if (m.id !== undefined && ("result" in m || "error" in m)) responses.set(m.id, m);
       if (m.id === 1) { rpc({ jsonrpc: "2.0", method: "notifications/initialized" }); clearTimeout(t); res(); }
     };
   });
@@ -190,6 +193,28 @@ try {
   check("a chunk of the generation stream does not type in this world", typingSeen() === 0);
   await throttleClear();
   await control("after a chunk");
+
+  // A long tool call. The door serves the host's requests one at a time, and
+  // walk_to answers only when the body arrives, so the host's refreshes come
+  // in while the walk runs. They must keep the dots up past the overdue
+  // window, rather than wait unread until the walk ends.
+  await throttleClear();
+  seen.length = 0;
+  typingFor("world:commons", "start");
+  check("the dots are up as a long walk begins", await waitUntil(() => typingSeen() >= 1, 3000));
+  const walkId = nextId++;
+  rpc({ jsonrpc: "2.0", id: walkId, method: "tools/call", params: { name: "walk_to", arguments: { x: 30, z: 0 } } });
+  // The host refreshes its start every 7 s while the turn runs; every 4 s here.
+  const refresher = setInterval(() => typingFor("world:commons", "start"), 4000);
+  await sleep(13_000);
+  seen.length = 0;
+  await sleep(2_500);
+  check("the walk is still under way 15 s in", !responses.has(walkId));
+  check("…and the host's refreshes keep the dots up past the overdue window during it",
+    typingSeen() >= 1, `typing signals 13–15.5 s into the walk: ${typingSeen()}`);
+  clearInterval(refresher);
+  typingFor("world:commons", "stop");
+  check("the walk ends", await waitUntil(() => responses.has(walkId), 30_000));
 
   watcher.close(); host.close();
 } catch (e) {

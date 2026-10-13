@@ -1,15 +1,26 @@
 // Integration test for the MCPL typing bridge: the host's typing signal
 // (channels/typing) must surface as an in-world typing signal, kept up while
-// the host says the agent is composing and let go at `stop`. Starts its own
-// world + MCPL servers on temp ports, connects a raw MCP websocket host, sends
-// typing notifications, and a raw world-WS watcher confirms what the world
-// broadcasts as `{type:"typing", id:<agent>}`.
+// the host says the agent's turn runs and let go at `stop`. Starts its own
+// world + MCPL servers on ports the kernel picks, connects a raw MCP websocket
+// host, sends typing notifications, and a raw world-WS watcher confirms what
+// the world broadcasts as `{type:"typing", id:<agent>}`.
 
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:net";
 
-const WPORT = 8955, MPORT = 8956;
+// Ports the kernel hands out, so two runs on one machine don't meet on fixed
+// ones and read each other's world.
+const freePort = () => new Promise<number>((resolve, reject) => {
+  const s = createServer();
+  s.once("error", reject);
+  s.listen(0, "127.0.0.1", () => {
+    const port = (s.address() as { port: number }).port;
+    s.close(() => resolve(port));
+  });
+});
+const WPORT = await freePort(), MPORT = await freePort();
 const worldsDir = mkdtempSync(join(tmpdir(), "eido-typing-"));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Positive waits poll with a deadline, so a slow machine delays a pass instead

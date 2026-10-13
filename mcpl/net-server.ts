@@ -218,6 +218,10 @@ class Session {
         console.error(`[${ts()}] [mcpl:${this.auth.id}] typing signal failed: ${(e as Error).message?.slice(0, 160)}`);
       }
     });
+    // A host that goes away ends its dots at once. close() stops the relay
+    // too, but serve() reaches it only after a tool call in progress returns,
+    // and a walk can run for a minute.
+    this.conn.on("close", () => this.typing.stop());
   }
 
   /** The loopback media bridge. One sidecar at a time: a second connection

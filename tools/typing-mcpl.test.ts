@@ -216,6 +216,21 @@ try {
   typingFor("world:commons", "stop");
   check("the walk ends", await waitUntil(() => responses.has(walkId), 30_000));
 
+  // The host goes away while a walk is under way. The door can't close the
+  // session until the walk returns, but the dots stop with the connection.
+  await throttleClear();
+  seen.length = 0;
+  typingFor("world:commons", "start");
+  check("the dots are up as a second walk begins", await waitUntil(() => typingSeen() >= 1, 3000));
+  rpc({ jsonrpc: "2.0", id: nextId++, method: "tools/call", params: { name: "walk_to", arguments: { x: 0, z: 0 } } });
+  await sleep(500);
+  host.close();
+  await sleep(1000);
+  seen.length = 0;
+  await sleep(4000);
+  check("when the host disconnects mid-walk, the dots get no new signal", typingSeen() === 0,
+    `typing signals after the disconnect: ${typingSeen()}`);
+
   watcher.close(); host.close();
 } catch (e) {
   fail++;

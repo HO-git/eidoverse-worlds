@@ -53,7 +53,7 @@ import { describeParticles, emitterTransition, transitionLine } from "../shared/
 import { describePicture } from "../shared/picture.js";
 import { describeCaptions } from "../shared/captions.js";
 import { describeSound } from "../shared/sound.js";
-import { describeStructure, describeHere, localizePoint, planStructure, routeLocal } from "../shared/structure.js";
+import { describeStructure, describeHere, localizePoint, planStructure, prepareRouteLocal, ROUTE_STEP_METRES } from "../shared/structure.js";
 import { effectiveWorldTransform, type Effective } from "./effective.ts";
 import { makeVerdictCache, seatGateCore, nameFromAvatarPath } from "../client/lib/seatcore.js";
 
@@ -151,6 +151,49 @@ const fillOf = (t: { area: number; x: number[]; z: number[] }) => {
  *  in a palm canopy is exactly the bug this PR exists to end. */
 const DECK_FILL = 0.45;
 
+type WalkSupport = { kind: "terrain"; height: number } |
+  { kind: "floor"; height: number; entity: string; level: number };
+
+/** A known structure as one walk sees it (walkStructures). */
+type WalkStructure = {
+  id: string;
+  route: ReturnType<typeof prepareRouteLocal>;
+  /** World x/z to the structure's local metres, and back. */
+  local(p: Vec2): [number, number];
+  world(lx: number, lz: number): Vec2;
+  /** Whether the world leg a→b clears this structure's walls. */
+  clear(a: Vec2, b: Vec2): boolean;
+};
+
+/** Why walkTo refused a call for its arguments: the walk_to tool's own words. */
+export const WALK_ARGS_REASON = "walk_to needs finite x/z and tolerance between 0 and 0.4 metres";
+
+/** Component revisions a walk has skipped as unplannable, so the operator's
+ *  log names each once (walkStructures). */
+const UNPLANNABLE_LOGGED = new WeakSet<object>();
+
+/** How far a body standing in a wall looks for a clear point to step out
+ *  to, nearest first, and in how many directions (planWalk). */
+const STEP_OUT_METRES = [0.05, 0.1, 0.2, 0.35, 0.5], STEP_OUT_DIRECTIONS = 16;
+
+/** One step point for each side of the wall a body stands in: the middle of
+ *  each run of clear points around the circle (`null` where a direction is
+ *  blocked). */
+function stepSides(ok: (Vec2 | null)[]): Vec2[] {
+  const n = ok.length, sides: Vec2[] = [];
+  if (ok.every(Boolean)) return [ok[0]!];
+  // Start just after a blocked direction, so no run wraps past the start.
+  const start = ok.findIndex((p) => !p);
+  for (let i = 1; i <= n;) {
+    if (!ok[(start + i) % n]) { i++; continue; }
+    let len = 0;
+    while (i + len <= n && ok[(start + i + len) % n]) len++;
+    sides.push(ok[(start + i + Math.floor((len - 1) / 2)) % n]!);
+    i += len;
+  }
+  return sides;
+}
+
 // A canned "knocked over" pose for headless agents, which cannot simulate.
 /** One bone of a held pose: a rotation, or {q, t, s} (shared/humanoid.js poseChannels). */
 type PoseValue = number[] | { q?: number[]; t?: number[]; s?: number[] | number };
@@ -184,9 +227,16 @@ export class WorldAgent {
   pos = { x: 0, y: 0, z: 0 };
   yaw = 0; speed = 0; clip = "idle";
   private target: (Vec2 & { run: boolean; tolerance?: number }) | null = null;
-  /** Remaining waypoints of a routed walk — see walkTo. Empty means the target
-   *  is reachable in a straight line, which is every case outside a building. */
+  /** Remaining validated centerline waypoints. Only the destination uses
+   * the caller's tolerance; intermediate waypoints are reached exactly. */
   private legs: Vec2[] = [];
+  private walkTolerance = ARRIVE;
+  private walkHeightAt: ((x: number, z: number) => number) | null = null;
+  /** Why the last walkTo() call was refused, or null when it was accepted:
+   * its arguments, or no route. Planning is synchronous; a caller can capture
+   * this immediately after walkTo() so a later replacement walk cannot change
+   * its refusal receipt. */
+  walkRefusal: string | null = null;
   /** A held custom pose — sparse humanoid-bone quaternions. Presence only:
    *  it rides the pose packet and is never a log verb, because it is a moment,
    *  not a change to the world. `null` clears. */
@@ -460,6 +510,7 @@ export class WorldAgent {
    *  the body as a zombie that fights its successor over the identity. */
   close() {
     this.closed = true;
+    this.stop();
     this.stopSim();
     if (this.ticker) { clearInterval(this.ticker); this.ticker = null; }
     if (this.activityTimer) { clearInterval(this.activityTimer); this.activityTimer = null; }
@@ -1552,6 +1603,18 @@ export class WorldAgent {
     return this.terrain ? this.terrain.heightAt(x, z) : 0;
   }
 
+  /** Received component data is replaced by the comp fold, never edited in
+   * place. Key the pure local plan by that revision's object identity; entity
+   * transforms and each walk's support basis remain outside this cache. */
+  private static readonly plans = new WeakMap<object, ReturnType<typeof planStructure>>();
+  private planOf(data: unknown): ReturnType<typeof planStructure> {
+    // Opaque primitive components normalize as empty but cannot be WeakMap keys.
+    if (typeof data !== "object" || data === null) return planStructure(data);
+    let plan = WorldAgent.plans.get(data);
+    if (!plan) { plan = planStructure(data); WorldAgent.plans.set(data, plan); }
+    return plan;
+  }
+
   // ---- support surfaces (#17) ----------------------------------------------
   // A body settling headless used to see bare terrain: every placed floor —
   // a platform, a deck, the bell pavilion's slab — simply was not there, and
@@ -1760,6 +1823,9 @@ export class WorldAgent {
       this.draggedBy = null;                 // a silent dragger loses the body
       void this.settleFromDrag(null);        // — and my own sim settles it
     }
+    // Capture before an arrival clears the target: the completion tick uses
+    // the same support that admitted the route, not a newly selected floor.
+    const admittedHeight = this.target ? this.walkHeightAt : null;
     if (!this.draggedBy && this.target) {
       const dx = this.target.x - this.pos.x, dz = this.target.z - this.pos.z;
       const dist = Math.hypot(dx, dz);
@@ -1769,9 +1835,10 @@ export class WorldAgent {
         // rounds a doorway instead of driving at the wall behind it.
         const next = this.legs.shift();
         if (next) {
-          this.target = { x: next.x, z: next.z, run: this.target.run, tolerance: this.target.tolerance };
+          this.target = { x: next.x, z: next.z, run: this.target.run,
+            tolerance: this.legs.length ? 0 : this.walkTolerance };
         } else {
-          this.target = null; this.speed = 0; this.clip = "idle";
+          this.target = null; this.walkHeightAt = null; this.speed = 0; this.clip = "idle";
           this.walkDone?.(true); this.walkDone = null;
         }
       } else {
@@ -1779,14 +1846,20 @@ export class WorldAgent {
         this.speed = sp; this.clip = this.target.run ? "run" : "walk";
         this.yaw = Math.atan2(dx, dz);
         const step = Math.min(dist, sp * dt);
-        this.pos.x += (dx / dist) * step;
-        this.pos.z += (dz / dist) * step;
+        if (step === dist) {
+          // Land on the validated point exactly, rather than allowing a
+          // tolerance or floating residual to cut the next corner.
+          this.pos.x = this.target.x; this.pos.z = this.target.z;
+        } else {
+          this.pos.x += (dx / dist) * step;
+          this.pos.z += (dz / dist) * step;
+        }
       }
     }
     // a tumbling, lying, dragged, nailed or FLYING body owns its own y — the
     // terrain clamp is for FEET, and none of those states is standing on them
     if (!this.draggedBy && this.pins.size === 0 && this.clip !== "ragdoll" && !this.flight) {
-      this.pos.y = this.heightAt(this.pos.x, this.pos.z);
+      this.pos.y = admittedHeight ? admittedHeight(this.pos.x,this.pos.z) : this.heightAt(this.pos.x, this.pos.z);
     }
     // FLIGHT: one fixed-step integration of shared/flight.js per tick, and the
     // body's position is whatever it says. The integrator is the same function
@@ -1831,7 +1904,7 @@ export class WorldAgent {
    *  is something that happens TO this body, not just to its pixels. */
   knockDown(by: string, lean: number[] | null, notice: string) {
     if (!this.pushable || this.draggedBy) return;
-    if (this.target) { this.walkDone?.(false); this.walkDone = null; this.target = null; this.legs = []; }
+    if (this.target) { this.walkDone?.(false); this.walkDone = null; this.target = null; this.legs = []; this.walkHeightAt = null; }
     this.speed = 0;
     // Down NOW, not when the physics finishes loading. tumble() awaits the
     // skeleton, the height field and the support barrier before it can set
@@ -2463,9 +2536,150 @@ export class WorldAgent {
     ].join("\n");
   }
 
+  /** What the feet stand on for a walk from here. On main the body stands on
+   * terrain only, so this answers terrain. The storey-standing work (#200)
+   * answers the floor it holds the feet on, when it holds them on one, and
+   * walkTo's floor branch serves that answer; the router never manufactures
+   * floor support itself. */
+  private walkSupport(): WalkSupport {
+    return { kind: "terrain", height: this.heightAt(this.pos.x, this.pos.z) };
+  }
+
+  /** Every known structure as a walk sees it: placed where it is now, and
+   * prepared against the walk's support. A structure whose place can't be
+   * composed, whose plan throws or whose geometry can't be prepared has no
+   * walls a walk can be checked against: it is skipped, for every walk, as
+   * the straight walk before #218 skipped it, and the operator's log says so
+   * once per component revision. */
+  private walkStructures(support: WalkSupport): WalkStructure[] {
+    const nowMs = this.serverNow(), out: WalkStructure[] = [];
+    for (const e of this.entities.values()) {
+      const data = (e.comp ?? {}).structure;
+      if (!data) continue;
+      const skip = (why: string) => {
+        if (typeof data !== "object" || UNPLANNABLE_LOGGED.has(data)) return;
+        UNPLANNABLE_LOGGED.add(data);
+        console.warn(`[${this.name}] walk_to skips structure [${e.id}], which can't be checked: ${why}`);
+      };
+      // Where it is now, carried or moving included, as every other spatial
+      // claim reads it (#82): not its rest pose.
+      const fx = this.eff(e.id, nowMs);
+      if (!fx.ok) { skip(`its place can't be composed (${fx.why})`); continue; }
+      const sc = fx.scale > 0 ? fx.scale : 1;
+      const place = { pos: fx.pos, yaw: fx.yaw, scale: sc };
+      const [px, py, pz] = fx.pos;
+      const c = Math.cos(fx.yaw), n = Math.sin(fx.yaw);
+      const world = (lx: number, lz: number): Vec2 => ({ x: px + (lx * c + lz * n) * sc, z: pz + (-lx * n + lz * c) * sc });
+      const local = (p: Vec2): [number, number] => { const [lx, , lz] = localizePoint(place, p.x, 0, p.z); return [lx, lz]; };
+      let route: ReturnType<typeof prepareRouteLocal>;
+      try {
+        const plan = this.planOf(data);
+        route = prepareRouteLocal(plan, support.kind === "terrain" ? {
+          kind: "terrain", step: ROUTE_STEP_METRES / sc, scale: sc,
+          // The live terrain, as the walk's ticks read it.
+          heightAt: (lx: number, lz: number) => { const w = world(lx, lz); return (this.heightAt(w.x, w.z) - py) / sc; },
+        } : {
+          kind: "floor", step: ROUTE_STEP_METRES / sc, scale: sc, height: (support.height - py) / sc,
+          ...(support.entity === e.id ? { level: support.level } : {}),
+        });
+      } catch (err) { skip(`its plan throws (${(err as Error)?.message ?? err})`); continue; }
+      if (route.failed) { skip(route.failed); continue; }
+      out.push({ id: e.id, route, local, world,
+        clear: (a, b) => { const [ax, az] = local(a), [bx, bz] = local(b); return route.clear(ax, az, bx, bz); } });
+    }
+    return out;
+  }
+
+  /** A route from `from` to `to` that every structure clears: the straight
+   * leg when none offers a detour, else the shortest structure's offered
+   * detour that the others clear too. This is local planning, not global
+   * multi-building search. A refusal names each structure's reason. */
+  private routeFrom(from: Vec2, to: Vec2, structures: WalkStructure[]): { points: Vec2[] } | { refusal: string } {
+    const candidates: { points: Vec2[]; length: number; owner: WalkStructure }[] = [];
+    const refusals: string[] = [];
+    for (const s of structures) {
+      const [ax, az] = s.local(from), [bx, bz] = s.local(to);
+      let result;
+      // The straight leg was checked first, so a search that throws leaves a
+      // structure in the way with no route around it.
+      try { result = s.route.route(ax, az, bx, bz); }
+      catch (err) { refusals.push(`[${s.id}]: its route couldn't be searched (${(err as Error)?.message ?? err})`); continue; }
+      if (result.kind === "blocked") { refusals.push("[" + s.id + "]: " + result.reason); continue; }
+      if (result.kind === "clear") continue;
+      const points = result.points.map(([lx, lz]: number[]) => s.world(lx, lz));
+      const length = points.slice(1).reduce((sum: number, p: Vec2, i: number) => sum + Math.hypot(p.x - points[i].x, p.z - points[i].z), 0);
+      candidates.push({ points, length, owner: s });
+    }
+    if (!candidates.length) return refusals.length ? { refusal: "no route: " + refusals.join("; ") } : { points: [from, to] };
+    candidates.sort((a, b) => a.length - b.length || (a.owner.id < b.owner.id ? -1 : a.owner.id > b.owner.id ? 1 : 0));
+    const obstructed: string[] = [];
+    for (const candidate of candidates) {
+      // Supporting upper floors constrain the route, not just the walls.
+      // Cross-building floor composition is outside this local planner: keep
+      // the supporting structure's own validated path or explicitly refuse.
+      const blocker = structures.find((s) => (s.route.confined && candidate.owner !== s)
+        || !candidate.points.slice(1).every((p, i) => s.clear(candidate.points[i], p)));
+      if (!blocker) return { points: candidate.points };
+      obstructed.push(blocker.route.confined && candidate.owner !== blocker
+        ? `[${candidate.owner.id}]'s route leaves the floor of [${blocker.id}] the body stands on`
+        : `[${candidate.owner.id}]'s route is obstructed by [${blocker.id}]`);
+    }
+    return { refusal: [structures.some((s) => s.route.confined)
+      ? "no local route preserves the supporting upper-floor path (multi-building floor composition is unavailable)"
+      : "no local route is clear of all structures (multi-building route search is unavailable)",
+      ...obstructed, ...refusals].join("; ") };
+  }
+
+  /** The legs of a walk from where the body stands to `to`, or why there is
+   * none. A body standing in a wall (a door edited to a window under its feet)
+   * first steps out to the nearest clear point beside it, within half a
+   * metre, and is routed from there. */
+  private planWalk(to: Vec2, support: WalkSupport): { legs: Vec2[] } | { refusal: string } {
+    const structures = this.walkStructures(support), from = { x: this.pos.x, z: this.pos.z };
+    if (structures.every((s) => s.clear(from, from))) {
+      const route = this.routeFrom(from, to, structures);
+      return "refusal" in route ? route : { legs: route.points.slice(1) };
+    }
+    for (const r of STEP_OUT_METRES) {
+      // A step's sides: the directions whose point is clear, and which a step
+      // from just off the wall reaches without crossing one. Runs of them
+      // around the circle are the sides of the wall; the middle of each run
+      // stands for that side, so each side is planned from once.
+      const ok = Array.from({ length: STEP_OUT_DIRECTIONS }, (_, k) => {
+        const th = (2 * Math.PI * k) / STEP_OUT_DIRECTIONS;
+        const p = { x: from.x + r * Math.cos(th), z: from.z + r * Math.sin(th) };
+        const off = { x: from.x + 1e-4 * Math.cos(th), z: from.z + 1e-4 * Math.sin(th) };
+        return structures.every((s) => s.clear(p, p) && s.clear(off, p)) ? p : null;
+      });
+      const sides = stepSides(ok);
+      if (!sides.length) continue;
+      sides.sort((a, b) => Math.hypot(a.x - to.x, a.z - to.z) - Math.hypot(b.x - to.x, b.z - to.z));
+      const refusals = new Set<string>();
+      for (const p of sides) {
+        const route = this.routeFrom(p, to, structures);
+        if ("points" in route) return { legs: route.points };
+        refusals.add(route.refusal);
+      }
+      // Each side's own reason, so the refusal says why none of them served.
+      return { refusal: `the body stands in a wall, and from beside it: ${[...refusals].join("; from another side: ")}` };
+    }
+    return { refusal: "the body stands in a wall, with no clear point within half a metre to step out to" };
+  }
+
   walkTo(x: number, z: number, run = false, timeoutMs = 90_000, tolerance = ARRIVE): Promise<boolean> {
-    if (![x, z, tolerance].every(Number.isFinite) || tolerance < 0 || tolerance > 0.4) return Promise.resolve(false);
-    this.walkDone?.(false); // cancel a previous walk
+    if (![x, z, tolerance].every(Number.isFinite) || tolerance < 0 || tolerance > 0.4) {
+      // Not a walk request at all: the walk under way, if any, goes on.
+      this.walkRefusal = WALK_ARGS_REASON;
+      return Promise.resolve(false);
+    }
+    // A new request supersedes the walk under way, whether or not it can be walked.
+    if (this.walkDone || this.target) this.abandonWalk();
+    this.walkRefusal = null;
+    // Plan before touching the body, from the ground under it: a refused walk
+    // leaves it seated, pinned, dragged, posed or tumbling as it was.
+    const support = this.walkSupport();
+    const plan = this.planWalk({ x, z }, support);
+    if ("refusal" in plan) { this.walkRefusal = plan.refusal; return Promise.resolve(false); }
     if (this.draggedBy) {   // deciding to walk IS breaking the dragger's hold
       this.ws?.send(JSON.stringify({ type: "bodydrag", target: this.draggedBy, end: true }));
       this.draggedBy = null;
@@ -2492,44 +2706,30 @@ export class WorldAgent {
     // glues this body to its socket on every renderer, wherever the feet go
     if (this.joined && this.mounts.has(this.name)) this.verb("dismount", { id: this.name });
     // and stand on the ground you got up onto
-    this.pos.y = this.heightAt(this.pos.x, this.pos.z);
-    // ROUTE THROUGH WALLS RATHER THAN INTO THEM. Straight-line walking samples
-    // only the height field, so a body crosses walls as if they were not there.
-    // Inside a griddled building the grid IS the navigation graph, so ask it.
-    // Failure is silent and total on purpose: no route (target outdoors, no
-    // structure, a sealed room) falls back to the old straight line, which is
-    // exactly the behaviour everywhere that has no building.
-    this.legs = [];
-    try {
-      for (const e of this.entities.values()) {
-        const data = (e.comp ?? {}).structure;
-        if (!data) continue;
-        const plan = planStructure(data);
-        const [ax, , az] = localizePoint(e, this.pos.x, this.pos.y, this.pos.z);
-        const [bx, , bz] = localizePoint(e, x, this.pos.y, z);
-        const pts = routeLocal(plan, ax, az, bx, bz);
-        if (!pts || pts.length < 3) continue;    // straight line is already fine
-        const yaw = Number.isFinite(e.yaw) ? e.yaw : 0;
-        const sc = Number.isFinite(e.scale) && e.scale > 0 ? e.scale : 1;
-        const [px, , pz] = Array.isArray(e.pos) ? e.pos : [0, 0, 0];
-        const c = Math.cos(yaw), n = Math.sin(yaw);
-        // grid-local back to world: the inverse of localizePoint
-        this.legs = pts.slice(1).map(([lx, lz]) => ({
-          x: px + (lx * c + lz * n) * sc,
-          z: pz + (-lx * n + lz * c) * sc,
-        }));
-        break;
-      }
-    } catch { this.legs = []; }
-    const first = this.legs.shift();
-    this.target = first ? { x: first.x, z: first.z, run, tolerance } : { x, z, run, tolerance };
+    this.pos.y = support.height;
+    this.walkTolerance = tolerance;
+    // A terrain walk reads the live terrain each tick, as the planner read it;
+    // a floor walk keeps the floor that admitted the route through its last tick.
+    this.walkHeightAt = support.kind === "terrain" ? (wx, wz) => this.heightAt(wx, wz) : () => support.height;
+    this.legs = plan.legs.slice(0, -1).concat({ x, z });   // end on the point asked for, exactly
+    const first = this.legs.shift()!;
+    this.target = { x: first.x, z: first.z, run, tolerance: this.legs.length ? 0 : tolerance };
     return new Promise((resolve) => {
       this.walkDone = resolve;
-      setTimeout(() => { if (this.walkDone === resolve) { this.target = null; this.walkDone = null; resolve(false); } }, timeoutMs);
+      setTimeout(() => { if (this.walkDone === resolve) this.abandonWalk(); }, timeoutMs);
     });
   }
 
-  stop() { this.target = null; this.legs = []; this.speed = 0; this.clip = "idle"; this.walkDone?.(false); this.walkDone = null; }
+  /** The walk under way ends unarrived: its promise answers false, its legs
+   * and basis go, and a walking body stands. */
+  private abandonWalk() {
+    const done = this.walkDone;
+    this.walkDone = null; this.target = null; this.legs = []; this.walkHeightAt = null; this.speed = 0;
+    if (this.clip === "walk" || this.clip === "run") this.clip = "idle";
+    done?.(false);
+  }
+
+  stop() { this.abandonWalk(); this.clip = "idle"; }
 
   face(x: number, z: number) { this.yaw = Math.atan2(x - this.pos.x, z - this.pos.z); }
 
@@ -3069,7 +3269,7 @@ export class WorldAgent {
         if (!data) continue;
         try {
           const [lx, ly, lz] = localizePoint(e, me.x, me.y, me.z);
-          const here = describeHere(planStructure(data), lx, lz, ly);
+          const here = describeHere(this.planOf(data), lx, lz, ly);
           if (here) { L.push(`${here} (inside [${e.id}]; sides are the building's own compass.)`); break; }
         } catch { /* one malformed house must not cost the whole percept */ }
       }

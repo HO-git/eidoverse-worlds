@@ -111,5 +111,28 @@ check("and leaves a re-assert's worth of margin over it", TYPING_OVERDUE_MS - 70
   r.stop();
 }
 
+{
+  // The body's own one-a-second throttle (WorldAgent.typing) runs on a
+  // monotonic clock too: with the wall clock stepped back an hour, its next
+  // signal still goes out once the second has passed.
+  const { WorldAgent } = await import("../mcpl/agent.ts");
+  const ag = new WorldAgent({ name: "throttle-test", world: "nowhere", url: "ws://127.0.0.1:1/ws" });
+  let sent = 0;
+  ag.joined = true;
+  ag.ws = { readyState: 1, send() { sent++; } } as unknown as WebSocket;
+  ag.typing();
+  const wall = Date.now;
+  try {
+    Date.now = () => wall() - 3_600_000;
+    ag.typing();
+    check("the body sends at most one typing signal a second", sent === 1, `sent=${sent}`);
+    await sleep(1100);
+    ag.typing();
+    check("a wall clock stepped back doesn't hold the body's next signal", sent === 2, `sent=${sent}`);
+  } finally {
+    Date.now = wall;
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

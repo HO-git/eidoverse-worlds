@@ -200,6 +200,24 @@ class Session {
     // the host's next `start` raises them again. Travel hands this to the next
     // body.
     this.agent.onSaid = () => this.typing.stop();
+    // The host's typing signal is taken as it arrives, from the first message
+    // on, not when serve()'s loop next reads: that loop serves one request at
+    // a time, and a tool call can run for a minute (walk_to waits for the body
+    // to arrive), long enough for the relay's overdue stop to drop the dots
+    // while the host's refreshes wait unread behind the call. Each signal is
+    // judged against the grant and channel the session holds when it arrives;
+    // one that a still-queued featureSets/update or travel would have let
+    // through is dropped, and the host's next refresh, within 7 s, is judged
+    // again.
+    this.conn.on("notification", (n) => {
+      if (n.method !== method.CHANNELS_TYPING) return;
+      try {
+        this.onTyping(n.params);
+      } catch (e) {
+        // A listener's throw would land in the connection's line reader.
+        console.error(`[${ts()}] [mcpl:${this.auth.id}] typing signal failed: ${(e as Error).message?.slice(0, 160)}`);
+      }
+    });
   }
 
   /** The loopback media bridge. One sidecar at a time: a second connection
@@ -591,9 +609,11 @@ class Session {
       const both = eff.filter((c) => denied.includes(c));
       if (both.length) return { error: `capability in both effectiveCapabilities and deniedCapabilities: ${both.join(", ")}` };
       this.grant = new Set(eff);
-      // A grant that withdraws channels.typing ends the relay now, not at
-      // its overdue stop: the dots it keeps up were granted under the old
-      // policy. A start under a later grant raises them again.
+      // A grant that withdraws channels.typing ends the relay as soon as it's
+      // served, not at the relay's overdue stop: the dots it keeps up were
+      // granted under the old policy. (Served in turn, so a tool call in
+      // progress holds it back until the call returns.) A start under a later
+      // grant raises them again.
       if (!this.capAllowed(CAP.channelsTyping)) this.typing.stop();
     }
     // `enabled`/`disabled` name FEATURE SETS, which carry no authority of their
@@ -864,26 +884,12 @@ class Session {
     };
     prelude().catch((e) => console.error(`[${ts()}] [mcpl:${this.auth.id}] prelude failed: ${(e as Error).message?.slice(0, 160)}`));
 
-    // The host's typing signal is taken as it arrives, not when this loop
-    // next reads: the loop serves one request at a time, and a tool call can
-    // run for a minute (walk_to waits for the body to arrive), long enough
-    // for the relay's overdue stop to drop the dots while the host's
-    // refreshes wait unread behind the call.
-    this.conn.on("notification", (n) => {
-      if (n.method !== method.CHANNELS_TYPING) return;
-      try {
-        this.onTyping(n.params);
-      } catch (e) {
-        // A listener's throw would land in the connection's line reader.
-        console.error(`[${ts()}] [mcpl:${this.auth.id}] typing signal failed: ${(e as Error).message?.slice(0, 160)}`);
-      }
-    });
-
     try {
       while (!this.conn.isClosed) {
         const msg = await this.conn.nextMessage();
-        // Notifications were taken as they arrived (above); any other is
-        // dropped, the generation stream's chunks among them.
+        // The typing signal was taken as it arrived (the constructor's
+        // listener); any other notification is dropped, the generation
+        // stream's chunks among them.
         if (msg.type !== "request") continue;
         const req = msg.request;
         const params = (req.params ?? {}) as Record<string, unknown>;
@@ -1137,6 +1143,9 @@ class Session {
    *  only as the reply is published, so dots drawn from them would mean
    *  "published", not "composing". The door no longer advertises the stream. */
   private onTyping(params: unknown): void {
+    // A signal parsed after the session closed would re-arm the relay on a
+    // closed body.
+    if (this.conn.isClosed) return;
     // A NOTIFICATION, so there is no response to refuse with: without the
     // grant it is dropped silently. §14.1 has the host withhold typing from a
     // server without the grant, but agent-framework can still send a `stop`

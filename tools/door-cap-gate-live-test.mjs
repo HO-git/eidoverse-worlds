@@ -405,6 +405,8 @@ try {
       "channels.publish", "channels.incoming", "channels.typing"] });
   check("granted again, mode full", r.result?.accepted === true && r.result?.mode === "full",
     JSON.stringify(r).slice(0, 160));
+  await pause(1200);   // the body's one-a-second typing throttle
+  check("…and a start under the restored grant raises the dots again", await typingRaised(full, 3000));
   r = await full.request("channels/publish", {
     channelId: "world:commons", content: [{ type: "text", text: "granted-hello-from-the-door" }] });
   check("granted: channels/publish delivers", r.result?.delivered === true, JSON.stringify(r).slice(0, 120));

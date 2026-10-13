@@ -99,7 +99,10 @@ try {
   typingFor("world:commons", "stop");
   await sleep(300);
 
-  // Typing for a DIFFERENT channel must not light up this world.
+  // Typing for a DIFFERENT channel must not light up this world. The body
+  // sends at most one typing signal a second, so wait that out first: a
+  // throttled signal must not be what keeps this check quiet.
+  await sleep(1200);
   seen.length = 0;
   typingFor("dm:someone", "start");
   await sleep(400);
@@ -107,7 +110,9 @@ try {
   typingFor("dm:someone", "stop");
 
   // The generation stream no longer draws the dots: a host may hold it back
-  // until it publishes, and dots then would mean "published".
+  // until it publishes, and dots then would mean "published". (The same wait
+  // out of the body's one-a-second throttle first.)
+  await sleep(1200);
   seen.length = 0;
   rpc({ jsonrpc: "2.0", method: "channels/outgoing/chunk",
     params: { inferenceId: "inf1", conversationId: "c1", channelId: "world:commons", index: 0, delta: "Hel" } });

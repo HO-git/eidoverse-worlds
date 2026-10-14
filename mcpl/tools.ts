@@ -336,10 +336,10 @@ export const HANDLERS: Record<string, ToolHandler> = {
         return { content: [{ type: "text", text: "walk_to needs finite x/z and tolerance between 0 and 0.4 metres" }], isError: true };   // walkTo's own words (WALK_ARGS_REASON)
       if (y != null && !Number.isFinite(y))
         return { content: [{ type: "text", text: "walk_to's y, when given, must be a finite height in metres" }], isError: true };
-      const walking = ag.walkTo(x, z, Boolean(a.run), 90_000, tolerance, y, near);
-      const refusal = ag.walkRefusal; // capture this request's synchronous plan
-      const arrived = await walking;
-      if (!arrived) return text(refusal ?? ag.walkStall ?? "walk interrupted or timed out");
+      // this request's own refusal (its plan may wait for geometry still loading)
+      const receipt = { refusal: null as string | null };
+      const arrived = await ag.walkTo(x, z, Boolean(a.run), 90_000, tolerance, y, near, receipt);
+      if (!arrived) return text(receipt.refusal ?? ag.walkStall ?? "walk interrupted or timed out");
       const here = ag.placesAt([ag.pos.x, ag.pos.y, ag.pos.z])[0];
       return text(label
         ? `arrived at ${label}: (${ag.pos.x.toFixed(2)}, ${ag.pos.y.toFixed(2)}, ${ag.pos.z.toFixed(2)})${here ? `, in ${here.place.label ?? here.place.name}` : ""}`

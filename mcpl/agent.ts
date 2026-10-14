@@ -96,7 +96,38 @@ const modelMeta = new Map<string, unknown>();
  *  its geometry for as long as they stand; this only bounds what is kept for
  *  fits yet to come. Least recently used goes first; downloads in flight stay. */
 const MESH_CACHE_BYTES = 256 * 1024 * 1024, MESH_FETCH_MS = 8000;
+/** How long a walk waits for placed geometry still loading before it is
+ *  refused (see walkTo). Covers a fetch's own timeout plus some queueing. */
+const WALK_READY_MS = 15_000;
+const GEOMETRY_LOADING = "things placed nearby are still loading their shape, so a walk now could pass through them — try again in a moment";
 const meshBytes = new Map<string, number>();
+/** Fetch-and-decode jobs at once (process-wide): replay fires one per spawn,
+ *  and a world of many models must not download and decode them all at once.
+ *  The rest queue; each job's own fetch timeout starts when it runs. */
+const MESH_CONCURRENCY = 3;
+/** Larger than this, a model is not decoded here: its /geom summary stands in
+ *  (source bytes, checked by Content-Length and again on arrival), as does
+ *  one decoding to more triangles than MESH_MAX_TRIS. */
+const MESH_MAX_BYTES = 48 * 1024 * 1024, MESH_MAX_TRIS = 1_000_000;
+/** What the governor is doing, for debugging and tests: jobs running and
+ *  queued now, the most ever running at once, and why any model fell back. */
+export const meshGovernor = { active: 0, queued: 0, maxActive: 0, fallbacks: new Map<string, string>() };
+const meshWaiting: (() => void)[] = [];
+/** Tests: forget every decoded model, so the next sync fetches afresh. */
+export function forgetMeshCache() { meshCache.clear(); meshBytes.clear(); }
+async function meshSlot<T>(job: () => Promise<T>): Promise<T> {
+  if (meshGovernor.active >= MESH_CONCURRENCY) {
+    meshGovernor.queued++;
+    await new Promise<void>((r) => meshWaiting.push(r));   // the slot is handed over, not re-contended
+    meshGovernor.queued--;
+  } else meshGovernor.active++;
+  meshGovernor.maxActive = Math.max(meshGovernor.maxActive, meshGovernor.active);
+  try { return await job(); }
+  finally {
+    const next = meshWaiting.shift();
+    if (next) next(); else meshGovernor.active--;
+  }
+}
 function trimMeshCache(key: string, m: CollisionMesh) {
   meshBytes.set(key, m.positions.byteLength + m.indices.byteLength);
   let total = 0;
@@ -1754,11 +1785,22 @@ export class WorldAgent {
     if (p) { meshCache.delete(key); meshCache.set(key, p); return p; }   // most recently used last
     // bounded: a stalled /library must not hold up the /geom fallback, and
     // a failure is forgotten so a later sync tries again
-    p = fetch(`${this.httpBase}/library/${lib}`, { signal: AbortSignal.timeout(MESH_FETCH_MS) })
-      .then((r) => (r.ok ? r.arrayBuffer() : null))
-      .then((b) => (b ? collisionTriangles(new Uint8Array(b)) : null))
-      .then((m) => { if (!m) meshCache.delete(key); else { trimMeshCache(key, m); if (m.building) modelMeta.set(key, m.building); } return m; })
-      .catch(() => { meshCache.delete(key); return null; });   // no mesh: the /geom summary path stands in
+    // governed: a few at a time, none too large (meshSlot, MESH_MAX_*)
+    const fallback = (why: string) => { meshGovernor.fallbacks.set(key, why); return null; };
+    p = meshSlot(async () => {
+      const r = await fetch(`${this.httpBase}/library/${lib}`, { signal: AbortSignal.timeout(MESH_FETCH_MS) });
+      if (!r.ok) return fallback(`HTTP ${r.status}`);
+      const len = Number(r.headers.get("content-length"));
+      if (len > MESH_MAX_BYTES) { void r.body?.cancel(); return fallback(`${(len / 1e6).toFixed(0)}MB is over the ${MESH_MAX_BYTES / 1e6 | 0}MB exact-collision limit`); }
+      const b = await r.arrayBuffer();
+      if (b.byteLength > MESH_MAX_BYTES) return fallback(`${(b.byteLength / 1e6).toFixed(0)}MB is over the ${MESH_MAX_BYTES / 1e6 | 0}MB exact-collision limit`);
+      const m = await collisionTriangles(new Uint8Array(b));
+      if (!m) return fallback("not a readable GLB with triangles");
+      if (m.indices.length / 3 > MESH_MAX_TRIS) return fallback(`${m.indices.length / 3} triangles is over the ${MESH_MAX_TRIS} exact-collision limit`);
+      return m;
+    })
+      .then((m) => { if (!m) meshCache.delete(key); else { meshGovernor.fallbacks.delete(key); trimMeshCache(key, m); if (m.building) modelMeta.set(key, m.building); } return m; })
+      .catch((err) => { meshCache.delete(key); fallback(String(err?.name === "TimeoutError" ? "fetch timed out" : err?.message ?? err)); return null; });   // no mesh: the /geom summary path stands in
     meshCache.set(key, p);
     return p;
   }
@@ -2787,17 +2829,51 @@ export class WorldAgent {
    *  reached anywhere in it; a point within a hand's width or so).
    *  `near.above` / `near.below`: how far above / below y its floor may be (a
    *  step above and anything below, unless the floor's height is known
-   *  exactly, as a named room's is). `near.inside`: only spots in a region. */
+   *  exactly, as a named room's is). `near.inside`: only spots in a region.
+   *  `receipt`: this request's own refusal (the plan may wait for geometry). */
   walkTo(x: number, z: number, run = false, timeoutMs = 90_000, tolerance = ARRIVE, y?: number,
-    near: Pick<NavTarget, "reach" | "above" | "below" | "inside"> = {}): Promise<boolean> {
+    near: Pick<NavTarget, "reach" | "above" | "below" | "inside"> = {}, receipt?: { refusal: string | null }): Promise<boolean> {
     if (![x, z, tolerance].every(Number.isFinite) || tolerance < 0 || tolerance > 0.4 || (y != null && !Number.isFinite(y))) {
       // Not a walk request at all: the walk under way, if any, goes on.
       this.walkRefusal = WALK_ARGS_REASON;
+      if (receipt) receipt.refusal = WALK_ARGS_REASON;
       return Promise.resolve(false);
     }
     // A new request supersedes the walk under way, whether or not it can be walked.
     if (this.walkDone || this.target) this.abandonWalk();
     this.walkRefusal = null;
+    const ticket = ++this.walkTicket;
+    const now = () => {
+      const p = this.walkNow(x, z, run, timeoutMs, tolerance, y, near);
+      if (receipt) receipt.refusal = this.walkRefusal;   // set synchronously by the plan
+      return p;
+    };
+    // Placed things whose geometry is still on its way (a spawn just made, a
+    // join's replay) are not yet solid here: planning now would walk through
+    // them. The walk waits for them — every sync issued until they're all in,
+    // ones that arrive during the wait included — and if they don't land in
+    // time it is refused, never walked on the terrain underneath.
+    if (!this.supportPending.size) return now();
+    return this.supportReady(WALK_READY_MS).then(() => {
+      if (ticket !== this.walkTicket) {   // stopped, or another walk asked for, meanwhile
+        if (receipt) receipt.refusal = "superseded by a newer walk or a stop";
+        return false;
+      }
+      if (this.supportPending.size) {
+        this.walkRefusal = GEOMETRY_LOADING;
+        if (receipt) receipt.refusal = GEOMETRY_LOADING;
+        return false;
+      }
+      return now();
+    });
+  }
+
+  /** Bumped by every walk request and every abandon: a walk waiting for
+   *  geometry knows when it has been superseded. */
+  private walkTicket = 0;
+
+  private walkNow(x: number, z: number, run: boolean, timeoutMs: number, tolerance: number, y: number | undefined,
+    near: Pick<NavTarget, "reach" | "above" | "below" | "inside">): Promise<boolean> {
     // Plan before touching the body, from the ground under it: a refused walk
     // leaves it seated, pinned, dragged, posed or tumbling as it was.
     const support = this.walkSupport();
@@ -3107,6 +3183,7 @@ export class WorldAgent {
   /** The walk under way ends unarrived: its promise answers false, its legs
    * and basis go, and a walking body stands. */
   private abandonWalk() {
+    ++this.walkTicket;
     const done = this.walkDone;
     this.walkDone = null; this.target = null; this.legs = []; this.walkHeightAt = null; this.speed = 0;
     if (this.clip === "walk" || this.clip === "run") this.clip = "idle";

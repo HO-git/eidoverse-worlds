@@ -1642,6 +1642,7 @@ export class WorldAgent {
       (0, eval)(this.terrainSrc);
     }
     this.terrain = (globalThis as any).makeTerrain({ ...args, layers: [] });
+    this.terrainRev++;
     // the settle sim clamps against the SAME ground the walking clamp reads —
     // not one height sampled at the fall site (#17)
     void setHeightField((x, z) => this.heightAt(x, z));
@@ -2801,12 +2802,26 @@ export class WorldAgent {
       // plan from the floor under the body, not its root: a tumbling or
       // seated body's y is not where its feet will be
       const feet = { x: this.pos.x, y: this.pos.y, z: this.pos.z };
-      const fy = standOn(feet, (wx, wz) => this.heightAt(wx, wz)) ?? this.pos.y;
-      if (this.navGrid?.gen !== collidersGeneration()) this.navGrid = { gen: collidersGeneration(), grid: makeNavGrid(probe) };
-      const nav = this.navGrid.grid.route({ x: this.pos.x, y: fy, z: this.pos.z }, { x, z, y });
+      // a grid is good until the colliders or the terrain change
+      const navKey = `${collidersGeneration()}|${this.terrainRev}`;
+      if (this.navGrid?.gen !== navKey) this.navGrid = { gen: navKey, grid: makeNavGrid(probe) };
+      const grid = this.navGrid.grid;
+      const nav = inWorld(this.world, () => {
+        const fy = standOn(feet, (wx, wz) => this.heightAt(wx, wz)) ?? this.pos.y;
+        return grid.route({ x: this.pos.x, y: fy, z: this.pos.z }, { x, z, y });
+      });
       if ("refusal" in nav) { this.walkRefusal = nav.refusal; return Promise.resolve(false); }
-      legs = nav.points.map((p) => ({ x: p.x, z: p.z }));
-      snapped = nav.snapped; routed = true;
+      // griddled structures keep their walls out of the headless colliders,
+      // so a detour round the furniture is checked against them like any
+      // structure route; one that crosses a wall gives way to the structure
+      // planner's own legs
+      const structures = this.walkStructures(support);
+      const pts = [{ x: this.pos.x, z: this.pos.z }, ...nav.points.map((p) => ({ x: p.x, z: p.z }))];
+      const crosses = structures.length > 0 && pts.slice(1).some((p, k) => structures.some((st) => !st.clear(pts[k], p)));
+      if (!crosses) {
+        legs = nav.points.map((p) => ({ x: p.x, z: p.z }));
+        snapped = nav.snapped; routed = true;
+      }
     }
     if (this.draggedBy) {   // deciding to walk IS breaking the dragger's hold
       this.ws?.send(JSON.stringify({ type: "bodydrag", target: this.draggedBy, end: true }));
@@ -2868,7 +2883,9 @@ export class WorldAgent {
   private grounded = true;
   /** What the route planner has learned about this world's columns, good
    *  until the colliders change (physics.ts collidersGeneration). */
-  private navGrid: { gen: number; grid: ReturnType<typeof makeNavGrid> } | null = null;
+  private navGrid: { gen: string; grid: ReturnType<typeof makeNavGrid> } | null = null;
+  /** Bumped when the terrain is rebuilt: route grids read it. */
+  private terrainRev = 0;
   /** How close counts as reaching an intermediate waypoint of the walk under way. */
   private legTolerance = 0;
   /** Set from a join until its support registrations land (see the join). */

@@ -41,7 +41,7 @@ export function boxMesh(list: Box[]) {
 /** A GLB whose one mesh sits under a parent node lifted `lift` (and the mesh
  *  itself shifted `shift` along x — both default 0), with an orphan mesh node
  *  outside the scene. */
-export async function buildGlb(list: Box[], { draco = false, lift = 0 } = {}) {
+export async function buildGlb(list: Box[], { draco = false, lift = 0, shift = 0 } = {}) {
   const doc = new Document();
   const buf = doc.createBuffer();
   const make = (l: Box[]) => {

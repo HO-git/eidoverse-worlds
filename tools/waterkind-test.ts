@@ -67,6 +67,22 @@ console.log("\na river that narrows");
   check(`the narrows run faster (${wide.speed.toFixed(2)} → ${narrow.speed.toFixed(2)} m/s)`, narrow.speed > wide.speed * 1.6, `${wide.speed} ${narrow.speed}`);
 }
 
+console.log("\nthe biggest grid, forced to the costliest kind");
+{
+  // A world-filling flat sea authored `kind: "river"` — lawful (the override is documented), and the worst
+  // case for the river passes: every cell is river, and no shore is near. The budget (shared/waterkind.js
+  // header): the 513² maximum grid analyses in about a third of a second on a laptop; this test allows 1.2 s.
+  // A per-cell neighbourhood scan of the old kind (≈1100 cells looked at per cell) is several times that.
+  analyzeWater(() => -1, 64, { level: 0, kind: "river" }, 64);   // warm the JIT
+  const t0 = performance.now();
+  const A = analyzeWater(() => -1, 512, { level: 0, kind: "river" }, 512);
+  const ms = performance.now() - t0;
+  check(`a 513² world-filling forced river analyses within budget (${ms.toFixed(0)} ms ≤ 1200)`, ms <= 1200);
+  const w = A.sample(100, -40)!;
+  check("...and stays the river it was authored as, flowing, at the broad-water speed", A.bodies.length === 1 && A.bodies[0].kind === "river"
+    && !!w.flow && Math.abs(Math.hypot(...w.flow) - 1) < 1e-6 && Math.abs(w.speed - 0.5) < 1e-6, JSON.stringify(w));
+}
+
 console.log("\na shore and the sea");
 {
   // land to the west, sloping down under the sea to the east

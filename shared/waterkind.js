@@ -20,6 +20,11 @@
 //
 // `water.kind` ('still' | 'river' | 'ocean') overrides the guess for every body; `water.flow: [x, z]`
 // gives rivers a direction instead.
+//
+// COST. Runs synchronously when a world's water is built (the browser's applyWater, an agent's
+// buildTerrain), so every pass is linear or N log N in the grid's cells — no per-cell neighbourhood scans.
+// Budget: the 513² maximum grid (waterGridSeg), filled wall to wall and forced to be a river (the costliest
+// case), analyses in about a third of a second on a laptop; tools/waterkind-test.ts holds it under 1.2 s.
 
 import { riverSpeed } from './waves.js';
 
@@ -103,25 +108,49 @@ export function analyzeWater(heightAt, size, water, seg) {
 
   // rivers: geodesic distance from the source end along the channel; flow is its gradient
   const flow = new Float32Array(N * 2), speed = new Float32Array(N);
-  const geo = new Float32Array(N).fill(-1);
-  const bfs = (b, from) => {   // 8-neighbour Dijkstra-lite (two costs) within one body
+  const geo = new Float64Array(N).fill(-1);   // 64-bit: the heap compares in doubles, and a float32 round-trip would re-relax settled cells
+  const heap = new MinHeap();
+  const bfs = (b, from) => {   // 8-neighbour Dijkstra (two costs) within one body — O(N log N)
     for (const k of b.cells) geo[k] = INF;
     geo[from] = 0;
-    const q = [from];
-    for (let h = 0; h < q.length; h++) {
-      const k = q[h], i = k % n, j = (k - i) / n;
+    heap.clear(); heap.push(from, 0);
+    while (heap.size) {
+      const g0 = heap.topKey(), k = heap.pop();
+      if (g0 > geo[k]) continue;   // a stale entry: k was settled nearer since
+      const i = k % n, j = (k - i) / n;
       for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
         if (!di && !dj) continue;
         const ii = i + di, jj = j + dj;
         if (ii < 0 || jj < 0 || ii >= n || jj >= n) continue;
         const m = at(ii, jj);
         if (comp[m] !== b.id) continue;
-        const g = geo[k] + (di && dj ? D2 : D1);
-        if (g < geo[m] - 1e-6) { geo[m] = g; q.push(m); }
+        const g = g0 + (di && dj ? D2 : D1);
+        if (g < geo[m] - 1e-6) { geo[m] = g; heap.push(m, g); }
       }
     }
     let far = from;   // the far end, once every distance has settled
     for (const k of b.cells) if (geo[k] > geo[far]) far = k;
+    return far;
+  };
+  // the far end by STEPS (8-neighbour, unit cost): a plain O(N) breadth-first search — finding a channel's
+  // two ends needs no exact metres, only the exact flow distance after does (bfs)
+  const hops = new Int32Array(N);
+  const farthest = (b, from) => {
+    for (const k of b.cells) hops[k] = -1;
+    hops[from] = 0;
+    const q = new Int32Array(b.cells.length); let head = 0, tail = 0, far = from;
+    q[tail++] = from;
+    while (head < tail) {
+      const k = q[head++], i = k % n, j = (k - i) / n;
+      if (hops[k] > hops[far]) far = k;
+      for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+        const ii = i + di, jj = j + dj;
+        if ((!di && !dj) || ii < 0 || jj < 0 || ii >= n || jj >= n) continue;
+        const m = at(ii, jj);
+        if (comp[m] !== b.id || hops[m] >= 0) continue;
+        hops[m] = hops[k] + 1; q[tail++] = m;
+      }
+    }
     return far;
   };
   const isEdge = (k) => { const i = k % n, j = (k - i) / n; return i < 3 || j < 3 || i > n - 4 || j > n - 4; };
@@ -143,25 +172,22 @@ export function analyzeWater(heightAt, size, water, seg) {
         if (s < lo) { lo = s; src = k; } if (s > hi) { hi = s; mouth = k; }
       }
     } else {
-      const a = bfs(b, b.cells[0]), c = bfs(b, a);   // the channel's two far ends
+      const a = farthest(b, b.cells[0]), c = farthest(b, a);   // the channel's two far ends
       const score = (k) => (isEdge(k) ? 100 : 0) + bedNear(b, k);
       [src, mouth] = score(a) > score(c) ? [c, a] : [a, c];
     }
     bfs(b, src);
     b.source = src; b.mouth = mouth;
-    // Narrower runs faster: the current follows the channel's LOCAL width — twice the deepest shore
-    // distance nearby (a channel's centre line is half its width from either bank). The ripples it carries
-    // run at one speed for the whole river (its mean width's), rounded to wrap with the wave clock: a speed
-    // that varied across the water would shear the ripple trains apart as the clock ran.
+    // Narrower runs faster: the current follows the channel's LOCAL width — twice its centre line's
+    // shore distance (the centre line is half the width from either bank). Each cell finds its centre
+    // line by climbing the shore-distance field: visited highest first, a cell takes the half-width of
+    // its steepest uphill neighbour (a ridge cell keeps its own) — one sorted pass, O(N log N), whatever
+    // the river's breadth. The ripples it carries run at one speed for the whole river (its mean width's),
+    // rounded to wrap with the wave clock: a speed that varied across the water would shear the ripple
+    // trains apart as the clock ran.
     b.waveSpeed = riverSpeed(Math.min(2.2, Math.max(0.5, 18 / b.width)));
-    const R = Math.ceil(Math.min(RIVER_MAX_WIDTH / 2, b.maxShore) / cell) + 1;
-    for (const k of b.cells) {
-      const i = k % n, j = (k - i) / n; let m = 0;
-      for (let jj = Math.max(0, j - R); jj <= Math.min(n - 1, j + R); jj++) for (let ii = Math.max(0, i - R); ii <= Math.min(n - 1, i + R); ii++) {
-        const q = at(ii, jj); if (comp[q] === b.id && shore[q] > m) m = shore[q];
-      }
-      speed[k] = Math.min(2.2, Math.max(0.5, 18 / Math.max(cell, 2 * m)));
-    }
+    const halfW = ridgeHalfWidth(b, shore, comp, n, cell);
+    b.cells.forEach((k, c) => { speed[k] = Math.min(2.2, Math.max(0.5, 18 / Math.max(cell, 2 * halfW[c]))); });
     smoothScalar(speed, b, comp, n, 3);
     for (const k of b.cells) {
       const i = k % n, j = (k - i) / n;
@@ -173,7 +199,7 @@ export function analyzeWater(heightAt, size, water, seg) {
     }
     b.flowDir = [(mouth % n) - (src % n), Math.floor(mouth / n) - Math.floor(src / n)];
   }
-  smoothVectors(flow, wet, comp, n, 3);
+  smoothVectors(flow, wet, comp, n, 3, bodies, 'river');
 
   // oceans: the waves' way in — down the shore-distance field, toward the nearest shore
   const toShore = new Float32Array(N * 2);
@@ -184,7 +210,7 @@ export function analyzeWater(heightAt, size, water, seg) {
     const len = Math.hypot(gx, gz) || 1;
     toShore[2 * k] = -gx / len; toShore[2 * k + 1] = -gz / len;
   }
-  smoothVectors(toShore, wet, comp, n, 4);
+  smoothVectors(toShore, wet, comp, n, 4, bodies, 'ocean');
 
   const kind = new Uint8Array(N);
   for (let k = 0; k < N; k++) kind[k] = wet[k] ? KINDS.indexOf(bodies[comp[k]].kind) : 0;
@@ -221,6 +247,57 @@ export function analyzeWater(heightAt, size, water, seg) {
   return { n, cell, depth, shore, kind, flow, speed, toShore, comp, bodies, sample };
 }
 
+/** For each of a body's cells (in b.cells order), the shore distance of the centre line it lies across:
+ *  cells highest-first, each taking its steepest same-body uphill neighbour's value, or its own on a ridge. */
+function ridgeHalfWidth(b, shore, comp, n, cell) {
+  const order = Uint32Array.from(b.cells.keys()).sort((x, y) => shore[b.cells[y]] - shore[b.cells[x]]);
+  const slot = new Map();
+  b.cells.forEach((k, c) => slot.set(k, c));
+  const out = new Float32Array(b.cells.length);
+  for (const c of order) {
+    const k = b.cells[c], i = k % n, j = (k - i) / n, s0 = shore[k];
+    let best = -1, bestRise = 0;
+    for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      if (!di && !dj) continue;
+      const ii = i + di, jj = j + dj;
+      if (ii < 0 || jj < 0 || ii >= n || jj >= n) continue;
+      const m = jj * n + ii;
+      if (comp[m] !== b.id) continue;
+      const rise = (shore[m] - s0) / (di && dj ? cell * Math.SQRT2 : cell);
+      if (rise > bestRise) { bestRise = rise; best = m; }
+    }
+    out[c] = best < 0 ? s0 : Math.max(s0, out[slot.get(best)]);
+  }
+  return out;
+}
+
+/** A binary min-heap of grid indices by key (Dijkstra's frontier). */
+class MinHeap {
+  constructor() { this.k = []; this.v = []; }
+  get size() { return this.v.length; }
+  clear() { this.k.length = 0; this.v.length = 0; }
+  topKey() { return this.k[0]; }
+  push(v, key) {
+    const K = this.k, V = this.v; let i = V.length; K.push(key); V.push(v);
+    while (i > 0) { const p = (i - 1) >> 1; if (K[p] <= key) break; K[i] = K[p]; V[i] = V[p]; i = p; }
+    K[i] = key; V[i] = v;
+  }
+  pop() {
+    const K = this.k, V = this.v, top = V[0], key = K.pop(), v = V.pop(), N = V.length;
+    if (N) {
+      let i = 0;
+      for (;;) {
+        let c = 2 * i + 1; if (c >= N) break;
+        if (c + 1 < N && K[c + 1] < K[c]) c++;
+        if (K[c] >= key) break;
+        K[i] = K[c]; V[i] = V[c]; i = c;
+      }
+      K[i] = key; V[i] = v;
+    }
+    return top;
+  }
+}
+
 /** Average a scalar over each cell's same-body neighbours, `passes` times. */
 function smoothScalar(v, b, comp, n, passes) {
   const tmp = new Float32Array(b.cells.length);
@@ -241,12 +318,14 @@ function smoothScalar(v, b, comp, n, passes) {
 
 /** Average each wet vector with its same-body neighbours, `passes` times, and renormalize — the grid's
  *  gradients are blocky, and water should turn smoothly. */
-function smoothVectors(v, wet, comp, n, passes) {
+function smoothVectors(v, wet, comp, n, passes, bodies, only) {
+  if (!bodies.some((b) => b.kind === only)) return;   // no water of this kind: nothing to smooth
   const tmp = new Float32Array(v.length);
   for (let p = 0; p < passes; p++) {
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
       const k = j * n + i;
       if (!wet[k]) { tmp[2 * k] = tmp[2 * k + 1] = 0; continue; }
+      if (bodies[comp[k]].kind !== only) { tmp[2 * k] = v[2 * k]; tmp[2 * k + 1] = v[2 * k + 1]; continue; }
       let sx = 0, sz = 0;
       for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
         const ii = i + di, jj = j + dj;

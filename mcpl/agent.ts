@@ -12,9 +12,9 @@ import * as TSL from "three/tsl";
 import { NoiseGate, SHORT_STINT_MS, APPROACH_REFRACT_MS, APPROACH_RADIUS, REARM_RADIUS,
   APPROACH_DWELL_MS, APPROACH_STILL_MPS, APPROACH_MAX_WAIT_MS,
   ACTIVITY_RADIUS_M, ACTIVITY_PULSE_MS, ACTIVITY_REFRESH_MS, MOVER_MIN_M } from "./denoise.ts";
-import { HeadlessBody, ReachBody, setHeightField, registerSupport, registerSupportGrid, registerMeshSupport, removeSupport, standOn, collidersReady, navProbe, collidersGeneration } from "./physics.ts";
-import { makeNavGrid, NAV_SUBSTEP, NAV_NUDGE } from "./navgrid.ts";
-import { placesOf, inRegion, names, destinationOf, toLocal, type Place, type Destination } from "./places.ts";
+import { HeadlessBody, ReachBody, setHeightField, registerSupport, registerSupportGrid, registerMeshSupport, removeSupport, standOn, collidersReady, navProbe, collidersGeneration, inWorld } from "./physics.ts";
+import { makeNavGrid, NAV_SUBSTEP, NAV_NUDGE, type NavTarget } from "./navgrid.ts";
+import { placesOf, inRegion, names, destinationOf, toLocal, type Place, type Destination, type PlaceHolder } from "./places.ts";
 import { collisionTriangles } from "../server/geometry.ts";
 // FLIGHT. The same deterministic integrator the browser bench and the capture
 // path run -- one function, every runtime, per the spec's Q2 ruling.
@@ -72,7 +72,9 @@ const COLLIDE_SUBSTEP = NAV_SUBSTEP;
  *  STALL_TICKS consecutive ticks is held by something solid: it ends, saying
  *  so, instead of pressing against the wall until the 90s timeout. */
 const STALL_PROGRESS = 0.2, STALL_TICKS = 15;
-const GRAVITY = 16;   // client/lib/controller.js: vy -= 16 * dt
+const GRAVITY = 16;
+/** How far below its supporting surface a settled ragdoll's root lies. */
+const RAGDOLL_ROOT_DROP = 0.7;   // client/lib/controller.js: vy -= 16 * dt
 /** Quiet window for world-change narration, per (entity, component). Tuning a
  *  live emitter is a burst of `comp` entries; this is how long they fold into
  *  one line. Long enough to swallow a slider drag, short enough that "puts the
@@ -90,6 +92,21 @@ const meshCache = new Map<string, Promise<CollisionMesh | null>>();
 /** Each model's own description of itself (its `building` extras), by the same
  *  key, once its bytes have been read — the defaults for its named places. */
 const modelMeta = new Map<string, unknown>();
+/** Decoded bytes the cache may keep. The colliders fitted from a model hold
+ *  its geometry for as long as they stand; this only bounds what is kept for
+ *  fits yet to come. Least recently used goes first; downloads in flight stay. */
+const MESH_CACHE_BYTES = 256 * 1024 * 1024, MESH_FETCH_MS = 8000;
+const meshBytes = new Map<string, number>();
+function trimMeshCache(key: string, m: CollisionMesh) {
+  meshBytes.set(key, m.positions.byteLength + m.indices.byteLength);
+  let total = 0;
+  for (const b of meshBytes.values()) total += b;
+  for (const k of [...meshCache.keys()]) {
+    if (total <= MESH_CACHE_BYTES) break;
+    if (k === key || !meshBytes.has(k)) continue;
+    total -= meshBytes.get(k)!; meshBytes.delete(k); meshCache.delete(k);
+  }
+}
 type Pose = PublicPose;
 type Entity = { id: string; lib: string; pos: number[]; yaw: number; actor: string; scale?: number;
   /** the spawn's collider override ("exact" | "box"); the browser's decide() reads it, and so does ours */
@@ -1629,6 +1646,7 @@ export class WorldAgent {
       (0, eval)(this.terrainSrc);
     }
     this.terrain = (globalThis as any).makeTerrain({ ...args, layers: [] });
+    this.terrainRev++;
     // the settle sim clamps against the SAME ground the walking clamp reads —
     // not one height sampled at the fall site (#17)
     void setHeightField((x, z) => this.heightAt(x, z));
@@ -1733,14 +1751,15 @@ export class WorldAgent {
   private meshFor(lib: string): Promise<CollisionMesh | null> {
     const key = `${this.httpBase}|${lib}`;
     let p = meshCache.get(key);
-    if (!p) {
-      p = fetch(`${this.httpBase}/library/${lib}`)
-        .then((r) => (r.ok ? r.arrayBuffer() : null))
-        .then((b) => (b ? collisionTriangles(new Uint8Array(b)) : null))
-        .then((m) => { if (m?.building) modelMeta.set(key, m.building); return m; })
-        .catch(() => null);                            // no mesh: the /geom summary path stands in
-      meshCache.set(key, p);
-    }
+    if (p) { meshCache.delete(key); meshCache.set(key, p); return p; }   // most recently used last
+    // bounded: a stalled /library must not hold up the /geom fallback, and
+    // a failure is forgotten so a later sync tries again
+    p = fetch(`${this.httpBase}/library/${lib}`, { signal: AbortSignal.timeout(MESH_FETCH_MS) })
+      .then((r) => (r.ok ? r.arrayBuffer() : null))
+      .then((b) => (b ? collisionTriangles(new Uint8Array(b)) : null))
+      .then((m) => { if (!m) meshCache.delete(key); else { trimMeshCache(key, m); if (m.building) modelMeta.set(key, m.building); } return m; })
+      .catch(() => { meshCache.delete(key); return null; });   // no mesh: the /geom summary path stands in
+    meshCache.set(key, p);
     return p;
   }
 
@@ -1800,11 +1819,21 @@ export class WorldAgent {
     if (mesh) {
       const bid = `${this.world}/${id}`;
       // awaited, unlike the summary boxes below: the fit itself is what a
-      // joining body's feet wait on (supportReady), and it cannot throw
-      if (await registerMeshSupport(this.supportHolder, bid, mesh, { ...xform, collide: e.collide, lib: e.lib })) {
-        this.supportIds.set(id, [bid]);
+      // joining body's feet wait on (supportReady), and it cannot throw.
+      // The id is RESERVED before the wait, so a remove, mount or close
+      // during it has something to drop — and if one happened, the fit that
+      // lands afterwards is taken straight back out.
+      this.supportIds.set(id, [bid]);
+      const ok = await registerMeshSupport(this.supportHolder, bid, mesh, { ...xform, collide: e.collide, lib: e.lib });
+      const now = this.entities.get(id);
+      const superseded = !this.supportIds.get(id)?.includes(bid);
+      if (superseded || this.closed || !now || now.lib !== e.lib || this.mounts.has(id) || this.hasActiveMotion(now)) {
+        if (ok && (superseded || this.closed)) void removeSupport(this.supportHolder, bid);
+        else if (ok) this.dropSupport(id);
         return;
       }
+      if (ok) return;
+      this.supportIds.delete(id);
     }
     if (!g) return;
     const [w, h, d] = [g.bbox.size[0] * s, g.bbox.size[1] * s, g.bbox.size[2] * s];
@@ -1857,7 +1886,9 @@ export class WorldAgent {
     this.supportIds.delete(id);
   }
 
-  private tick() {
+  /** Every collider query a tick makes is about this agent's own world. */
+  private tick() { inWorld(this.world, () => this.tickInWorld()); }
+  private tickInWorld() {
     if (!this.joined) return;
     const dt = TICK_MS / 1000;
     // §24k R0 (survey A7): advance the sim fold and stamp live body
@@ -1924,7 +1955,7 @@ export class WorldAgent {
     const feetFree = !this.draggedBy && this.pins.size === 0 && this.clip !== "ragdoll" && !this.flight;
     const ground = admittedHeight ?? ((x: number, z: number) => this.heightAt(x, z));
     const target = this.target;
-    if (feetFree && collidersReady() && (this.mounts.has(this.name) || this.feetSettling)) {
+    if (feetFree && ((collidersReady() && this.mounts.has(this.name)) || this.feetSettling)) {
       // seated: the seat holds the body, and the feet keep the floor they
       // last stood on — standing up resolves from there (walkTo, setPosture).
       // Just joined: the same hold, until this join's floors are fitted.
@@ -2007,6 +2038,7 @@ export class WorldAgent {
   private async ensureBody(): Promise<HeadlessBody | null> {
     if (this.body !== undefined) return this.body;
     this.body = await HeadlessBody.create(this.httpBase, this.avatar);
+    if (this.body) this.body.scope = this.world;
     return this.body;
   }
 
@@ -2753,10 +2785,11 @@ export class WorldAgent {
    *  destination has a floor within a step of it, else the lowest there.
    *  `near.reach`: how far from (x, z) a place to stand may be (a room is
    *  reached anywhere in it; a point within a hand's width or so).
-   *  `near.above`: how far above y its floor may be (a step, unless the floor's
-   *  height is known exactly, as a named room's is). */
+   *  `near.above` / `near.below`: how far above / below y its floor may be (a
+   *  step above and anything below, unless the floor's height is known
+   *  exactly, as a named room's is). `near.inside`: only spots in a region. */
   walkTo(x: number, z: number, run = false, timeoutMs = 90_000, tolerance = ARRIVE, y?: number,
-    near: { reach?: number; above?: number } = {}): Promise<boolean> {
+    near: Pick<NavTarget, "reach" | "above" | "below" | "inside"> = {}): Promise<boolean> {
     if (![x, z, tolerance].every(Number.isFinite) || tolerance < 0 || tolerance > 0.4 || (y != null && !Number.isFinite(y))) {
       // Not a walk request at all: the walk under way, if any, goes on.
       this.walkRefusal = WALK_ARGS_REASON;
@@ -2779,12 +2812,26 @@ export class WorldAgent {
       // plan from the floor under the body, not its root: a tumbling or
       // seated body's y is not where its feet will be
       const feet = { x: this.pos.x, y: this.pos.y, z: this.pos.z };
-      const fy = standOn(feet, (wx, wz) => this.heightAt(wx, wz)) ?? this.pos.y;
-      if (this.navGrid?.gen !== collidersGeneration()) this.navGrid = { gen: collidersGeneration(), grid: makeNavGrid(probe) };
-      const nav = this.navGrid.grid.route({ x: this.pos.x, y: fy, z: this.pos.z }, { x, z, y, reach: near.reach, above: near.above });
+      // a grid is good until the colliders or the terrain change
+      const navKey = `${collidersGeneration()}|${this.terrainRev}`;
+      if (this.navGrid?.gen !== navKey) this.navGrid = { gen: navKey, grid: makeNavGrid(probe) };
+      const grid = this.navGrid.grid;
+      const nav = inWorld(this.world, () => {
+        const fy = standOn(feet, (wx, wz) => this.heightAt(wx, wz)) ?? this.pos.y;
+        return grid.route({ x: this.pos.x, y: fy, z: this.pos.z }, { x, z, y, ...near });
+      });
       if ("refusal" in nav) { this.walkRefusal = nav.refusal; return Promise.resolve(false); }
-      legs = nav.points.map((p) => ({ x: p.x, z: p.z }));
-      snapped = nav.snapped; routed = true;
+      // griddled structures keep their walls out of the headless colliders,
+      // so a detour round the furniture is checked against them like any
+      // structure route; one that crosses a wall gives way to the structure
+      // planner's own legs
+      const structures = this.walkStructures(support);
+      const pts = [{ x: this.pos.x, z: this.pos.z }, ...nav.points.map((p) => ({ x: p.x, z: p.z }))];
+      const crosses = structures.length > 0 && pts.slice(1).some((p, k) => structures.some((st) => !st.clear(pts[k], p)));
+      if (!crosses) {
+        legs = nav.points.map((p) => ({ x: p.x, z: p.z }));
+        snapped = nav.snapped; routed = true;
+      }
     }
     if (this.draggedBy) {   // deciding to walk IS breaking the dragger's hold
       this.ws?.send(JSON.stringify({ type: "bodydrag", target: this.draggedBy, end: true }));
@@ -2815,7 +2862,7 @@ export class WorldAgent {
     // floor under the feet found from where the body is (a body seated
     // upstairs stands up upstairs); the planner's support answer otherwise
     const supportAt = support.kind === "terrain" ? (wx: number, wz: number) => this.heightAt(wx, wz) : () => support.height;
-    this.pos.y = (collidersReady() ? standOn(this.pos, supportAt) : null) ?? support.height;
+    this.pos.y = inWorld(this.world, () => (collidersReady() ? standOn(this.pos, supportAt) : null)) ?? support.height;
     this.vy = 0; this.grounded = true; this.stallTicks = 0; this.walkStall = null;
     // A structure route's corners are reached exactly (its doorways are
     // planned to the centimetre); a routed walk's may sit where something
@@ -2846,15 +2893,27 @@ export class WorldAgent {
     return placesOf(modelMeta.get(`${this.httpBase}|${e.lib}`), e.comp?.places);
   }
 
+  /** Where a thing's places are right now: its effective transform (mount
+   *  chain, whole-entity motion) — its saved `pos` is where it was put, not
+   *  where a carried or moving thing is. Null when that cannot be resolved. */
+  private placeHolder(e: Entity, nowMs = Date.now()): PlaceHolder | null {
+    const f = this.eff(e.id, nowMs);
+    return f.ok ? { id: e.id, pos: f.pos, yaw: f.yaw, scale: f.scale } : null;
+  }
+
   /** The named regions a body standing at `w` is in, smallest first (a room
    *  before the building it is in). */
   placesAt(w: number[]): { entity: Entity; place: Place }[] {
-    const out: { entity: Entity; place: Place; vol: number }[] = [];
+    const out: { entity: Entity; place: Place; vol: number }[] = [], now = Date.now();
     for (const e of this.entities.values()) {
-      if (!isFiniteVec3(e.pos)) continue;
-      for (const p of this.placesOn(e)) {
-        if (!inRegion(e, p, w)) continue;
-        out.push({ entity: e, place: p, vol: (p.max![0] - p.min![0]) * (p.max![1] - p.min![1]) * (p.max![2] - p.min![2]) });
+      const ps = this.placesOn(e);
+      if (!ps.length) continue;
+      const h = this.placeHolder(e, now);
+      if (!h) continue;
+      const s3 = (h.scale ?? 1) ** 3;
+      for (const p of ps) {
+        if (!inRegion(h, p, w)) continue;
+        out.push({ entity: e, place: p, vol: s3 * (p.max![0] - p.min![0]) * (p.max![1] - p.min![1]) * (p.max![2] - p.min![2]) });
       }
     }
     return out.sort((a, b) => a.vol - b.vol);
@@ -2866,7 +2925,7 @@ export class WorldAgent {
   destination(to: string): Destination | { refusal: string } {
     const q = to.trim();
     if (!q) return { refusal: "walk_to's to names nothing" };
-    const me = this.pos;
+    const me = this.pos, now = Date.now();
     const ci = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
     // a person
     for (const p of this.people.values()) {
@@ -2878,59 +2937,101 @@ export class WorldAgent {
     }
     const slash = q.indexOf("/");
     const ents = [...this.entities.values()].filter((e) => isFiniteVec3(e.pos));
+    const at = (e: Entity, p: Place): Destination | { refusal: string } => {
+      const h = this.placeHolder(e, now);
+      return h ? destinationOf(h, p) : { refusal: `where [${e.id}] is right now cannot be worked out (${(this.eff(e.id, now) as { why: string }).why})` };
+    };
     if (slash > 0) {
       const e = ents.find((x) => ci(x.id, q.slice(0, slash)));
       if (!e) return { refusal: `no thing called "${q.slice(0, slash)}" here` };
       const name = q.slice(slash + 1), ps = this.placesOn(e), p = ps.find((x) => names(x, name));
       if (!p) return { refusal: `[${e.id}] has no place called "${name}"${ps.length ? ` — its places: ${ps.map((x) => x.name).join(", ")}` : " (it has no named places)"}` };
-      return destinationOf(e, p);
+      return at(e, p);
     }
     const e = ents.find((x) => ci(x.id, q));
     if (e) {
       const ps = this.placesOn(e);
       const p = ps.find((x) => x.name === "entrance") ?? ps.find((x) => x.kind === "door");
-      if (p) return destinationOf(e, p);
+      if (p) return at(e, p);
       return { refusal: `[${e.id}] has no entrance or door named — walk_to its places by name${ps.length ? ` (${ps.map((x) => x.name).join(", ")})` : ""}, or to its coordinates` };
     }
     const hits: Destination[] = [];
-    for (const x of ents) for (const p of this.placesOn(x)) if (names(p, q)) hits.push(destinationOf(x, p));
+    for (const x of ents) for (const p of this.placesOn(x)) {
+      if (!names(p, q)) continue;
+      const d = at(x, p);
+      if (!("refusal" in d)) hits.push(d);
+    }
     if (hits.length) return hits.sort((a, b) => Math.hypot(a.x - me.x, a.z - me.z) - Math.hypot(b.x - me.x, b.z - me.z))[0];
     const known = ents.flatMap((x) => this.placesOn(x).map((p) => `${x.id}/${p.name}`)).slice(0, 16);
     return { refusal: `nothing here is called "${q}"${known.length ? ` — named places: ${known.join(", ")}` : ""}` };
   }
 
+  /** name_place edits, one at a time: each starts from the state the last
+   *  one's echo confirmed, so two in a row don't overwrite each other. */
+  private placeEdits: Promise<unknown> = Promise.resolve();
+
   /** Name a spot (the body's own, by default) as a place on a thing: written
    *  into that thing's `places` component, in its frame, alongside what is
-   *  already there. `remove` retires a name — one the model itself declares
-   *  is hidden (null), one only the component held is dropped. */
-  namePlace(name: string, opts: { on?: string; label?: string; remove?: boolean; at?: number[] } = {}): string {
+   *  already there. `remove` retires a name (null: that also hides one the
+   *  model itself declares). `at` may leave out y: the floor there nearest
+   *  the body's own height. Answers once the world accepts or refuses it. */
+  namePlace(name: string, opts: { on?: string; label?: string; remove?: boolean; at?: { x: number; z: number; y?: number } } = {}): Promise<string> {
+    const run = this.placeEdits.then(() => this.namePlaceNow(name, opts));
+    this.placeEdits = run.catch(() => {});
+    return run;
+  }
+
+  private async namePlaceNow(name: string, opts: { on?: string; label?: string; remove?: boolean; at?: { x: number; z: number; y?: number } }): Promise<string> {
     if (!/^[A-Za-z0-9_][A-Za-z0-9_ .:'-]{0,47}$/.test(name)) return "a place name is 1-48 letters, digits, spaces, _ . : ' or -, starting with a letter, digit or _";
-    const w = opts.at && isFiniteVec3(opts.at) ? opts.at : [this.pos.x, this.pos.y, this.pos.z];
+    let w: number[];
+    if (opts.at) {
+      const { x, z } = opts.at;
+      const y = opts.at.y ?? inWorld(this.world, () => standOn({ x, y: this.pos.y, z }, (wx, wz) => this.heightAt(wx, wz))) ?? this.heightAt(x, z);
+      w = [x, y, z];
+    } else w = [this.pos.x, this.pos.y, this.pos.z];
+    const now = Date.now();
     let e: Entity | undefined;
-    if (opts.on) e = [...this.entities.values()].find((x) => x.id.toLowerCase() === opts.on!.toLowerCase());
-    else {
+    if (opts.on) {
+      e = [...this.entities.values()].find((x) => x.id.toLowerCase() === opts.on!.toLowerCase());
+      if (e && (!e.lib || e.lib === "(light)")) return `[${e.id}] is a light — places hang on placed things (a model), not lights`;
+    } else {
       e = this.placesAt(w)[0]?.entity;
       if (!e) {
         let best = Infinity;
         for (const x of this.entities.values()) {
-          if (!x.lib || x.lib === "(light)" || !isFiniteVec3(x.pos)) continue;
-          const d = Math.hypot(x.pos[0] - w[0], x.pos[2] - w[2]);
+          if (!x.lib || x.lib === "(light)") continue;
+          const h = this.placeHolder(x, now);
+          if (!h) continue;
+          const d = Math.hypot(h.pos[0] - w[0], h.pos[2] - w[2]);
           if (d < best && d <= 15) { best = d; e = x; }
         }
       }
     }
     if (!e) return opts.on ? `no thing called "${opts.on}" here` : "no placed thing within 15m to hang the name on — pass on: <thing id>";
+    const h = this.placeHolder(e, now);
+    if (!h) return `where [${e.id}] is right now cannot be worked out, so a spot on it cannot be named — try again when it rests`;
     const cur = (e.comp?.places && typeof e.comp.places === "object") ? { ...e.comp.places } : {};
     if (opts.remove) {
-      const fromModel = placesOf(modelMeta.get(`${this.httpBase}|${e.lib}`), null).some((p) => p.name === name);
-      if (fromModel) cur[name] = null; else delete cur[name];
+      // always a hiding entry: whether the model declares the name is not
+      // known until its file has loaded, and a deleted entry would let it back
+      cur[name] = null;
     } else {
-      const l = toLocal(e, w).map((v) => Math.round(v * 1000) / 1000);
+      const l = toLocal(h, w).map((v) => Math.round(v * 1000) / 1000);
       cur[name] = { at: l, ...(opts.label ? { label: opts.label.slice(0, 80) } : {}) };
     }
-    if (JSON.stringify(cur).length > 8000) return `[${e.id}]'s places would exceed the 8KB component limit — retire some first`;
-    this.verb("comp", { id: e.id, type: "places", data: cur });
-    return opts.remove ? `retired "${name}" on [${e.id}]` : `named this spot "${name}" on [${e.id}] — walk_to {to: "${e.id}/${name}"} reaches it`;
+    const data = JSON.stringify(cur);
+    if (data.length > 8000) return `[${e.id}]'s places would exceed the 8KB component limit — retire some first`;
+    const t0 = Date.now(), id = e.id;
+    this.verb("comp", { id, type: "places", data: cur });
+    // the world's answer: our component echoed back, or a refusal
+    for (const deadline = t0 + 3000; Date.now() < deadline;) {
+      if (this.lastRefusal && this.lastRefusal.ts >= t0) return `not named — the world refused: ${this.lastRefusal.text}`;
+      if (JSON.stringify(this.entities.get(id)?.comp?.places ?? null) === data) {
+        return opts.remove ? `retired "${name}" on [${id}]` : `named this spot "${name}" on [${id}] — walk_to {to: "${id}/${name}"} reaches it`;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return `sent "${name}" to [${id}], but the world has not confirmed it yet — look will show it once it lands`;
   }
 
   // ---- feet ----------------------------------------------------------------
@@ -2943,7 +3044,9 @@ export class WorldAgent {
   private grounded = true;
   /** What the route planner has learned about this world's columns, good
    *  until the colliders change (physics.ts collidersGeneration). */
-  private navGrid: { gen: number; grid: ReturnType<typeof makeNavGrid> } | null = null;
+  private navGrid: { gen: string; grid: ReturnType<typeof makeNavGrid> } | null = null;
+  /** Bumped when the terrain is rebuilt: route grids read it. */
+  private terrainRev = 0;
   /** How close counts as reaching an intermediate waypoint of the walk under way. */
   private legTolerance = 0;
   /** Set from a join until its support registrations land (see the join). */
@@ -2970,9 +3073,15 @@ export class WorldAgent {
 
   /** The ground under the feet as a standing body finds it: the fitted
    *  colliders when loaded (an upstairs floor stays upstairs), else terrain. */
-  private feetGround(): number {
+  private feetGround(fromRagdoll = false): number {
     const terrain = (x: number, z: number) => this.heightAt(x, z);
-    return (collidersReady() ? standOn(this.pos, terrain) : null) ?? terrain(this.pos.x, this.pos.z);
+    // a settled ragdoll's root lies ~0.68m BELOW the surface holding it up
+    // (support-lifecycle-test's hipsOffset); probing from the root itself
+    // would start under a thin upper floor and find the storey beneath
+    const from = { x: this.pos.x, y: this.pos.y + (fromRagdoll ? RAGDOLL_ROOT_DROP : 0), z: this.pos.z };
+    const g = inWorld(this.world, () => (collidersReady() ? standOn(from, terrain) : null));
+    if (g != null) { this.pos.x = from.x; this.pos.z = from.z; }
+    return g ?? terrain(this.pos.x, this.pos.z);
   }
 
   /** A walk pressed against something solid ends, and says so. Routes go
@@ -3126,7 +3235,7 @@ export class WorldAgent {
     if (bones == null && this.clip === "ragdoll") {
       this.body?.stop(); this.stopSim();
       this.clip = "idle";
-      this.pos.y = this.feetGround();
+      this.pos.y = this.feetGround(true);
     }
   }
 
@@ -3357,7 +3466,7 @@ export class WorldAgent {
     if (this.clip === "ragdoll" || (this.heldPose && !this.heldPoseAuthored)) {
       this.body?.stop(); this.stopSim();
       this.heldPose = null; this.heldPoseAuthored = false;
-      this.pos.y = this.feetGround();
+      this.pos.y = this.feetGround(true);
     }
     // and standing up IS getting off the seat
     if (clip === "idle" && this.joined && this.mounts.has(this.name)) this.verb("dismount", { id: this.name });

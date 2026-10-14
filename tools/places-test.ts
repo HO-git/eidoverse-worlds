@@ -36,6 +36,17 @@ console.log("places.ts (pure):");
   check("model frame ↔ world round-trips through position, yaw and scale", back.every((v, i) => Math.abs(v - [1, 2, 3][i]) < 1e-9), JSON.stringify(back));
 }
 
+console.log("a model's own places survive the server's compressed copy:");
+{
+  const { optimizeGlb } = await import("../server/optimize.ts");
+  const { collisionTriangles } = await import("../server/geometry.ts");
+  const src = await buildGlb(boxes, { building });
+  const opt = await optimizeGlb(src);
+  const viaOpt = (await collisionTriangles(opt))?.building;
+  check("the optimized (draco) copy still carries the building description", JSON.stringify(viaOpt) === JSON.stringify(building),
+    `${JSON.stringify(viaOpt)?.slice(0, 120)} (${src.length} → ${opt.length} bytes)`);
+}
+
 const h = await scratchSequencer("places", { serverEnv: { SKIP_OPT_SWEEP: "1" }, portFrom: 9500 });
 const { WorldAgent } = await import("../mcpl/agent.ts");
 const { handleTool } = await import("../mcpl/tools.ts");
@@ -133,6 +144,44 @@ try {
   // entrance [0,0,5] in the model frame, turned a quarter and moved to (30, -20)
   const want = P.toWorld({ id: "tower2", pos: [30, 0, -20], yaw: Math.PI / 2 }, [0, 0, 5]);
   check("a thing that is moved and turned takes its places with it", /arrived at tower2\/entrance/.test(r) && Math.hypot(a.pos.x - want[0], a.pos.z - want[2]) < 0.6, `${r} ${at()} want (${want[0].toFixed(2)}, ${want[2].toFixed(2)})`);
+
+  // a long room whose middle is full: reached at the clear floor it has
+  const ry = a.heightAt(50, -20);
+  const rug = await upload("rug", await buildGlb([[-6, 0, -1.5, 6, 0.05, 1.5], [-1.5, 0.05, -1.5, 1.5, 1.05, 1.5]]));
+  a.verb("spawn", { id: "rug", lib: rug, pos: [50, ry, -20], yaw: 0, collide: "exact" });
+  a.verb("comp", { id: "rug", type: "places", data: {
+    long_room: { min: [-6, 0.05, -1.5], max: [6, 3, 1.5], label: "the long room" },
+    loft: { min: [-6, 3, -1.5], max: [6, 5, 1.5] } } });
+  const perchY = a.heightAt(50, -12);
+  a.verb("spawn", { id: "perch", lib: stool, pos: [50, perchY, -12], yaw: 0, scale: 4, collide: "box" });
+  a.verb("comp", { id: "perch", type: "places", data: { seat: { at: [0, 0.32, 0], kind: "seat" } } });
+  for (let i = 0; i < 60 && !(a.supportIds?.get("rug") && a.supportIds?.get("perch")); i++) await sleep(50);
+  await a.supportReady(); await sleep(400);
+  r = await tool("walk_to", { to: "the long room", run: true });
+  check("a room whose middle is furnished is reached at its clear floor, toward an end",
+    /arrived at rug\/long_room/.test(r) && near(a.pos.y, ry + 0.05) && Math.abs(a.pos.x - 50) > 1.5 && Math.abs(a.pos.x - 50) < 6, `${r} ${at()}`);
+  r = await tool("walk_to", { to: "rug/loft" });
+  check("a room whose floor is not there is refused — not the floor beneath it", /nowhere to stand anywhere in it on its floor.*no floor there/.test(r) && !/arrived/.test(r), r);
+  r = await tool("walk_to", { to: "perch/seat", run: true });
+  check("a seat on a thing scaled 4× is reached on the floor beside it", /arrived at perch\/seat/.test(r) && near(a.pos.y, perchY, 0.1), `${r} ${at()}`);
+
+  // name_place's coordinates: x and z, y found; never silently dropped
+  r = await tool("name_place", { name: "rug_end", x: 55, z: -20, on: "rug" });
+  check("name_place with x and z only names the floor there", /named this spot "rug_end" on \[rug\]/.test(r)
+    && near(a.entities.get("rug")?.comp?.places?.rug_end?.at?.[1], 0.05) && near(a.entities.get("rug").comp.places.rug_end.at[0], 5), `${r} ${JSON.stringify(a.entities.get("rug")?.comp?.places?.rug_end)}`);
+  r = await tool("name_place", { name: "nowhere", y: 2 });
+  check("...and with y alone is refused, not quietly named where the body stands", /need x and z/.test(r) && !a.entities.get("rug").comp.places.nowhere, r);
+  a.verb("light", { id: "lamp", pos: [50, ry + 2, -20], intensity: 5 });
+  for (let i = 0; i < 40 && !a.entities.get("lamp"); i++) await sleep(50);
+  r = await tool("name_place", { name: "glow", on: "lamp" });
+  check("a light cannot carry places — refused, not saved where nothing reads it", /is a light/.test(r) && !a.entities.get("lamp")?.comp?.places, r);
+  // two names in a row, before the first echo: both land
+  const [r1, r2] = await Promise.all([
+    tool("name_place", { name: "west_end", x: 45, z: -20, on: "rug" }),
+    tool("name_place", { name: "east_end", x: 55.5, z: -20, on: "rug" })]);
+  const pl = a.entities.get("rug").comp.places;
+  check("two name_place calls at once both land — the second does not erase the first",
+    /named/.test(r1) && /named/.test(r2) && pl.west_end && pl.east_end && pl.rug_end && pl.long_room, `${r1} | ${r2} | ${Object.keys(pl).join(",")}`);
 
   r = await tool("walk_to", { to: "the moon" });
   check("an unknown name is refused, listing the names that exist", /nothing here is called "the moon" — named places: .*tower\/hall/.test(r), r);

@@ -438,8 +438,11 @@ export async function collisionTriangles(bytes: Uint8Array): Promise<{ positions
     console.warn("[geometry] collisionTriangles: unreadable GLB:", String(err).slice(0, 200));
     return null;
   }
+  // the scene a browser shows: three's GLTFLoader loads the default scene
+  // (else the first), never the others a file may carry
   const inScene = new Set<any>();
-  for (const scene of doc.getRoot().listScenes()) scene.traverse((n: any) => inScene.add(n));
+  const shown = doc.getRoot().getDefaultScene() ?? doc.getRoot().listScenes()[0];
+  shown?.traverse((n: any) => inScene.add(n));
   const pos: number[] = [], idx: number[] = [];
   const p = [0, 0, 0];
   for (const node of doc.getRoot().listNodes()) {

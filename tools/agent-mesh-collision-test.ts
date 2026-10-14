@@ -113,6 +113,33 @@ console.log("collisionTriangles:");
   }
 }
 
+console.log("\nmodel downloads, governed:");
+{
+  const { WorldAgent, meshGovernor } = await import("../mcpl/agent.ts");
+  const glb = await buildGlb([[-1, 0, -1, 1, 1, 1]]);
+  const huge = new Uint8Array(49 * 1024 * 1024);
+  let open = 0, most = 0, served = 0;
+  const srv = Bun.serve({ port: 0, async fetch(req) {
+    const u = new URL(req.url);
+    if (u.pathname === "/library/huge.glb") return new Response(huge);
+    open++; most = Math.max(most, open); served++;
+    await Bun.sleep(150);
+    open--;
+    return new Response(glb);
+  } });
+  const g: any = new WorldAgent({ name: "governed", world: "gov", url: `ws://127.0.0.1:${srv.port}/ws` });
+  const t0 = performance.now();
+  const meshes = await Promise.all(Array.from({ length: 64 }, (_, i) => g.meshFor(`m${i}.glb`)));
+  check("64 unique models replayed at once download a few at a time, and all decode",
+    most <= 3 && meshGovernor.maxActive <= 3 && served === 64 && meshes.every((m: any) => m?.indices?.length > 0),
+    `at most ${most} at once (governor ${meshGovernor.maxActive}), ${served} served, ${(performance.now() - t0).toFixed(0)}ms`);
+  check("...and nothing is left queued", meshGovernor.active === 0 && meshGovernor.queued === 0, JSON.stringify({ active: meshGovernor.active, queued: meshGovernor.queued }));
+  const big = await g.meshFor("huge.glb");
+  const why = [...meshGovernor.fallbacks].find(([k]) => k.endsWith("huge.glb"))?.[1];
+  check("a model over the size limit is not decoded: its /geom summary stands in, and says why", big === null && /over the 50MB exact-collision limit/.test(why ?? ""), String(why));
+  srv.stop(true);
+}
+
 console.log("\nan agent in a two-storey building (isolated sequencer):");
 const h = await scratchSequencer("agent-mesh-collision", { serverEnv: { SKIP_OPT_SWEEP: "1" }, portFrom: 9420 });
 const { WorldAgent } = await import("../mcpl/agent.ts");
@@ -193,6 +220,44 @@ try {
     !through && a.pos.x < -3 + 0.1, `ended at x ${a.pos.x.toFixed(2)}`);
   // 2.68m of open ground at 1.55 m/s, then the stall window: seconds, not the 30s timeout
   check("...promptly, not at the walk timeout", Date.now() - t0 < 5_000, `${Date.now() - t0}ms`);
+
+  console.log("\nwalking while a placed thing's shape is still loading:");
+  {
+    const { forgetMeshCache } = await import("../mcpl/agent.ts");
+    // a thin wall across the way, its model download held up 2.5s
+    const wallUp = await fetch(`${h.BASE}/upload?name=wall`, { method: "POST", body: await buildGlb([[-0.1, 0, -3, 0.1, 3, 3]]) });
+    const wallLib = ((await wallUp.json()) as { path: string }).path;
+    const realFetch = globalThis.fetch;
+    let delayed = 0;
+    globalThis.fetch = (async (u: any, o?: any) => {
+      if (String(u).includes(`/library/${wallLib}`)) { delayed++; await sleep(2500); }
+      return realFetch(u, o);
+    }) as typeof fetch;
+    try {
+      // round the tower to the test ground east of it
+      const there = await walk(-6, 0) && await walk(-6, 10) && await walk(19, 10);
+      check("(at the test ground, x 19)", there && Math.abs(a.pos.x - 19) < 0.05, `at (${a.pos.x.toFixed(2)}, ${a.pos.z.toFixed(2)})`);
+      const wy = a.heightAt(20, 10);
+      a.verb("spawn", { id: "wall", lib: wallLib, pos: [20, wy, 10], yaw: 0, collide: "exact" });
+      for (let i = 0; i < 40 && !a.entities.get("wall"); i++) await sleep(25);
+      const crossed = await walk(21, 10);
+      check("a wall spawned just now, its shape still downloading: a walk at it waits, then stops at it — never passes through",
+        !crossed && a.pos.x > 19 - 0.1 && a.pos.x < 19.9 && delayed > 0, `ended at x ${a.pos.x.toFixed(2)}, ${delayed} delayed fetch(es), ${a.walkStall ?? a.walkRefusal}`);
+
+      // a cold join: a body that left beside the wall comes back, and its
+      // first walk is through the wall while the wall's shape is downloading
+      await sleep(1500);                                // the server's settled memory catches the pose
+      a.close(); await sleep(500);
+      forgetMeshCache();
+      delayed = 0;
+      a = new WorldAgent({ name: "walker", world: "meshcollide", url: URL_ });
+      await a.connect();
+      const pending = a.supportPending.size, from = a.pos.x;
+      const back = await walk(21, 10);
+      check("rejoining beside it and walking at it at once: blocked by it too",
+        Math.abs(from - 19.3) < 0.7 && !back && a.pos.x < 19.9 && delayed > 0, `ended at x ${a.pos.x.toFixed(2)}, ${pending} syncs pending at the first walk, ${delayed} delayed`);
+    } finally { globalThis.fetch = realFetch; }
+  }
 } finally {
   try { a.close(); } catch { /* gone */ }
   await h.cleanup(tally.failed || process.exitCode ? 1 : 0);

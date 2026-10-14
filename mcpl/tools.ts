@@ -324,10 +324,10 @@ export const HANDLERS: Record<string, ToolHandler> = {
       const x = Number(a.x), z = Number(a.z), tolerance = a.tolerance ?? 0.01;
       if (![x, z, tolerance].every(Number.isFinite) || tolerance < 0 || tolerance > 0.4)
         return { content: [{ type: "text", text: "walk_to needs finite x/z and tolerance between 0 and 0.4 metres" }], isError: true };
-      const walking = ag.walkTo(x, z, Boolean(a.run), 90_000, tolerance);
-      const refusal = ag.walkRefusal; // capture this request's synchronous plan
-      const arrived = await walking;
-      return text(arrived ? `arrived at (${ag.pos.x.toFixed(3)}, ${ag.pos.z.toFixed(3)}); ${Math.hypot(ag.pos.x - x, ag.pos.z - z).toFixed(3)}m from requested destination` : refusal ?? ag.walkStall ?? "walk interrupted or timed out");
+      // this request's own refusal (its plan may wait for geometry still loading)
+      const receipt = { refusal: null as string | null };
+      const arrived = await ag.walkTo(x, z, Boolean(a.run), 90_000, tolerance, receipt);
+      return text(arrived ? `arrived at (${ag.pos.x.toFixed(3)}, ${ag.pos.z.toFixed(3)}); ${Math.hypot(ag.pos.x - x, ag.pos.z - z).toFixed(3)}m from requested destination` : receipt.refusal ?? ag.walkStall ?? "walk interrupted or timed out");
 
   },
   face: async (ag, a, ctx, name) => {

@@ -7,6 +7,7 @@
 import { BodyStateReader, type BodyObservation, type PublicPose } from "./body-state.ts";
 import { mentionRegex } from "./mention.ts";
 import { mergePose } from "../shared/humanoid.js";
+import { shapeParams, shapedHeightAt, gridFor, registerGrid, decodeGrid } from "../shared/terrainshape.js";
 import * as THREE_W from "three/webgpu";
 import * as TSL from "three/tsl";
 import { NoiseGate, SHORT_STINT_MS, APPROACH_REFRACT_MS, APPROACH_RADIUS, REARM_RADIUS,
@@ -1593,7 +1594,17 @@ export class WorldAgent {
       this.terrainSrc = await r.text();
       (0, eval)(this.terrainSrc);
     }
-    this.terrain = (globalThis as any).makeTerrain({ ...args, layers: [] });
+    // Placed features and heightmaps (shared/terrainshape.js): the agent stands on the same shaped law the
+    // client's mesh and the sim use. A heightmap's grid is fetched first; failing that, the noise stands.
+    const shape = shapeParams(args);
+    if (shape?.heightmap && !gridFor(shape.heightmap.grid)) {
+      try {
+        const g = await fetch(`${this.httpBase}/library/${shape.heightmap.grid}`);
+        if (g.ok) registerGrid(shape.heightmap.grid, decodeGrid(await g.json()));
+      } catch { /* the noise stands in until a rebuild */ }
+    }
+    const t = (globalThis as any).makeTerrain({ ...args, layers: [] });
+    this.terrain = shape ? { heightAt: shapedHeightAt(t.heightAt, args) } : t;
     // the settle sim clamps against the SAME ground the walking clamp reads —
     // not one height sampled at the fall site (#17)
     void setHeightField((x, z) => this.heightAt(x, z));

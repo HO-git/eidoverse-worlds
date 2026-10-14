@@ -21,6 +21,7 @@ import { prepareObject } from './materials.js';
 import { beginWork } from './loadwork.js';
 import { reindexCollider } from './colliders.js';
 import { setTerrain, setGrass, clearGrass, heightAt } from './terrain.js';
+import { shapeParams, shapedHeightAt, gridFor, registerGrid, decodeGrid } from '../../shared/terrainshape.js';
 import { buildFloraField, warmField, loadFloraModule } from './flora.js';
 import { applySky, whenSkyWarm } from './sky.js';
 import { whenBooted, bootDone } from './boot.js';
@@ -116,10 +117,22 @@ export function applyTerrainState(args) {
   lastTerrainArgs = key;
   enqueueWorldBuild('terrain', async () => {
     await loadEidoModule('terrain.js');
+    // A heightmap's grid is fetched BEFORE the build, so the ground arrives shaped rather than snapping from
+    // noise to image a moment later (and the walking heightAt never disagrees with the mesh in between).
+    const shape = shapeParams(args);
+    if (shape?.heightmap && !gridFor(shape.heightmap.grid)) {
+      try {
+        const r = await fetch(`/library/${shape.heightmap.grid}`);
+        if (!r.ok) throw new Error(`${r.status}`);
+        registerGrid(shape.heightmap.grid, decodeGrid(await r.json()));
+      } catch (e) { report(`heightmap ${shape.heightmap.grid} — building from the noise instead`, e); }
+    }
+    if (lastTerrainArgs !== key) return;   // a newer terrain arrived while the grid was in flight
     const layers = (args.layers ?? []).map((l) => ({
       map: noiseTexture(l.color ?? '#4a5d33'), repeat: l.repeat ?? 16,
     }));
     const t = globalThis.makeTerrain({ ...args, layers });
+    if (t && shape) reshapeTerrain(t, args);
     // the layer textures ride the engine's colorNode, unreachable from
     // material properties — carry them so terrain disposal can free them
     // (review S5)
@@ -155,6 +168,24 @@ export function applyTerrainState(args) {
       }
     }
   });
+}
+
+/** The authored terrain bag this client last built from — what EW.terrain(patch) edits. */
+export function currentTerrainArgs() { return lastTerrainArgs ? JSON.parse(lastTerrainArgs) : null; }
+
+/** Placed features and heightmaps (shared/terrainshape.js) over the toolkit's noise mesh: the same law the
+ *  agents and the sim ground bodies on. Every vertex re-heighted, normals redone, and the walking heightAt
+ *  swapped for the shaped one — so what you see is what you stand on. The vertex-colour layer weights stay
+ *  the toolkit's (baked from the unshaped noise); the panel's single-layer ground has none to disagree. */
+function reshapeTerrain(t, args) {
+  const hf = shapedHeightAt(t.heightAt, args);
+  const pos = t.mesh.geometry.attributes.position;
+  for (let i = 0; i < pos.count; i++) pos.setY(i, hf(pos.getX(i), pos.getZ(i)));
+  pos.needsUpdate = true;
+  t.mesh.geometry.computeVertexNormals();
+  t.mesh.geometry.computeBoundingBox();
+  t.mesh.geometry.computeBoundingSphere();
+  t.heightAt = hf;
 }
 
 // Def hot-reload (§24): the sequencer pushes `defs-updated` when a def file

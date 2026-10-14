@@ -25,6 +25,7 @@ import { resolveLibFile, libraryPath, onLadder } from "./lint.ts";
 import { summarizeGlb } from "./geometry.ts";
 import { worlds, getWorld, type World } from "./world.ts";
 import { handleUpload, optStatus, rebuildAsset } from "./upload.ts";
+import { exportHeightmap } from "./heightmap.ts";
 import { defsPayload, avatarDefs, animationDefs } from "./defs.ts";
 import { tickStats } from "./tick.ts";
 import { entryBusStats } from "./events.ts";
@@ -651,6 +652,28 @@ const ROUTES: Route[] = [
     // world log: public reads. Presence names are the same ids every join
     // snapshot already hands out; spectators and renderers appear as nothing
     // here exactly as they do in-world.
+    // A world's ground as a 16-bit grayscale PNG (server/heightmap.ts) — the export half of heightmap terrain,
+    // to edit in an image editor or Blender and bring back with POST /upload?as=heightmap. Public like the
+    // world log it is read from; never creates a world. ?res= samples a side (default 257); ?format=json
+    // answers the height range alone.
+    match: (u) => u.pathname === "/heightmap",
+    handler: ({ url }) => {
+      const name = url.searchParams.get("world") ?? "commons";
+      if (!/^[a-z0-9_-]{1,64}$/i.test(name)) return new Response("bad world name", { status: 400 });
+      if (!worlds.has(name) && !existsSync(join(WORLDS_DIR, name, "log.jsonl"))) return new Response("no such world", { status: 404 });
+      const t = getWorld(name).state.terrain;
+      if (!t) return new Response("this world has no terrain (it is flat)", { status: 404 });
+      const res = Number(url.searchParams.get("res") ?? 257);
+      const { png, meta } = exportHeightmap(t as Record<string, unknown>, Number.isFinite(res) ? res : 257, name);
+      if (url.searchParams.get("format") === "json") return Response.json(meta);
+      return new Response(png, { headers: {
+        "content-type": "image/png", "cache-control": "no-store",
+        "content-disposition": `attachment; filename="${name}-heightmap.png"`,
+        "x-terrain-min": String(meta.min), "x-terrain-max": String(meta.max), "x-terrain-size": String(meta.size),
+      } });
+    },
+  },
+  {
     match: (u) => u.pathname === "/worlds",
     handler: () => {
       const names = new Set<string>(worlds.keys());

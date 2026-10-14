@@ -13,7 +13,7 @@ import { releaseBodyGate, armBodyGate } from './lib/bodygate.js';
 import { CONFIG, bus, report, tee, colorFor } from './lib/base.js';
 import { contributeThumbnail, makeAvatar, makeCapsuleAvatar, EMOTE_ORDER } from './lib/avatar.js';
 import { updateSky, updateAutoSystems, skyArgs, setCloudQuality } from './lib/sky.js';
-import { setSkyArgsSource, entities, buildsPending, avatarMounts, roleOf, worldHasOwner } from './lib/world.js';
+import { setSkyArgsSource, entities, buildsPending, avatarMounts, roleOf, worldHasOwner, currentTerrainArgs } from './lib/world.js';
 import { presence } from './lib/presence.js';
 import { initWorldQuad } from './lib/worldquad.js';
 import { foldParity } from './lib/parity.js';
@@ -847,6 +847,18 @@ const EW = globalThis.EW = {
     return myState.pose;
   },
   clearPose: (target = null) => { if (target) sendPuppet(target, { pose: {} }); else myState.pose = null; },
+  // TERRAIN (owner): EW.terrain(patch) edits the world's CURRENT terrain bag rather than replacing it, so
+  //   EW.terrain({ features: [{ type: 'hill', x: 30, z: -20, radius: 18, height: 9 }] })
+  // keeps the seed, size and tint. Feature types (shared/terrainshape.js): hill {x,z,radius,height} (negative
+  // = pit), ridge {x1,z1,x2,z2,radius,height} (negative = valley), flatten {x,z,radius,height,edge?}.
+  // Heightmaps: the 🌿 ground panel's ⬇ export / ⬆ import, or GET /heightmap?world=<name>.
+  terrain: (patch = {}) => {
+    const cur = currentTerrainArgs() ?? { seed: 7, size: 160, segments: 200, amplitude: 2.6, flatRadius: 16 };
+    const next = { ...cur, ...patch };
+    sendVerb('terrain', next);
+    return next;
+  },
+  get terrainArgs() { return currentTerrainArgs(); },
   animate: (data, { replace = data?.replace === true, target = null } = {}) => {   // replace may ride in the data too
     const a = { ...data, replace: !!replace };
     if (target) return sendPuppet(target, { anim: a });

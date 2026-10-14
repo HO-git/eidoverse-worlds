@@ -78,7 +78,20 @@ const SUBSTEP = NAV_SUBSTEP;
 const COARSE = 0.1;
 const DIRS: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 
-export function makeNavGrid(probe: NavProbe) {
+/** Probes one plan may make — line checks and column reads included, not
+ *  just A* expansions — so no destination, however far, can hold the event
+ *  loop. Past it the plan is refused. */
+export const NAV_MAX_PROBES = 200_000;
+/** Columns a grid remembers before starting over (it is only a cache). */
+const NAV_MAX_COLUMNS = 300_000;
+const OVER_BUDGET = new Error("navgrid: over budget");
+
+export function makeNavGrid(raw: NavProbe) {
+  let budget = Infinity;
+  const probe: NavProbe = {
+    surfaceUnder: (x, z, m) => { if (--budget < 0) throw OVER_BUDGET; return raw.surfaceUnder(x, z, m); },
+    stand: (x, y, z) => { if (--budget < 0) throw OVER_BUDGET; return raw.stand(x, y, z); },
+  };
   const cols = new Map<string, number[]>();
 
   /** Standing heights in lattice column (i, j), highest first. */
@@ -99,6 +112,7 @@ export function makeNavGrid(probe: NavProbe) {
       maxY = y - 0.02;
     }
     out.sort((a, b) => b - a);
+    if (cols.size >= NAV_MAX_COLUMNS) { cols.clear(); steps.clear(); level.clear(); }
     cols.set(key, out);
     return out;
   }
@@ -119,6 +133,19 @@ export function makeNavGrid(probe: NavProbe) {
   }
 
   const steps = new Map<string, boolean>();
+  const level = new Map<string, boolean>();
+  /** A level move still needs floor between its two columns: two slabs at
+   *  one height with a gap between them are two places to stand, not a
+   *  path. The midpoint must hold the body up, at that height, unpushed. */
+  function levelOK(i0: number, j0: number, i1: number, j1: number, y: number): boolean {
+    const k = `${i0},${j0}>${i1},${j1},${Math.round(y * 100)}`;
+    let ok = level.get(k);
+    if (ok === undefined) {
+      const st = probe.stand((at(i0) + at(i1)) / 2, y, (at(j0) + at(j1)) / 2);
+      level.set(k, ok = st.push < NAV_NUDGE && Math.abs(st.ground - y) < 0.05);
+    }
+    return ok;
+  }
   /** Can the feet get from one column's height to a neighbour's? Cached: the
    *  answer is as durable as the columns. */
   function stepOK(i0: number, j0: number, y0: number, i1: number, j1: number, y1: number): boolean {
@@ -221,12 +248,34 @@ export function makeNavGrid(probe: NavProbe) {
    *  a point inside a wall is reached on the side the body is already on,
    *  not round by the door. */
   function route(from: NavPoint, to: { x: number; z: number; y?: number; reach?: number; above?: number }): NavResult {
+    budget = NAV_MAX_PROBES;
+    try { return routeIn(from, to); }
+    catch (err) {
+      if (err !== OVER_BUDGET) throw err;
+      return { refusal: `too far to plan through what is placed in one go (${Math.hypot(to.x - from.x, to.z - from.z).toFixed(0)}m) — walk part of the way first` };
+    } finally { budget = Infinity; }
+  }
+
+  function routeIn(from: NavPoint, to: { x: number; z: number; y?: number; reach?: number; above?: number }): NavResult {
     const start = standingNear(from.x, from.z, (ls) => nearestOf(ls, from.y, NAV_STEP), from.y)[0];
     if (!start) return { refusal: `nowhere to stand within 0.6m of where the body is (${from.x.toFixed(2)}, ${from.y.toFixed(2)}, ${from.z.toFixed(2)})` };
     const want = to.y != null && Number.isFinite(to.y) ? to.y : null;
     // the destination itself when its own lattice cell stands (arriving there
     // IS arriving at the point asked for), else the spot
-    const exactOf = (g: Spot) => Math.abs(to.x - at(g.i)) <= NAV_CELL / 2 && Math.abs(to.z - at(g.j)) <= NAV_CELL / 2;
+    const exactAt = new Map<number, boolean>();
+    const exactOf = (g: Spot) => {
+      if (Math.abs(to.x - at(g.i)) > NAV_CELL / 2 || Math.abs(to.z - at(g.j)) > NAV_CELL / 2) return false;
+      // its cell standing is no proof the point itself does — a point a
+      // hand's width inside a box is beside a cell that stands
+      let ok = exactAt.get(g.y);
+      if (ok === undefined) {
+        const st = probe.stand(to.x, g.y, to.z);
+        ok = st.push < NAV_NUDGE && Math.abs(st.ground - g.y) < 0.05
+          && walkable({ x: at(g.i), y: g.y, z: at(g.j) }, { x: to.x, y: g.y, z: to.z });
+        exactAt.set(g.y, ok);
+      }
+      return ok;
+    };
     const spots = spotsNear(to.x, to.z, to.reach ?? 0.6);
     const sameStorey = spots.some((g) => Math.abs(g.y - from.y) <= NAV_STEP);
     // the floor y picks: of every place to stand near the point (not column
@@ -312,7 +361,7 @@ export function makeNavGrid(probe: NavProbe) {
         // between them would be within reach of both); a change of height can
         // — a floor edge in the hip band of a body on the tread below — so
         // those moves are stepped the way the feet will step them
-        if (Math.abs(y - n.y) > 0.01 && !stepOK(n.i, n.j, n.y, i, j, y)) continue;
+        if (Math.abs(y - n.y) > 0.01 ? !stepOK(n.i, n.j, n.y, i, j, y) : !levelOK(n.i, n.j, i, j, y)) continue;
         const g = n.g + Math.hypot(di * NAV_CELL, dj * NAV_CELL, y - n.y);
         const kk = key(i, j, y);
         if (g >= (best.get(kk) ?? Infinity)) continue;
@@ -326,7 +375,9 @@ export function makeNavGrid(probe: NavProbe) {
         `within ${w.toFixed(0)}×${d.toFixed(0)}m around the walk — it may be sealed off, or reached only by a climb or drop of more than ${NAV_STEP}m` };
     }
     const path: NavPoint[] = [];
-    for (let n: Node | null = reached.parent; n; n = n.parent) path.push({ x: at(n.i), y: n.y, z: at(n.j) });
+    // from the goal itself (the finished node stands on it), so the last
+    // turn the search made survives when the goal is replaced below
+    for (let n: Node | null = reached; n; n = n.parent) path.push({ x: at(n.i), y: n.y, z: at(n.j) });
     path.reverse();
     if (path.length < 2) path.push(path[0]);       // start and goal share a cell
     path[0] = startP;

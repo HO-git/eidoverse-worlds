@@ -48,13 +48,13 @@ export function boxMesh(list: Box[]) {
   return { pos: new Float32Array(pos), idx: new Uint32Array(idx) };
 }
 
-/** A GLB whose one mesh sits under a translated parent node (so the world
- *  matrix matters), with an orphan mesh node outside the scene. */
-/** `building`: a description the model carries of itself (rooms, portals,
- *  seats, arrivals), stored in the root node's extras as a JSON string —
- *  the way Blender exports a custom property — where mcpl/places.ts reads
- *  named places from. */
-export async function buildGlb(list: Box[], { draco = false, lift = 0, building = null as unknown } = {}) {
+/** A GLB whose one mesh sits under a parent node lifted `lift` (and the mesh
+ *  itself shifted `shift` along x — both default 0), with an orphan mesh node
+ *  outside the scene. `building`: a description the model carries of itself
+ *  (rooms, portals, seats, arrivals), stored in the root node's extras as a
+ *  JSON string — the way Blender exports a custom property — where
+ *  mcpl/places.ts reads named places from. */
+export async function buildGlb(list: Box[], { draco = false, lift = 0, shift = 0, building = null as unknown } = {}) {
   const doc = new Document();
   const buf = doc.createBuffer();
   const make = (l: Box[]) => {
@@ -65,7 +65,7 @@ export async function buildGlb(list: Box[], { draco = false, lift = 0, building 
   };
   const parent = doc.createNode("lift").setTranslation([0, lift, 0]);
   if (building) parent.setExtras({ building: JSON.stringify(building) });
-  parent.addChild(doc.createNode("building").setMesh(make(list)).setTranslation([0, -lift, 0]));
+  parent.addChild(doc.createNode("building").setMesh(make(list)).setTranslation([shift, 0, 0]));
   doc.createScene("s").addChild(parent);
   doc.createNode("orphan").setMesh(make([[50, 0, 50, 51, 1, 51]]));
   if (draco) doc.createExtension(KHRDracoMeshCompression).setRequired(true)

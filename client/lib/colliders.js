@@ -514,6 +514,17 @@ export function entityWorldCenter(id, out = new THREE.Vector3()) {
   return out;
 }
 
+// ---- scope: whose world a query is about -----------------------------------
+// A browser holds one world's colliders. An agent process can hold several —
+// agents in different worlds share one module — so its entries carry the
+// world they belong to (`entry.scope`, set by mcpl/physics.ts), and while a
+// scope is active every neighbourhood query sees only that world's entries
+// and unscoped ones. A browser never sets one: nothing changes there.
+let activeScope = null;
+export function setColliderScope(s) { activeScope = s ?? null; }
+export const colliderScope = () => activeScope;
+const inScope = (e) => activeScope === null || e.scope == null || e.scope === activeScope;
+
 function* near(x, z) {
   const cx = Math.floor(x / CELL), cz = Math.floor(z / CELL);
   for (let i = -1; i <= 1; i++) {
@@ -522,7 +533,7 @@ function* near(x, z) {
       if (!s) continue;
       for (const id of s) {
         const e = colliders.get(id);
-        if (e) yield e;
+        if (e && inScope(e)) yield e;
       }
     }
   }
@@ -547,7 +558,7 @@ export function* nearColliders(x, z, r = CELL) {
         if (_seen.has(id)) continue;
         _seen.add(id);
         const e = colliders.get(id);
-        if (e) yield [id, e];
+        if (e && inScope(e)) yield [id, e];
       }
     }
   }
@@ -606,7 +617,7 @@ export function raySegment(origin, dir, far) {
         if (_rsSeen.has(id)) continue;
         _rsSeen.add(id);
         const e = colliders.get(id);
-        if (!e || e.camGhost || e.mask || !e.box) continue;
+        if (!e || e.camGhost || e.mask || !e.box || !inScope(e)) continue;
         const o = e.obj;
         const s = o.scale?.x || 1;
         const yaw = o.rotation?.y ?? 0;

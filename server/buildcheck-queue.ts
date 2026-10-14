@@ -9,14 +9,15 @@
 // checked again however its timestamps read, and a store upload (content-
 // addressed) is checked once. The digest itself is remembered per path
 // against size, mtime, ctime and inode, so an unchanged file isn't re-read on
-// every ask; restoring an mtime moves the ctime, so it can't fake that.
+// every ask; restoring an mtime moves the ctime, so it can't fake that. The
+// worker checks a snapshot of the hashed bytes, never the path itself.
 // Concurrent asks for one check share the run.
 //
 // The worker is owned to the end: its output is drained (stdout up to a cap,
 // stderr's tail kept), it is asked to stop at the timeout and killed after a
 // grace, and the queue moves on even if it is never seen to exit.
 
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { OPT_DIR, ROOT } from "./config.ts";
 import { atomicWrite } from "./fsutil.ts";
@@ -50,44 +51,66 @@ export function checkScale(s: unknown): number {
   return Math.round(Math.min(CHECK_SCALE.max, Math.max(CHECK_SCALE.min, n)) * 100) / 100;
 }
 
-function digestOf(file: string): string {
-  const st = statSync(file);
-  const id = `${st.size}|${st.mtimeMs}|${st.ctimeMs}|${st.ino}`;
-  const known = digests.get(file);
-  if (known?.id === id) return known.digest;
-  const digest = new Bun.CryptoHasher("sha256").update(readFileSync(file)).digest("hex");
-  digests.set(file, { id, digest });
-  return digest;
-}
+const sha256 = (bytes: Uint8Array) => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+const statId = (file: string) => { const st = statSync(file); return `${st.size}|${st.mtimeMs}|${st.ctimeMs}|${st.ino}`; };
 
 /** The build check for the model at `file`, at `scale` — cached, else run
  *  (queued behind any check already running). Rejects when the model can't
- *  be checked. */
-export function checkFile(file: string, scale = 1): Promise<unknown> {
-  let digest: string;
-  try { digest = digestOf(file); } catch { return Promise.reject(new Error("no such file")); }
+ *  be checked. `bytes`: the file's contents when the caller already holds
+ *  them (an upload), so they are not read again.
+ *
+ *  A report answers for exactly the bytes its key names: the worker never
+ *  opens `file` — it checks a snapshot of the bytes that were hashed, so a
+ *  file replaced while its check waits in the queue cannot have its report
+ *  filed under the old digest. */
+export async function checkFile(file: string, scale = 1, bytes?: Uint8Array): Promise<unknown> {
   const s = checkScale(scale);
+  let id: string;
+  try { id = statId(file); } catch { throw new Error("no such file"); }
+  // an unchanged file is answered without reading it
+  const known = digests.get(file);
+  if (!bytes && known?.id === id) {
+    const hit = cached(`${CHECK_VERSION}|${known.digest}|${s}`);
+    if (hit !== undefined) return hit;
+  }
+  // otherwise its bytes, read once (asynchronously), name the check
+  const data = bytes ?? new Uint8Array(await Bun.file(file).arrayBuffer());
+  const digest = sha256(data);
+  digests.set(file, { id, digest });   // the id from before the read: a change during it shows next time
   const key = `${CHECK_VERSION}|${digest}|${s}`;
-  if (memo.has(key)) return Promise.resolve(memo.get(key));
-  try {
-    const d = JSON.parse(readFileSync(diskPath(key), "utf8"));
-    if (d?.key === key) { memo.set(key, d.report); return Promise.resolve(d.report); }
-  } catch { /* not checked yet */ }
+  const hit = cached(key);
+  if (hit !== undefined) return hit;
   const inflight = running.get(key);
   if (inflight) return inflight;
+  // frozen: the worker reads this copy, never the mutable path
+  const jobs = join(OPT_DIR, "checks", "jobs");
+  mkdirSync(jobs, { recursive: true });
+  const snapshot = join(jobs, `${Bun.hash(key).toString(16)}.glb`);
+  const frozen = Bun.write(snapshot, data);
   const run = queue.then(async () => {
-    const report: any = await runWorker(file, s);
-    memo.set(key, report);
+    await frozen;
     try {
-      if (!existsSync(join(OPT_DIR, "checks"))) mkdirSync(join(OPT_DIR, "checks"), { recursive: true });
-      atomicWrite(diskPath(key), JSON.stringify({ key, version: CHECK_VERSION, digest, scale: s, file, report }));
-    } catch { /* memory still has it */ }
-    return report;
+      const report: any = await runWorker(snapshot, s);
+      memo.set(key, report);
+      try { atomicWrite(diskPath(key), JSON.stringify({ key, version: CHECK_VERSION, digest, scale: s, file, report })); }
+      catch { /* memory still has it */ }
+      return report;
+    } finally { try { unlinkSync(snapshot); } catch { /* gone */ } }
   });
   running.set(key, run);
   queue = run.catch(() => {});
   void run.finally(() => running.delete(key)).catch(() => {});
   return run;
+}
+
+/** A stored report for this key, from memory or disk; undefined if none. */
+function cached(key: string): unknown {
+  if (memo.has(key)) return memo.get(key);
+  try {
+    const d = JSON.parse(readFileSync(diskPath(key), "utf8"));
+    if (d?.key === key) { memo.set(key, d.report); return d.report; }
+  } catch { /* not checked yet */ }
+  return undefined;
 }
 
 /** Read a stream to its end, keeping at most `cap` bytes (the head, or with

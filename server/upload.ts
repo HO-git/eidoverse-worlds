@@ -634,6 +634,6 @@ export async function handleUpload(req: Request, url: URL, srv: UploadSrv): Prom
   console.log(`[upload] model ${rel}${upName ? ` ("${upName}")` : ""} (${(body.length / 1e6).toFixed(1)}MB) by ${upBy}`);
   // the build check starts now and never holds the upload up or refuses it:
   // its report is advice, waiting at `check` (server/buildcheck.ts)
-  void checkFile(join(OPT_DIR, rel)).catch((err) => console.warn(`[check] ${rel}: ${String(err?.message ?? err)}`));
+  void checkFile(join(OPT_DIR, rel), 1, body).catch((err) => console.warn(`[check] ${rel}: ${String(err?.message ?? err)}`));
   return new Response(JSON.stringify({ path: rel, check: `/check?lib=${encodeURIComponent(rel)}` }), { headers: { "content-type": "application/json" } });
 }

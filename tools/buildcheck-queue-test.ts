@@ -47,6 +47,27 @@ try {
     check("putting the original back answers from the cache at once", third.ok && JSON.stringify((third as any).r) === JSON.stringify((first as any).r));
   }
 
+  console.log("\nthe bytes that were asked about, not the bytes there later:");
+  {
+    // a worker that reports what it read, slowly enough to queue behind
+    Q.checkConfig.runner = worker("seer", `await Bun.sleep(400); console.log(JSON.stringify({ seen: await Bun.file(process.argv[2]).text() }));`);
+    const f = join(dir, "mutable.glb");
+    writeFileSync(f, "PPPP");
+    const ahead = Q.checkFile(f, 4);           // occupies the worker
+    writeFileSync(f, "AAAA");
+    const askA = Q.checkFile(f, 4.5);          // A is hashed now, its check waits in the queue
+    await Bun.sleep(50);
+    writeFileSync(f, "BBBB");                  // replaced before A's worker starts
+    const [, first] = await Promise.all([outcome(ahead), outcome(askA)]);
+    writeFileSync(f, "AAAA");                  // the original back
+    const second = await outcome(Q.checkFile(f, 4.5));
+    check("a file replaced while its check is queued: the report is of the bytes that were asked about",
+      first.ok && (first as any).r.seen === "AAAA", JSON.stringify(first));
+    check("...so the original's bytes, put back, get the original's report — never the replacement's",
+      second.ok && (second as any).r.seen === "AAAA", JSON.stringify(second));
+    Q.checkConfig.runner = real;
+  }
+
   console.log("\nthe worker, owned to the end:");
   Q.checkConfig.timeoutMs = 1500; Q.checkConfig.graceMs = 500;
   const pidFile = join(dir, "pid");
@@ -80,6 +101,9 @@ setInterval(() => {}, 1000);`);
     const r = await outcome(Q.checkFile(f2));
     check("the next ordinary check runs and answers", r.ok && Array.isArray((r as any).r.levels), JSON.stringify(r).slice(0, 160));
   }
+  const { readdirSync } = await import("node:fs");
+  const left = readdirSync(join(dir, "opt", "checks", "jobs"));
+  check("no job snapshots are left behind, finished or failed", left.length === 0, left.join(","));
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

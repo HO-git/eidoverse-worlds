@@ -7,7 +7,8 @@
 import { BodyStateReader, type BodyObservation, type PublicPose } from "./body-state.ts";
 import { mentionRegex } from "./mention.ts";
 import { mergePose } from "../shared/humanoid.js";
-import { shapeParams, shapedHeightAt, gridFor, registerGrid, decodeGrid, waterParams, wadeAllowed, WADE_DEPTH } from "../shared/terrainshape.js";
+import { shapeParams, shapedHeightAt, gridFor, registerGrid, decodeGrid, waterParams, waterStance, SWIM_SPEED, SWIM_RUN } from "../shared/terrainshape.js";
+import { bodyHeightFor } from "./rigbones.ts";
 import { analyzeWater, compass } from "../shared/waterkind.js";
 import * as THREE_W from "three/webgpu";
 import * as TSL from "three/tsl";
@@ -239,7 +240,9 @@ export class WorldAgent {
    * this immediately after walkTo() so a later replacement walk cannot change
    * its refusal receipt. */
   walkRefusal: string | null = null;
-  /** Why the last walk stopped short, when something stopped it mid-way (the water's edge). */
+  /** This body's standing height (rigbones.ts bodyHeightFor) — what water depth is measured against. */
+  bodyH: number | null = null;
+  /** Why the last walk stopped short, when something stopped it mid-way. */
   walkStopReason: string | null = null;
   /** The world's water (shared/terrainshape.js), from the terrain bag; null when it has none. */
   water: { level: number } | null = null;
@@ -1613,6 +1616,7 @@ export class WorldAgent {
     const t = (globalThis as any).makeTerrain({ ...args, layers: [] });
     this.terrain = shape ? { heightAt: shapedHeightAt(t.heightAt, args) } : t;
     this.water = waterParams(args);
+    if (this.water && this.bodyH == null) this.bodyH = await bodyHeightFor(this.httpBase, this.avatar) ?? 1.7;
     const size = typeof args?.size === "number" ? args.size : 80;
     this.waterKinds = this.water
       ? analyzeWater((x, z) => this.heightAt(x, z), size, { level: this.water.level, kind: args.water?.kind, flow: args.water?.flow },
@@ -1866,24 +1870,20 @@ export class WorldAgent {
           this.walkDone?.(true); this.walkDone = null;
         }
       } else {
-        const sp = this.target.run ? RUN : WALK;
-        this.speed = sp; this.clip = this.target.run ? "run" : "walk";
+        // WATER (shared/terrainshape.js waterStance), the browser's rule: wading drags — knee-deep ~0.86,
+        // waist-deep ~0.6, chest-deep 0.5 — and past the chest the body floats and swims at a stroke's
+        // pace. Nothing walls the walk off any more; water is slow, not shut.
+        let sp = this.target.run ? RUN : WALK;
+        let swimming = false;
+        if (this.water) {
+          const ground = admittedHeight ?? ((x: number, z: number) => this.heightAt(x, z));
+          const st = waterStance(this.water.level, ground(this.pos.x, this.pos.z), this.bodyH ?? 1.7);
+          swimming = st.swimming;
+          sp = swimming ? (this.target.run ? SWIM_RUN : SWIM_SPEED) : sp * st.speedFactor!;
+        }
+        this.speed = sp; this.clip = swimming ? "swim" : this.target.run ? "run" : "walk";
         this.yaw = Math.atan2(dx, dz);
         const step = Math.min(dist, sp * dt);
-        // WADING, the same rule the browser's controller applies: water to the waist and no deeper (no
-        // swimming yet). The walk stops at the edge and says why, rather than marching along a lakebed.
-        if (this.water) {
-          const nx = step === dist ? this.target.x : this.pos.x + (dx / dist) * step;
-          const nz = step === dist ? this.target.z : this.pos.z + (dz / dist) * step;
-          const ground = admittedHeight ?? ((x: number, z: number) => this.heightAt(x, z));
-          const to = ground(nx, nz);
-          if (!wadeAllowed(this.water.level, ground(this.pos.x, this.pos.z), to)) {
-            this.walkStopReason = `stopped at the water's edge at (${this.pos.x.toFixed(1)}, ${this.pos.z.toFixed(1)}): `
-              + `the water ahead is ${(this.water.level - to).toFixed(2)}m deep, and a body wades only to ${WADE_DEPTH}m — there is no swimming yet. Walk around it.`;
-            this.target = null; this.legs = []; this.walkHeightAt = null; this.speed = 0; this.clip = "idle";
-            this.walkDone?.(false); this.walkDone = null;
-          }
-        }
         if (this.target && step === dist) {
           // Land on the validated point exactly, rather than allowing a
           // tolerance or floating residual to cut the next corner.
@@ -1897,7 +1897,15 @@ export class WorldAgent {
     // a tumbling, lying, dragged, nailed or FLYING body owns its own y — the
     // terrain clamp is for FEET, and none of those states is standing on them
     if (!this.draggedBy && this.pins.size === 0 && this.clip !== "ragdoll" && !this.flight) {
-      this.pos.y = admittedHeight ? admittedHeight(this.pos.x,this.pos.z) : this.heightAt(this.pos.x, this.pos.z);
+      const groundY = admittedHeight ? admittedHeight(this.pos.x,this.pos.z) : this.heightAt(this.pos.x, this.pos.z);
+      if (this.water) {
+        // feet on the bed, or floating with the chest at the surface; a body standing still out of its
+        // depth treads water
+        const st = waterStance(this.water.level, groundY, this.bodyH ?? 1.7);
+        this.pos.y = st.y;
+        if (st.swimming && !this.target && (this.clip === "idle" || this.clip === "walk" || this.clip === "run")) this.clip = "tread";
+        else if (!st.swimming && (this.clip === "tread" || this.clip === "swim")) this.clip = this.target ? "walk" : "idle";
+      } else this.pos.y = groundY;
     }
     // FLIGHT: one fixed-step integration of shared/flight.js per tick, and the
     // body's position is whatever it says. The integrator is the same function
@@ -3274,14 +3282,17 @@ export class WorldAgent {
   }
 
 
-  /** ", standing in a river 0.6m deep, flowing east" — or "" on dry ground. */
-  private waterHere(x: number, z: number, y: number): string {
-    if (!this.water || this.water.level <= y + 0.02) return "";
-    const d = (this.water.level - y).toFixed(1), w = this.waterKinds?.sample(x, z);
-    if (w?.kind === "river" && w.flow) return `, standing in a river ${d}m deep, flowing ${compass(w.flow[0], w.flow[1])}`;
-    if (w?.kind === "ocean" && w.toShore) return `, standing in the sea ${d}m deep, the waves coming in from the ${compass(-w.toShore[0], -w.toShore[1])}`;
-    if (w?.kind === "still") return `, standing in still water ${d}m deep`;
-    return `, standing in water ${d}m deep`;
+  /** ", standing in a river 0.6m deep, flowing east" / ", swimming in the sea, 4.2m deep, …" — or "" on
+   *  dry ground. Depth is over the BED (a swimmer's feet are not on it). */
+  private waterHere(x: number, z: number, _y: number): string {
+    if (!this.water) return "";
+    const st = waterStance(this.water.level, this.heightAt(x, z), this.bodyH ?? 1.7);
+    if (st.depth <= 0.02) return "";
+    const d = st.depth.toFixed(1), w = this.waterKinds?.sample(x, z), verb = st.swimming ? "swimming" : "standing";
+    if (w?.kind === "river" && w.flow) return `, ${verb} in a river ${d}m deep, flowing ${compass(w.flow[0], w.flow[1])}`;
+    if (w?.kind === "ocean" && w.toShore) return `, ${verb} in the sea ${d}m deep, the waves coming in from the ${compass(-w.toShore[0], -w.toShore[1])}`;
+    if (w?.kind === "still") return `, ${verb} in still water ${d}m deep`;
+    return `, ${verb} in water ${d}m deep`;
   }
 
   /** One line on the world's water bodies, largest first, for `look`. */
@@ -3296,7 +3307,7 @@ export class WorldAgent {
       if (b.kind === "ocean") return `the sea, along the world's edge (${Math.round(b.area)}m²)`;
       return `${b.area > 1500 ? "a lake" : "a pond"} (${Math.round(b.area)}m²) around ${at(b.cells[Math.floor(b.cells.length / 2)])}`;
     };
-    return `Water: ${big.map(say).join("; ")}${A.bodies.length > big.length ? `; and ${A.bodies.length - big.length} smaller puddles` : ""}. Bodies wade to ${WADE_DEPTH}m; there is no swimming yet.`;
+    return `Water: ${big.map(say).join("; ")}${A.bodies.length > big.length ? `; and ${A.bodies.length - big.length} smaller puddles` : ""}. Bodies wade to their chest (slower the deeper), then swim (slower still).`;
   }
 
   look(nowMs = this.serverNow()): string {
@@ -3318,7 +3329,7 @@ export class WorldAgent {
     const selfSeatNote = selfEff?.ok && selfEff.seat?.state === "approximate" ? ` (seat approximate: ${selfEff.seat.reason})` : "";
     const seated = selfRide ? `, seated on ${selfRide.to}${selfEff?.ok && selfEff.moving ? ` (riding its ${selfEff.moving})` : ""}${selfSeatNote}` : "";
     if (meKnown) {
-      L.push(`You are "${this.name}" in world "${this.world}" at (${me.x.toFixed(1)}, ${me.z.toFixed(1)}), ground height ${me.y.toFixed(2)}m${this.waterHere(me.x, me.z, me.y)}, facing ${this.bearing(Math.sin(this.yaw), Math.cos(this.yaw))}${seated}.`);
+      L.push(`You are "${this.name}" in world "${this.world}" at (${me.x.toFixed(1)}, ${me.z.toFixed(1)}), ground height ${(this.water && waterStance(this.water.level, this.heightAt(me.x, me.z), this.bodyH ?? 1.7).swimming ? this.heightAt(me.x, me.z) : me.y).toFixed(2)}m${this.waterHere(me.x, me.z, me.y)}, facing ${this.bearing(Math.sin(this.yaw), Math.cos(this.yaw))}${seated}.`);
     } else {
       L.push(`You are "${this.name}" in world "${this.world}", position unknown (${selfEff && !selfEff.ok ? selfEff.why : "seat unresolved"}), facing ${this.bearing(Math.sin(this.yaw), Math.cos(this.yaw))}${seated}. Distances are withheld until your seat resolves — dismount {id: "${this.name}"} restores a stamped position.`);
     }

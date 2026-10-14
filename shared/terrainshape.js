@@ -164,14 +164,19 @@ export function shapeHeight(base, S, size) {
 // rendered by every client, read by every agent, and (v1) ignored by the sim —
 // a thrown thing still lands on the lakebed.
 //
-// There is no swimming yet, so a body WADES: water up to WADE_DEPTH metres
-// (scaled by the body's size) and no deeper. A step that would go deeper AND
-// deeper than where it stands is refused, so a body the water rose over can
-// always walk back out. The client's controller and the agents' walk both read
-// this one number.
+// A body WADES until the water is at its chest, then SWIMS (waterStance): its feet leave the bed and it
+// floats with head and shoulders above the surface. Wading is slower the deeper it gets; swimming is
+// slower still. Nothing is walled off: the old 1 m wading wall is gone (wadeAllowed/waterBlocks now
+// always allow), and a planner prices water instead (waterCost). The client's controller and the agents'
+// walk both read these, from the body's own height.
+export const SWIM_AT = 0.75;        // of body height: deeper than this at the feet, the body floats (the chest)
+export const SWIM_SPEED = 0.9;      // m/s, a steady stroke
+export const SWIM_RUN = 1.5;        // m/s, swimming hard (shift)
+export const WALK_SPEED = 1.55;     // the walking pace waterCost prices against
+/** @deprecated wading has no depth limit now — kept so callers of the old rule still read one. */
 export const WADE_DEPTH = 1.0;
+const sm01 = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
 const HEX = /^#[0-9a-fA-F]{6}$/;
-
 /** A world's water, normalized — or null when it has none.
  *  @param {Record<string, any>} a  terrain-verb args */
 export function waterParams(a) {
@@ -184,12 +189,31 @@ export function waterParams(a) {
   };
 }
 
-/** May a body step from ground height `from` to `to` under water at `level`? */
-export function wadeAllowed(level, from, to, scale = 1) {
-  if (level == null) return true;
-  const dTo = level - to;
-  return dTo <= WADE_DEPTH * scale || dTo <= level - from;
+/** How a body of `height` metres stands where the ground is at `ground`, under water at `level`:
+ *  `y` is where its feet go (the bed, or — swimming — the depth that keeps its chest at the surface),
+ *  `depth` the water over the bed, `swimming` whether it floats, and `speedFactor` its walking speed
+ *  in that water (knee-deep ~0.86, waist-deep ~0.61, chest-deep 0.5; null while swimming — swim
+ *  speeds apply instead). No water: the ground, at full speed. */
+export function waterStance(level, ground, height = 1.7) {
+  if (level == null) return { y: ground, depth: 0, swimming: false, speedFactor: 1 };
+  const depth = level - ground, floatY = level - SWIM_AT * height;
+  if (ground < floatY) return { y: floatY, depth, swimming: true, speedFactor: null };
+  const f = (depth > 0 ? depth : 0) / height;
+  return { y: ground, depth, swimming: false, speedFactor: 1 - 0.5 * sm01((f - 0.08) / 0.67) };
 }
+
+/** How much longer a metre takes here than on dry ground — the planner's price for water. 1 dry;
+ *  ~2 chest-deep; ~1.7 swimming (a 0.9 m/s stroke against a 1.55 m/s walk). */
+export function waterCost(level, ground, height = 1.7) {
+  const s = waterStance(level, ground, height);
+  return s.swimming ? WALK_SPEED / SWIM_SPEED : 1 / s.speedFactor;
+}
+
+/** @deprecated swimming means no step is refused; kept so the old callers read "allowed". */
+export function wadeAllowed() { return true; }
+/** The one place a route planner asks whether water blocks a move: with swimming, it never does —
+ *  ask waterCost for what the water costs instead. */
+export function waterBlocks() { return false; }
 
 /** The shaped heightAt for terrain-verb args over a base law — or the base
  *  itself when the args shape nothing. What the client and agents call. */

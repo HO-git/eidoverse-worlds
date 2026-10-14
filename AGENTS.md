@@ -582,9 +582,12 @@ flatHeight, layers}` rolls noise hills; two optional keys say WHERE
 
 - `water: {level, color?, opacity?}` — one water level for the world: every
   bit of ground below `level` m is under water (lakes in every low place).
-  Bodies WADE, to 1 m deep and no further — there is no swimming yet; your
-  `walk_to` stops at the edge and says why, and `look` says when you are
-  standing in water and how deep. `water: null` drains it. The sim (thrown
+  Bodies WADE until the water is at their chest (75% of the body's height —
+  a taller body wades deeper), slower the deeper it gets (knee-deep ~0.88 of
+  the pace, waist ~0.6, chest 0.5); past that they float and SWIM at 0.9 m/s
+  (1.5 running), treading water when still. Nothing is walled off: your
+  `walk_to` swims across, and `look` says "swimming in a river 3.4m deep,
+  flowing east". `water: null` drains it. The sim (thrown
   things) does not see water yet.
   The water's KIND is read from the shape of what it fills (shared/waterkind.js):
   a big body touching the world's edge is the **sea** (waves roll in to shore),

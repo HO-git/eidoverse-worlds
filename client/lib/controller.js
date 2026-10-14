@@ -10,7 +10,7 @@ import { THREE, camera, canvas } from './core.js';
 import { CONFIG, angleDelta, bus } from './base.js';
 import { heightAt } from './terrain.js';
 import { waterLevel } from './water.js';
-import { wadeAllowed } from '../../shared/terrainshape.js';
+import { waterStance, SWIM_SPEED, SWIM_RUN } from '../../shared/terrainshape.js';
 import { resolveColliders, lastBlockedTop, findSeat, raySegment } from './colliders.js';
 import { scaledSpeed, colliderFor, deskEyeY, canMantle, mantleStep } from './bodyscale.js';   // this body's chosen size: stride, capsule, eye
 import { chat } from './chat.js';
@@ -92,8 +92,6 @@ export function setMeHook(fn) { meRef = typeof fn === 'function' ? fn : (() => n
 // probing with the live body would shove the flier sideways and steal the
 // mantle probe the walk path reads on the same frame.
 const _gp = new THREE.Vector3();
-const _wadeFrom = new THREE.Vector3();
-let _wadeHintAt = 0;
 function groundUnder(pos) {
   _gp.set(pos.x, pos.y, pos.z);
   const g = resolveColliders(_gp, heightAt);
@@ -550,7 +548,16 @@ export function updateMe(dt, me) {
   // Piecewise: 0→0.5 ramps to walk (1.55), 0.5→1 ramps walk→run (4.0). Desktop keeps shift/alt.
   const vrSpeed = mag <= 0.5 ? 1.55 * (mag / 0.5) : 1.55 + (4.0 - 1.55) * ((mag - 0.5) / 0.5);
   // the chosen size (Profile › Avatar, bodyscale.js): stride grows with the legs, so a 150% body walks 150% as fast
-  const target = moving ? scaledSpeed(xrIntent.active ? vrSpeed : (creeping ? 0.55 : running ? 4.0 : 1.55) * mag, me.userScale) : 0;
+  let target = moving ? scaledSpeed(xrIntent.active ? vrSpeed : (creeping ? 0.55 : running ? 4.0 : 1.55) * mag, me.userScale) : 0;
+  // WATER (shared/terrainshape.js waterStance): wading drags — knee-deep ~0.86 of the pace, waist-deep
+  // ~0.6, chest-deep 0.5 — and past the chest the body floats and swims at a stroke's speed instead.
+  // Measured from what the body would stand on, so a pier over deep water is dry ground.
+  const wl = flight ? null : waterLevel();
+  const wadeH = wl == null ? 0 : me.bodyHeight?.() ?? 1.7 * (me.userScale ?? 1);
+  if (wl != null && moving) {
+    const st = waterStance(wl, groundUnder(myState.pos), wadeH);
+    target = st.swimming ? scaledSpeed((running ? SWIM_RUN : SWIM_SPEED) * mag, me.userScale) : target * st.speedFactor;
+  }
   myState.speed = THREE.MathUtils.lerp(myState.speed, target, 1 - Math.exp(-10 * dt));
   if (myState.speed < 0.02) myState.speed = 0;
 
@@ -558,19 +565,7 @@ export function updateMe(dt, me) {
     _dir.set(strafe, 0, -fwd).normalize().applyAxisAngle(UP, camYaw);
     const targetYaw = Math.atan2(_dir.x, _dir.z);
     myState.yaw += angleDelta(myState.yaw, targetYaw) * Math.min(1, 12 * dt); myState.yaw = Math.atan2(Math.sin(myState.yaw), Math.cos(myState.yaw));   // the accumulator wraps too (the owner's recorder: root 7.62 = 1.34 + 2π after setCamYaw already wrapped)
-    _wadeFrom.copy(myState.pos);
     myState.pos.addScaledVector(_dir, myState.speed * dt);
-    // WADING (shared/terrainshape.js): water to the waist and no deeper, since nobody swims yet. Measured
-    // from what the body would STAND on there — a pier over deep water is dry ground — and refused only
-    // when the step goes deeper than here too, so a body the water rose over can always walk out.
-    const wl = waterLevel();
-    if (wl != null && !flight) {
-      const to = groundUnder(myState.pos), from = groundUnder(_wadeFrom);
-      if (!wadeAllowed(wl, from, to, me.userScale ?? 1)) {
-        myState.pos.x = _wadeFrom.x; myState.pos.z = _wadeFrom.z;
-        if (performance.now() - _wadeHintAt > 4000) { _wadeHintAt = performance.now(); flashHint?.('too deep to wade — there is no swimming yet'); }
-      }
-    }
     const R = 78; // stay on the island
     const r = Math.hypot(myState.pos.x, myState.pos.z);
     if (r > R) { myState.pos.x *= R / r; myState.pos.z *= R / r; }
@@ -579,6 +574,11 @@ export function updateMe(dt, me) {
   // ---- vertical
   const cap = colliderFor(me.userScale);   // the walking capsule grows and shrinks with the body; it still climbs
   const ground = resolveColliders(myState.pos, heightAt, cap.r, cap.tall, true);
+  // what the feet rest on: the ground, or — past the chest in water — the floating depth (so falling or
+  // jumping into deep water lands you swimming at the surface, by the same gravity as anywhere else)
+  const wst = wl != null ? waterStance(wl, ground, wadeH) : null;
+  const support = wst ? wst.y : ground;
+  const swimming = !!wst?.swimming;
   const blockedTop = lastBlockedTop();
   // FLIGHT OWNS THE BODY while it lasts -- position, heading and clip -- the
   // same way a mantle or a ragdoll does. Walking resumes the moment she lands.
@@ -693,7 +693,7 @@ export function updateMe(dt, me) {
     myState.pos.lerpVectors(mantle.from, mantle.to, e);
     if (k >= 1) { mantle = null; grounded = true; vy = 0; }
   } else {
-    if (grounded && (keys.has('Space') || (xrIntent.active && xrIntent.jump))) {
+    if (grounded && !swimming && (keys.has('Space') || (xrIntent.active && xrIntent.jump))) {   // nothing to push off from, swimming
       posture = null; myState.seat = null;
       const reach = blockedTop !== null ? blockedTop - myState.pos.y : 0;
       if (blockedTop !== null && canMantle(reach, me.userScale)) {
@@ -705,12 +705,16 @@ export function updateMe(dt, me) {
       } else { vy = 5.6; grounded = false; jumped = true; }   // a DELIBERATE jump: the clip may start this frame, no airborne grace
     }
     if (!mantle) {
-      if (!grounded || myState.pos.y > ground + 0.02) {
+      if (!grounded || myState.pos.y > support + 0.02) {
         grounded = false;
         vy -= 16 * dt;
         myState.pos.y += vy * dt;
-        if (myState.pos.y <= ground) { myState.pos.y = ground; vy = 0; grounded = true; }
-      } else { myState.pos.y = ground; vy = 0; grounded = true; }
+        if (myState.pos.y <= support) { myState.pos.y = support; vy = 0; grounded = true; }
+      } else if (swimming) {
+        // ease onto the floating depth rather than snapping: wading out of your depth, the bed drops
+        // away and you rise to float; the reverse, your feet find the bed
+        myState.pos.y += (support - myState.pos.y) * Math.min(1, 6 * dt); vy = 0; grounded = true;
+      } else { myState.pos.y = support; vy = 0; grounded = true; }
     }
   }
   airborneFor = grounded || mantle ? 0 : airborneFor + dt;
@@ -726,8 +730,11 @@ export function updateMe(dt, me) {
   // The policy itself lives in locomotion_clip.js so it can be driven directly
   // (#196 review B2: this path selects the clip AND its blend, and nothing bound
   // it). Flight picks its own clip and returns before this line.
+  if (swimming) { posture = null; myState.seat = null; }   // you cannot sit down in deep water
   const sel = selectClip({ mantle, jumped, airborneFor, wantMove, speed: myState.speed, scale: me.userScale, posture, seat: myState.seat });
-  myState.clip = sel.clip;
+  // swimming is its own pair of clips — a stroke while moving, treading water while still. They are
+  // procedural (avatar.js _swimLayer), so every client draws them from this name alone.
+  myState.clip = swimming && grounded ? (wantMove || myState.speed > 0.15 ? 'swim' : 'tread') : sel.clip;
 
   me.setClip(myState.clip, myState.speed, sel.opts);
   me.root.position.copy(myState.pos);

@@ -10,7 +10,7 @@ import { PNG } from "pngjs";
 process.env.OPT_DIR = mkdtempSync(join(tmpdir(), "terrainshape-opt-"));
 process.env.WORLDS_DIR = mkdtempSync(join(tmpdir(), "terrainshape-worlds-"));
 
-const { shapeParams, shapeHeight, shapedHeightAt, encodeGrid, decodeGrid, registerGrid, MAX_FEATURES, waterParams, wadeAllowed, WADE_DEPTH } =
+const { shapeParams, shapeHeight, shapedHeightAt, encodeGrid, decodeGrid, registerGrid, MAX_FEATURES, waterParams, waterStance, waterCost, waterBlocks, SWIM_AT, SWIM_SPEED } =
   await import("../shared/terrainshape.js");
 const { terrainParams, makeHeightField } = await import("../shared/terrainmath.js");
 const { ingestHeightmap, exportHeightmap } = await import("../server/heightmap.ts");
@@ -144,11 +144,19 @@ console.log("\nwater");
     && waterParams({ water: { level: 0, opacity: 9 } })!.opacity === 1);
   check("a non-number level is no water", waterParams({ water: { level: "deep" } }) === null);
   check("water is not shaping: it never moves the ground", shapeParams({ water: { level: 3 } }) === null);
-  check(`wading: a step into water ${WADE_DEPTH}m deep is fine`, wadeAllowed(0, 0.5, -WADE_DEPTH));
-  check("...deeper than that is refused", !wadeAllowed(0, -0.5, -1.4));
-  check("...unless it is no deeper than where you already stand (you can always walk out)", wadeAllowed(0, -2, -1.6));
-  check("...a bigger body wades deeper", wadeAllowed(0, -0.5, -1.4, 1.5));
-  check("...and no water, no rule", wadeAllowed(null, 0, -50));
+  // a 1.7 m body, water at 0
+  const dry = waterStance(0, 0.5, 1.7);
+  check("dry ground: the ground, at full speed", dry.y === 0.5 && dry.speedFactor === 1 && !dry.swimming);
+  const knee = waterStance(0, -0.5, 1.7), waist = waterStance(0, -0.95, 1.7), chest = waterStance(0, -1.27, 1.7);
+  check(`wading drags: knee ${knee.speedFactor!.toFixed(2)}, waist ${waist.speedFactor!.toFixed(2)}, chest ${chest.speedFactor!.toFixed(2)}`,
+    knee.speedFactor! < 0.9 && knee.speedFactor! > waist.speedFactor! && waist.speedFactor! > chest.speedFactor! && chest.speedFactor! >= 0.5);
+  check("...and the feet stay on the bed while wading", knee.y === -0.5 && !chest.swimming);
+  const deep = waterStance(0, -4, 1.7);
+  check(`past the chest (${(SWIM_AT * 1.7).toFixed(2)} m) the body floats, chest at the surface`, deep.swimming && Math.abs(deep.y + SWIM_AT * 1.7) < 1e-9 && deep.depth === 4);
+  check("a taller body wades deeper before it swims", !waterStance(0, -1.5, 2.2).swimming && waterStance(0, -1.5, 1.7).swimming);
+  check("nothing is walled off any more", waterBlocks() === false);
+  check("the planner's price: 1 dry, more wading, ~1.7 swimming", waterCost(0, 1, 1.7) === 1 && waterCost(0, -1, 1.7) > 1.4 && Math.abs(waterCost(0, -5, 1.7) - 1.55 / SWIM_SPEED) < 1e-9);
+  check("no water, no change", waterStance(null, -50, 1.7).y === -50 && waterStance(null, -50, 1.7).speedFactor === 1);
 }
 
 console.log(failures ? `\n\x1b[31m${failures} failed\x1b[0m` : "\n\x1b[32mall passed\x1b[0m");

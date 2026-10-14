@@ -250,6 +250,8 @@ const CLIP_FALLBACK = {
   // A body with no flight clips still flies -- it just glides in its idle
   // pose rather than falling back to a stride, which was the goofy part.
   fly: 'soar', soar: 'idle',
+  // swimming is procedural (Avatar._swimLayer) over the idle clip — no rig ships a swim clip
+  swim: 'idle', tread: 'idle',
 };
 
 // Emote slots are loaded lazily — a body needs locomotion to exist, but it
@@ -500,6 +502,7 @@ const _wr = new THREE.Quaternion();
 const _wax = new THREE.Vector3();
 const _wup = new THREE.Vector3();
 const _wsw = new THREE.Quaternion();
+const _swE = new THREE.Euler(), _swQ = new THREE.Quaternion();   // swim-layer scratch
 const _hq = new THREE.Quaternion();        // raw-pose scratch (_applyRawPose) — per bone, per frame
 const _hv = new THREE.Vector3();
 const _hs = new THREE.Vector3();
@@ -1127,7 +1130,66 @@ export class Avatar {
     this._setAction(this.actions[use], use, fade, ease);
     const a = this.actions[use];
     if (!a) return;
-    a.timeScale = clipRate(speed, CLIP_SPEED[slot], this.userScale);   // a bigger stride is a slower cadence at the same speed
+    // a bigger stride is a slower cadence at the same speed; the swim layer keeps its own cadence over idle
+    a.timeScale = slot === 'swim' || slot === 'tread' ? 1 : clipRate(speed, CLIP_SPEED[slot], this.userScale);
+  }
+
+  /** Standing height in metres, from the skeleton at rest (the head joint plus a forehead — the stature
+   *  rule the portrait framing uses), at this body's current size. What water depth is measured against. */
+  bodyHeight() {
+    const key = this.userScale ?? 1;
+    if (this._bodyH && this._bodyHKey === key) return this._bodyH;
+    let h = 1.7 * key;
+    try {
+      const r = this.restBonePositions(['head']);
+      if (r?.head) h = Math.min(4, Math.max(0.5, r.head.y - this.root.position.y + 0.13));
+    } catch { /* a body with no humanoid: the default */ }
+    this._bodyH = h; this._bodyHKey = key;
+    return h;
+  }
+
+  /** SWIMMING, drawn: no rig ships a swim clip, so the stroke is procedural, composed over the idle clip on
+   *  the normalized bones (rest = identity: +x the body's left, +z forward). `swim` is a heads-up
+   *  breaststroke — the body leans in, the arms reach and sweep, the legs frog-kick on the off-beat;
+   *  `tread` is upright, the arms sculling, the legs cycling. Eased in and out, and cross-faded between the
+   *  two, by weights, so arriving in deep water or stopping mid-stroke never snaps. Runs BEFORE the held
+   *  pose and animations, which therefore win any bone they name; never the head (the camera pitch's).
+   *  Every client draws it from the clip name alone — nothing new on the wire. */
+  _swimLayer(dt, now) {
+    const slot = this.postureSlot;
+    const want = !this._limp && (slot === 'swim' || slot === 'tread') ? 1 : 0;
+    this._swimW = (this._swimW ?? 0) + (want - (this._swimW ?? 0)) * Math.min(1, 4 * dt);
+    if (this._swimW < 0.005) { this._swimW = 0; return; }
+    this._swimMove = (this._swimMove ?? 0) + ((slot === 'swim' ? 1 : 0) - (this._swimMove ?? 0)) * Math.min(1, 3 * dt);
+    const h = this.vrm.humanoid, taken = this._reachOwned();
+    const m = this._swimMove, w = this._swimW, t = now / 1000;
+    const ph = t * 2 * Math.PI * (0.6 + 0.25 * m);          // the stroke's beat: a little brisker when moving
+    const S = 0.5 + 0.5 * Math.sin(ph), K = 0.5 + 0.5 * Math.sin(ph + Math.PI);
+    const L = (a, b) => a + (b - a) * m;                    // tread → swim
+    const mixv = (a, b, k) => a + (b - a) * k;
+    // [bone, x, y, z] — Euler radians, each a blend of the tread value and the swim value
+    const tg = [
+      ['hips', L(0.08, 0.55), 0, 0],
+      ['spine', L(0, 0.1), 0, 0],
+      ['neck', L(0, -0.45), 0, 0],
+      ['leftUpperArm', 0, L(0.35 * Math.sin(ph), mixv(-0.2, -1.45, S)), L(-0.55, mixv(-0.6, -0.15, S))],
+      ['rightUpperArm', 0, L(-0.35 * Math.sin(ph), mixv(0.2, 1.45, S)), L(0.55, mixv(0.6, 0.15, S))],
+      ['leftLowerArm', 0, L(-0.5, mixv(-1.2, -0.1, S)), 0],
+      ['rightLowerArm', 0, L(0.5, mixv(1.2, 0.1, S)), 0],
+      ['leftUpperLeg', L(-0.45 - 0.25 * Math.sin(ph), -0.5 * K), 0, L(0, 0.25 * K)],
+      ['rightUpperLeg', L(-0.45 + 0.25 * Math.sin(ph), -0.5 * K), 0, L(0, -0.25 * K)],
+      ['leftLowerLeg', L(0.9 + 0.3 * Math.sin(ph), 1.4 * K), 0, 0],
+      ['rightLowerLeg', L(0.9 - 0.3 * Math.sin(ph), 1.4 * K), 0, 0],
+    ];
+    for (const [name, x, y, z] of tg) {
+      const node = h?.getNormalizedBoneNode?.(name);
+      if (!node || taken?.has(node)) continue;
+      _swE.set(x, y, z, 'YZX');
+      _swQ.setFromEuler(_swE);
+      const r = this._composeBegin(node);
+      node.quaternion.slerp(_swQ, w);
+      this._composeEnd(node, r);
+    }
   }
   _setAction(a, slot, fadeIn, ease = false) {
     if (!a || this.current === a) return;
@@ -2210,6 +2272,8 @@ export class Avatar {
       }
       this._composeEnd(this.head, r);
     }
+    BC('av:swim');
+    if (this._swimW || this.postureSlot === 'swim' || this.postureSlot === 'tread') this._swimLayer(dt, now);
     BC('av:override');
     if (this._override || this._anims?.length) this._applyOverride(dt, now);
 

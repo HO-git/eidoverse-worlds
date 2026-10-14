@@ -7,6 +7,7 @@
 import { BodyStateReader, type BodyObservation, type PublicPose } from "./body-state.ts";
 import { mentionRegex } from "./mention.ts";
 import { mergePose } from "../shared/humanoid.js";
+import { shapeParams, shapedHeightAt, requestGrid, setGridFetcher, shapeReady, waterParams, wadeAllowed, WADE_DEPTH } from "../shared/terrainshape.js";
 import * as THREE_W from "three/webgpu";
 import * as TSL from "three/tsl";
 import { NoiseGate, SHORT_STINT_MS, APPROACH_REFRACT_MS, APPROACH_RADIUS, REARM_RADIUS,
@@ -237,6 +238,10 @@ export class WorldAgent {
    * this immediately after walkTo() so a later replacement walk cannot change
    * its refusal receipt. */
   walkRefusal: string | null = null;
+  /** Why the last walk stopped short, when something stopped it mid-way (the water's edge). */
+  walkStopReason: string | null = null;
+  /** The world's water (shared/terrainshape.js), from the terrain bag; null when it has none. */
+  water: { level: number } | null = null;
   /** A held custom pose — sparse humanoid-bone quaternions. Presence only:
    *  it rides the pose packet and is never a log verb, because it is a moment,
    *  not a change to the world. `null` clears. */
@@ -1587,13 +1592,38 @@ export class WorldAgent {
     return out;
   }
 
+  private terrainRev = 0;
+  /** A heightmap terrain received but not yet buildable — its grid has not arrived. The last ground stands
+   *  (never noise in its place); tick() retries the grid, and the arrival builds THIS bag, once. */
+  private pendingTerrain: { args: any; rev: number; grid: string } | null = null;
   private async buildTerrain(args: any) {
+    // Builds can overlap (a grid fetch is slow, a terrain edit is not): only the newest one may commit.
+    const rev = ++this.terrainRev;
     if (!this.terrainSrc) {
       const r = await fetch(`${this.httpBase}/library/eidoverse/terrain.js`);
       this.terrainSrc = await r.text();
       (0, eval)(this.terrainSrc);
     }
-    this.terrain = (globalThis as any).makeTerrain({ ...args, layers: [] });
+    // Placed features and heightmaps (shared/terrainshape.js): the agent stands on the same shaped law the
+    // client's mesh and the sim use. A heightmap's grid is fetched first; until it is here, the last ground
+    // stands (pendingTerrain) — never noise in the heightmap's place.
+    const shape = shapeParams(args);
+    if (shape?.heightmap) {
+      const base = this.httpBase;
+      setGridFetcher(async (ref: string) => { const g = await fetch(`${base}/library/${ref}`); if (!g.ok) throw new Error(`${g.status}`); return g.json(); });
+      const g = await requestGrid(shape.heightmap.grid);
+      if (rev !== this.terrainRev) return;   // a newer terrain arrived while this one's grid was in flight
+      if (!g) {
+        // not here (yet): keep the ground we have rather than commit noise as this world's ground
+        this.pendingTerrain = { args, rev, grid: shape.heightmap.grid };
+        return;
+      }
+    }
+    if (rev !== this.terrainRev) return;   // a newer terrain arrived while this one's grid was in flight
+    this.pendingTerrain = null;
+    const t = (globalThis as any).makeTerrain({ ...args, layers: [] });
+    this.terrain = shape ? { heightAt: shapedHeightAt(t.heightAt, args) } : t;
+    this.water = waterParams(args);
     // the settle sim clamps against the SAME ground the walking clamp reads —
     // not one height sampled at the fall site (#17)
     void setHeightField((x, z) => this.heightAt(x, z));
@@ -1797,7 +1827,18 @@ export class WorldAgent {
     // punted crate WHERE IT IS (and, at rest, where it CAME TO REST —
     // recomputed, bit-identical with every renderer). Support rebuilds
     // when a body rests; the punt side effect dropped it at launch.
-    if (this.sim.epoch && !this.sim.epoch.foreign) {
+    // a heightmap world's sim waits for its grid (as the browser's does): noise ground would diverge
+    // a heightmap terrain waiting on its grid: ask again (requestGrid backs off by itself), and build the
+    // waiting bag — only if it is still the newest — the moment the grid is here
+    const pend = this.pendingTerrain;
+    if (pend && pend.rev === this.terrainRev) {
+      void requestGrid(pend.grid).then((g) => {
+        if (g && this.pendingTerrain === pend && pend.rev === this.terrainRev) { this.pendingTerrain = null; void this.buildTerrain(pend.args); }
+      });
+    }
+    const simShape = this.sim.terrain?.shape;
+    if (!shapeReady(simShape)) void requestGrid(simShape.heightmap.grid);
+    else if (this.sim.epoch && !this.sim.epoch.foreign) {
       advanceSim(this.sim, tickOf(this.sim, this.serverNow()));
       for (const id in this.sim.bodies) {
         const b = this.sim.bodies[id];
@@ -1846,11 +1887,25 @@ export class WorldAgent {
         this.speed = sp; this.clip = this.target.run ? "run" : "walk";
         this.yaw = Math.atan2(dx, dz);
         const step = Math.min(dist, sp * dt);
-        if (step === dist) {
+        // WADING, the same rule the browser's controller applies: water to the waist and no deeper (no
+        // swimming yet). The walk stops at the edge and says why, rather than marching along a lakebed.
+        if (this.water) {
+          const nx = step === dist ? this.target.x : this.pos.x + (dx / dist) * step;
+          const nz = step === dist ? this.target.z : this.pos.z + (dz / dist) * step;
+          const ground = admittedHeight ?? ((x: number, z: number) => this.heightAt(x, z));
+          const to = ground(nx, nz);
+          if (!wadeAllowed(this.water.level, ground(this.pos.x, this.pos.z), to)) {
+            this.walkStopReason = `stopped at the water's edge at (${this.pos.x.toFixed(1)}, ${this.pos.z.toFixed(1)}): `
+              + `the water ahead is ${(this.water.level - to).toFixed(1)}m deep, and a body wades only to ${WADE_DEPTH}m — there is no swimming yet. Walk around it.`;
+            this.target = null; this.legs = []; this.walkHeightAt = null; this.speed = 0; this.clip = "idle";
+            this.walkDone?.(false); this.walkDone = null;
+          }
+        }
+        if (this.target && step === dist) {
           // Land on the validated point exactly, rather than allowing a
           // tolerance or floating residual to cut the next corner.
           this.pos.x = this.target.x; this.pos.z = this.target.z;
-        } else {
+        } else if (this.target) {
           this.pos.x += (dx / dist) * step;
           this.pos.z += (dz / dist) * step;
         }
@@ -2675,6 +2730,7 @@ export class WorldAgent {
     // A new request supersedes the walk under way, whether or not it can be walked.
     if (this.walkDone || this.target) this.abandonWalk();
     this.walkRefusal = null;
+    this.walkStopReason = null;
     // Plan before touching the body, from the ground under it: a refused walk
     // leaves it seated, pinned, dragged, posed or tumbling as it was.
     const support = this.walkSupport();
@@ -3254,10 +3310,11 @@ export class WorldAgent {
     const selfSeatNote = selfEff?.ok && selfEff.seat?.state === "approximate" ? ` (seat approximate: ${selfEff.seat.reason})` : "";
     const seated = selfRide ? `, seated on ${selfRide.to}${selfEff?.ok && selfEff.moving ? ` (riding its ${selfEff.moving})` : ""}${selfSeatNote}` : "";
     if (meKnown) {
-      L.push(`You are "${this.name}" in world "${this.world}" at (${me.x.toFixed(1)}, ${me.z.toFixed(1)}), ground height ${me.y.toFixed(2)}m, facing ${this.bearing(Math.sin(this.yaw), Math.cos(this.yaw))}${seated}.`);
+      L.push(`You are "${this.name}" in world "${this.world}" at (${me.x.toFixed(1)}, ${me.z.toFixed(1)}), ground height ${me.y.toFixed(2)}m${this.water && this.water.level > me.y + 0.02 ? `, standing in water ${(this.water.level - me.y).toFixed(1)}m deep` : ""}, facing ${this.bearing(Math.sin(this.yaw), Math.cos(this.yaw))}${seated}.`);
     } else {
       L.push(`You are "${this.name}" in world "${this.world}", position unknown (${selfEff && !selfEff.ok ? selfEff.why : "seat unresolved"}), facing ${this.bearing(Math.sin(this.yaw), Math.cos(this.yaw))}${seated}. Distances are withheld until your seat resolves — dismount {id: "${this.name}"} restores a stamped position.`);
     }
+    if (this.pendingTerrain) L.push(`The world's ground is a heightmap that has not loaded yet: heights here are the last ground you had${this.terrain ? "" : " (flat)"}, until it does.`);
     // WHERE YOU ARE, ARCHITECTURALLY. A conjured building can only ever be
     // "a mesh 4m away"; a griddled one knows its own rooms, so standing inside
     // one is a fact perception can state. Derived from folded state alone —

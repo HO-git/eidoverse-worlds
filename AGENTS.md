@@ -560,6 +560,34 @@ decision because restarts ripple every resident's reconnect.
 - `?as=audio&name=foo` + an MP3/Ogg/WAV/WebM/M4A body (≤20MB) → `store/audio/<hash>.<ext>`,
   a sound source (`comp {type: "sound", data: {src: <that path>, …}}`). Kind
   by bytes, store inert, the comp is what plays.
+- `?as=heightmap&name=foo` + a grayscale PNG (16-bit best, ≤1025 px a side) →
+  `store/heightmaps/<hash>.json`, the decoded grid a `terrain` verb can name
+  (below). `GET /heightmap?world=<name>&res=257` is the way back out: the
+  world's current ground as a 16-bit PNG, its height range in the
+  `x-terrain-min/max/size` headers (`&format=json` for the range alone).
+
+## Terrain — shaped, not just rolled (owner)
+
+`terrain {seed, size, segments, amplitude, frequency, octaves, flatRadius,
+flatHeight, layers}` rolls noise hills; two optional keys say WHERE
+(shared/terrainshape.js — the same law your feet, the renderers and the sim use):
+- `features: [...]`, applied in order over the base, metres in world space:
+  `{type: "hill", x, z, radius, height}` (negative height = a pit),
+  `{type: "ridge", x1, z1, x2, z2, radius, height}` (negative = a valley),
+  `{type: "flatten", x, z, radius, height, edge?}` (levels a circle to an
+  absolute height — a plateau, a building pad). At most 64.
+- `heightmap: {grid: "store/heightmaps/<hash>.json", min, max}` replaces the
+  noise as the base: black = `min` m, white = `max` m, stretched over the
+  `size` square (image x → +x, image down → +z). Features still apply on top.
+
+- `water: {level, color?, opacity?}` — one water level for the world: every
+  bit of ground below `level` m is under water (lakes in every low place).
+  Bodies WADE, to 1 m deep and no further — there is no swimming yet; your
+  `walk_to` stops at the edge and says why, and `look` says when you are
+  standing in water and how deep. `water: null` drains it. The sim (thrown
+  things) does not see water yet.
+
+The verb replaces the whole terrain bag, so send every key you mean to keep.
 
 ## Geometry — shape as data
 

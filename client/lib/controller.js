@@ -9,6 +9,8 @@
 import { THREE, camera, canvas } from './core.js';
 import { CONFIG, angleDelta, bus } from './base.js';
 import { heightAt } from './terrain.js';
+import { waterLevel } from './water.js';
+import { wadeAllowed } from '../../shared/terrainshape.js';
 import { resolveColliders, lastBlockedTop, findSeat, raySegment } from './colliders.js';
 import { scaledSpeed, colliderFor, deskEyeY, canMantle, mantleStep } from './bodyscale.js';   // this body's chosen size: stride, capsule, eye
 import { chat } from './chat.js';
@@ -90,10 +92,12 @@ export function setMeHook(fn) { meRef = typeof fn === 'function' ? fn : (() => n
 // probing with the live body would shove the flier sideways and steal the
 // mantle probe the walk path reads on the same frame.
 const _gp = new THREE.Vector3();
-function groundUnder(pos) {
+const _wadeFrom = new THREE.Vector3();
+let _wadeHintAt = 0;
+function groundUnder(pos, cap = null) {
   _gp.set(pos.x, pos.y, pos.z);
-  const g = resolveColliders(_gp, heightAt);
-  return g;
+  // with a capsule: probe as the move itself will (a small body steps up less than the default one)
+  return cap ? resolveColliders(_gp, heightAt, cap.r, cap.tall, true) : resolveColliders(_gp, heightAt);
 }
 /** groundY(x, z) for the integrator: it has no y to offer, so probe from the
  *  flier's own altitude -- which is what decides whether a box is floor or
@@ -554,7 +558,20 @@ export function updateMe(dt, me) {
     _dir.set(strafe, 0, -fwd).normalize().applyAxisAngle(UP, camYaw);
     const targetYaw = Math.atan2(_dir.x, _dir.z);
     myState.yaw += angleDelta(myState.yaw, targetYaw) * Math.min(1, 12 * dt); myState.yaw = Math.atan2(Math.sin(myState.yaw), Math.cos(myState.yaw));   // the accumulator wraps too (the owner's recorder: root 7.62 = 1.34 + 2π after setCamYaw already wrapped)
+    _wadeFrom.copy(myState.pos);
     myState.pos.addScaledVector(_dir, myState.speed * dt);
+    // WADING (shared/terrainshape.js): water to the waist and no deeper, since nobody swims yet. Measured
+    // from what the body would STAND on there — a pier over deep water is dry ground — and refused only
+    // when the step goes deeper than here too, so a body the water rose over can always walk out.
+    const wl = waterLevel();
+    if (wl != null && !flight) {
+      const cap = colliderFor(me.userScale);
+      const to = groundUnder(myState.pos, cap), from = groundUnder(_wadeFrom, cap);
+      if (!wadeAllowed(wl, from, to, me.userScale ?? 1)) {
+        myState.pos.x = _wadeFrom.x; myState.pos.z = _wadeFrom.z;
+        if (performance.now() - _wadeHintAt > 4000) { _wadeHintAt = performance.now(); flashHint?.('too deep to wade — there is no swimming yet'); }
+      }
+    }
     const R = 78; // stay on the island
     const r = Math.hypot(myState.pos.x, myState.pos.z);
     if (r > R) { myState.pos.x *= R / r; myState.pos.z *= R / r; }

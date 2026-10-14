@@ -133,6 +133,14 @@ export async function setHeightField(fn: ((x: number, z: number) => number) | nu
   m.terrain.setTerrain(fn ? { mesh: null, heightAt: fn } : null);
 }
 
+/** Hand the sim the world's water, so a body that falls in floats (ammodoll.js, via terrain.js's seam):
+ *  {level, sample(x, z), time()} — the agent's own water analysis and wave clock — or null. */
+export async function setWaterField(f: { level: number; sample: (x: number, z: number) => unknown; time: () => number } | null) {
+  const m = await loadSim();
+  if (!m) return;
+  m.terrain.setWaterField(f);
+}
+
 // Who is currently claiming each support box.
 //
 // Support ids are world/entity scoped, which is right — two agents in one

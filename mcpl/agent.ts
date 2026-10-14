@@ -17,7 +17,7 @@ import * as TSL from "three/tsl";
 import { NoiseGate, SHORT_STINT_MS, APPROACH_REFRACT_MS, APPROACH_RADIUS, REARM_RADIUS,
   APPROACH_DWELL_MS, APPROACH_STILL_MPS, APPROACH_MAX_WAIT_MS,
   ACTIVITY_RADIUS_M, ACTIVITY_PULSE_MS, ACTIVITY_REFRESH_MS, MOVER_MIN_M } from "./denoise.ts";
-import { HeadlessBody, ReachBody, setHeightField, registerSupport, registerSupportGrid, removeSupport } from "./physics.ts";
+import { HeadlessBody, ReachBody, setHeightField, setWaterField, registerSupport, registerSupportGrid, removeSupport } from "./physics.ts";
 // FLIGHT. The same deterministic integrator the browser bench and the capture
 // path run -- one function, every runtime, per the spec's Q2 ruling.
 import {
@@ -1626,9 +1626,18 @@ export class WorldAgent {
       ? analyzeWater((x, z) => this.heightAt(x, z), size, { level: this.water.level, kind: args.water?.kind, flow: args.water?.flow },
         Math.max(32, Math.min(256, Math.round(size))))
       : null;
+    // …and a body that falls in floats on the same water, rising and falling on the same waves
+    void setWaterField(this.waterFieldNow());
     // the settle sim clamps against the SAME ground the walking clamp reads —
     // not one height sampled at the fall site (#17)
     void setHeightField((x, z) => this.heightAt(x, z));
+  }
+
+  /** This world's water for the ragdoll sim (physics.ts setWaterField) — asserted before every run, like the
+   *  ground, because the sim module is process state and one process can host agents in several worlds. */
+  private waterFieldNow() {
+    const A = this.waterKinds, level = this.water?.level;
+    return A && level != null ? { level, sample: (x: number, z: number) => A.sample(x, z), time: () => waveClock(this.serverNow()) } : null;
   }
 
   heightAt(x: number, z: number): number {
@@ -2019,7 +2028,7 @@ export class WorldAgent {
     if (this.draggedBy) return;   // a hand arrived while the skeleton loaded
     // the sim's ground is process state — assert OURS before every run
     // (see physics.ts's declared seam)
-    await setHeightField((x, z) => this.heightAt(x, z));
+    await setHeightField((x, z) => this.heightAt(x, z)); await setWaterField(this.waterFieldNow());
     if (this.bodyEpoch !== epoch) return;
     await this.supportReady();    // don't fall through a floor still in flight
     if (this.bodyEpoch !== epoch || this.draggedBy) return;
@@ -2028,6 +2037,9 @@ export class WorldAgent {
       yaw: this.yaw,
       // no direction given = the browser default: you fall the way you face
       lean: lean ?? [Math.sin(this.yaw) * 0.9, 0, Math.cos(this.yaw) * 0.9],
+      // a swimmer goes limp where it floats, not on the bed under it (a browser's doll starts from its live
+      // skeleton; a headless one is stood on the ground unless told otherwise)
+      ...(this.float.on ? { rootY: this.pos.y } : {}),
       pins: [...this.pins].map(([j, at]) => ({ j, at })),
     });
     this.clip = "ragdoll";
@@ -2043,7 +2055,7 @@ export class WorldAgent {
     if (!body) { this.heldPose = pose ?? this.heldPose ?? DOWNED_POSE; this.heldPoseAuthored = false; this.clip = "ragdoll"; return; }
     if (this.draggedBy) return;
     // the sim's ground is process state — assert OURS before every run
-    await setHeightField((x, z) => this.heightAt(x, z));
+    await setHeightField((x, z) => this.heightAt(x, z)); await setWaterField(this.waterFieldNow());
     if (this.bodyEpoch !== epoch) return;
     // A release (or a 1.2s dragger silence) can land in the first moment of a
     // join, while replayed spawns are still fetching their geometry. Settling
@@ -2551,7 +2563,7 @@ export class WorldAgent {
     const epoch = ++this.bodyEpoch;
     const body = await this.ensureBody();
     if (this.bodyEpoch !== epoch || !body) return;
-    await setHeightField((x, z) => this.heightAt(x, z));
+    await setHeightField((x, z) => this.heightAt(x, z)); await setWaterField(this.waterFieldNow());
     if (this.bodyEpoch !== epoch) return;
     await this.supportReady();
     if (this.bodyEpoch !== epoch) return;

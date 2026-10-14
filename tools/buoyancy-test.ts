@@ -1,6 +1,6 @@
 // buoyancy + waves — a floating column on the water surface, and the clock the surface runs on.
 //   bun tools/buoyancy-test.ts
-import { floatStep, footprintSurface } from "../shared/buoyancy.js";
+import { floatStep, footprintSurface, partWaterForce, waterCurrent, swellRise, PART_FLOAT } from "../shared/buoyancy.js";
 import { surfaceOffset, waveClock, WAVE_PERIOD, OCEAN } from "../shared/waves.js";
 import { SWIM_AT } from "../shared/terrainshape.js";
 
@@ -53,6 +53,34 @@ console.log("\nthe surface and its clock");
   check("dry ground has no surface offset", surfaceOffset(null, 1, 2, 3) === 0);
   const flat = footprintSurface(() => 0.4, 0, 0);
   check("the footprint mean of a flat surface is the surface", Math.abs(flat - 0.4) < 1e-12);
+}
+
+console.log("\nfloating parts (the ragdoll's law)");
+{
+  // one 5 kg part, 0.12 m either side of its centre, integrated as Bullet would with gravity separately
+  const sim = (y0: number, vy0: number, seconds: number, surface = 0, current: number[] = [0, 0]) => {
+    let y = y0, vy = vy0, x = 0, vx = 0, lowest = y0; const f = [0, 0, 0];
+    for (let t = 0; t < seconds; t += 1 / 120) {
+      partWaterForce(5, y, 0.12, [vx, vy, 0], surface, current, f);
+      vy += (f[1] / 5 - 9.8) / 120; vx += (f[0] / 5) / 120; y += vy / 120; x += vx / 120; lowest = Math.min(lowest, y);
+    }
+    return { y, x, vx, lowest };
+  };
+  const rest = sim(0, 0, 20);
+  const subAtRest = (0 - (rest.y - 0.12)) / 0.24;
+  check(`a part floats with ${(PART_FLOAT * 100).toFixed(0)}% of itself under (${(subAtRest * 100).toFixed(0)}%)`, Math.abs(subAtRest - PART_FLOAT) < 0.02);
+  const dunk = sim(1.0, -3.0, 6);
+  check(`dropped in at 3 m/s it sinks only ${(-dunk.lowest).toFixed(2)} m before the water stops it`, dunk.lowest > -0.8, `${dunk.lowest}`);
+  const drift = sim(0, 0, 10, 0, [0.8, 0]);
+  check(`it drifts with the current (${drift.vx.toFixed(2)} m/s in a 0.8 m/s flow)`, drift.vx > 0.7 && drift.vx < 0.85);
+  const dry = [0, 0, 0];
+  check("a part clear of the water feels nothing", partWaterForce(5, 2, 0.12, [0, 0, 0], 0, [0, 0], dry) === 0 && dry[1] === 0);
+  check("a river carries along its flow; the sea in toward shore; a pond not at all",
+    waterCurrent({ kind: "river", flow: [1, 0], speed: 1.2 })[0] === 1.2
+    && waterCurrent({ kind: "ocean", toShore: [-1, 0], depth: 0.5 })[0] < -0.3
+    && waterCurrent({ kind: "still" })[0] === 0);
+  const rising = swellRise((t) => Math.sin(t), 0, 0), deepRise = swellRise((t) => Math.sin(t), 0, 5);
+  check("the swell's rise is the surface's, fading with depth", Math.abs(rising - 1) < 0.01 && deepRise < rising * 0.5 && deepRise > 0);
 }
 
 console.log(failures ? `\n\x1b[31m${failures} failed\x1b[0m` : "\n\x1b[32mall passed\x1b[0m");

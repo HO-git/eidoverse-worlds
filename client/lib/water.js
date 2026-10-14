@@ -18,6 +18,7 @@
 import { THREE, scene } from './core.js';
 import { attribute, mix, smoothstep, vec3, float, positionGeometry, uniform, sin, cos, max, normalize, color, transformNormalToView } from 'three/tsl';
 import { OCEAN, RIVER, STILL, waveClock } from '../../shared/waves.js';
+import { setWaterField } from './terrain.js';
 import { waterParams } from '../../shared/terrainshape.js';
 import { analyzeWater } from '../../shared/waterkind.js';
 
@@ -44,6 +45,7 @@ export function applyWater(args, heightAt) {
     current.mesh.material.dispose();
     current = null;
   }
+  setWaterField(null);
   const W = waterParams(args);
   if (!W) return;
   const size = typeof args?.size === 'number' ? args.size : 80;
@@ -183,6 +185,8 @@ export function applyWater(args, heightAt) {
   mesh.userData.bodies = A.bodies.map((b) => ({ kind: b.kind, area: Math.round(b.area), width: +b.width.toFixed(1), length: +b.length.toFixed(1) }));
   scene.add(mesh);
   current = { mesh, level: W.level, analysis: A };
+  // what floats reads the same water (ammodoll.js, through terrain.js's seam)
+  setWaterField({ level: W.level, sample: (x, z) => A.sample(x, z), time: waveTime });
 }
 
 /** What kind of water is at a point, for the HUD and probes (shared/waterkind.js sample). */

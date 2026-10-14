@@ -56,7 +56,7 @@ function boxMesh(list: Box[]) {
 
 /** A GLB whose one mesh sits under a translated parent node (so the world
  *  matrix matters), with an orphan mesh node outside the scene. */
-async function buildGlb(list: Box[], { draco = false, lift = 0 } = {}) {
+async function buildGlb(list: Box[], { draco = false, lift = 0, shift = 0 } = {}) {
   const doc = new Document();
   const buf = doc.createBuffer();
   const make = (l: Box[]) => {
@@ -66,7 +66,7 @@ async function buildGlb(list: Box[], { draco = false, lift = 0 } = {}) {
       .setIndices(doc.createAccessor().setType("SCALAR").setArray(idx).setBuffer(buf)));
   };
   const parent = doc.createNode("lift").setTranslation([0, lift, 0]);
-  parent.addChild(doc.createNode("building").setMesh(make(list)).setTranslation([0, -lift, 0]));
+  parent.addChild(doc.createNode("building").setMesh(make(list)).setTranslation([shift, 0, 0]));
   doc.createScene("s").addChild(parent);
   doc.createNode("orphan").setMesh(make([[50, 0, 50, 51, 1, 51]]));
   if (draco) doc.createExtension(KHRDracoMeshCompression).setRequired(true)
@@ -84,10 +84,11 @@ const bounds = (p: Float32Array) => {
 
 console.log("collisionTriangles:");
 {
-  const raw = await collisionTriangles(await buildGlb(boxes, { lift: 2 }));
+  const raw = await collisionTriangles(await buildGlb(boxes, { lift: 2, shift: 0.5 }));
   check("reads a GLB into one triangle soup", !!raw && raw.indices.length === boxes.length * 36);
   const [mn, mx] = bounds(raw!.positions);
-  check("applies the node chain's world matrix (a +2/-2 lift nets zero)", Math.abs(mn[1]) < 1e-6 && Math.abs(mx[1] - 6.3) < 1e-6,
+  check("applies the node chain's world matrix (parent lifted 2m, child shifted 0.5m along x)",
+    Math.abs(mn[1] - 2) < 1e-6 && Math.abs(mx[1] - 8.3) < 1e-6 && Math.abs(mn[0] + 2.5) < 1e-6 && Math.abs(mx[0] - 3.5) < 1e-6,
     `y ${mn[1]}..${mx[1]}`);
   check("leaves out mesh nodes no scene reaches", mx[0] < 10, `max x ${mx[0]}`);
   const dr = await collisionTriangles(await buildGlb(boxes, { draco: true }));
@@ -96,6 +97,20 @@ console.log("collisionTriangles:");
     !!dr && dr.indices.length === raw!.indices.length && Math.abs(dmn[1]) < 0.01 && Math.abs(dmx[1] - 6.3) < 0.01,
     dr ? `${dr.indices.length / 3} tris, y ${dmn[1]}..${dmx[1]}` : "null");
   check("answers null for bytes that are not a GLB", (await collisionTriangles(new Uint8Array([1, 2, 3]))) === null);
+  {
+    // a second scene the browser never shows: its wall must not become solid
+    const doc = new Document(), buf = doc.createBuffer();
+    const mk = (l: Box[]) => { const { pos, idx } = boxMesh(l); return doc.createMesh().addPrimitive(doc.createPrimitive()
+      .setAttribute("POSITION", doc.createAccessor().setType("VEC3").setArray(pos).setBuffer(buf))
+      .setIndices(doc.createAccessor().setType("SCALAR").setArray(idx).setBuffer(buf))); };
+    const shown = doc.createScene("shown").addChild(doc.createNode("floor").setMesh(mk([[-2, 0, -2, 2, 0.2, 2]])));
+    doc.createScene("hidden").addChild(doc.createNode("wall").setMesh(mk([[40, 0, 40, 41, 3, 41]])));
+    doc.getRoot().setDefaultScene(shown);
+    const io = new NodeIO().registerExtensions(ALL_EXTENSIONS);
+    const t = await collisionTriangles(await io.writeBinary(doc));
+    const [, tmx] = t ? bounds(t.positions) : [[0], [99]];
+    check("only the scene a browser shows becomes solid (a second scene's wall does not)", !!t && tmx[0] < 10, `max x ${tmx[0]}`);
+  }
 }
 
 console.log("\nan agent in a two-storey building (isolated sequencer):");
@@ -147,6 +162,24 @@ try {
   await sleep(500);
   check("rejoins upstairs, standing on the upper floor it left from",
     near(a.pos.y, gy + UPPER) && Math.hypot(a.pos.x + 0.2, a.pos.z + 2.4) < 0.1, `at (${a.pos.x.toFixed(2)}, ${a.pos.y.toFixed(3)}, ${a.pos.z.toFixed(2)})`);
+  {
+    // lying upstairs after a fall, the ragdoll's root is ~0.68m BELOW the
+    // floor holding it up; getting up must find that floor, not the one under it
+    a.clip = "ragdoll"; a.pos.y = gy + UPPER - 0.68;
+    a.setPose(null);
+    check("getting up from a ragdoll lying upstairs stands upstairs", near(a.pos.y, gy + UPPER), `y ${a.pos.y.toFixed(3)}`);
+  }
+  {
+    // another world in the same process, nothing built in it: the tower's
+    // walls and floors must not exist there
+    const other: any = new WorldAgent({ name: "elsewhere", world: "meshcollide-empty", url: URL_ });
+    await other.connect();
+    await other.walkTo(0, 5, true);
+    const through = await other.walkTo(0, -2, true, 20_000);
+    check("an agent in another world walks straight through where this world's building stands, on its own terrain",
+      through && Math.abs(other.pos.z + 2) < 0.05 && near(other.pos.y, other.heightAt(0, -2)), `at (${other.pos.x.toFixed(2)}, ${other.pos.y.toFixed(3)}, ${other.pos.z.toFixed(2)})`);
+    other.close();
+  }
   check("is held back by the railing at the well's edge (no walking off it)",
     !(await walk(2.2, 0)) && a.pos.x < 1.6 && near(a.pos.y, gy + UPPER), `at (${a.pos.x.toFixed(2)}, ${a.pos.y.toFixed(2)}, ${a.pos.z.toFixed(2)})`);
   check("...and the walk says why it stopped", /blocked at .* something solid/.test(a.walkStall ?? ""), String(a.walkStall));

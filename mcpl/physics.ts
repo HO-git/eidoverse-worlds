@@ -170,6 +170,7 @@ export async function registerSupport(
   // re-fit unconditionally: a place moves the box, and the newest claimant's
   // transform is the freshest reading of where the thing actually is
   m.colliders.fitSupportBox(id, min, max, xform);
+  scopeEntry(m, id);
 }
 
 /** test/debug probe — who holds which support box (the world_debug spirit:
@@ -195,6 +196,7 @@ export async function registerSupportGrid(
   const m = await loadSim();
   if (!m) return false;
   if (!m.colliders.fitSupportGrid(id, topGrid, xform)) return false;
+  scopeEntry(m, id);
   (holders.get(id) ?? holders.set(id, new Set()).get(id)!).add(holder);
   return true;
 }
@@ -241,6 +243,7 @@ export async function registerMeshSupport(
   // BVH build failure) abstains, and the caller falls back to its summary.
   try {
     m.colliders.fitCollider(id, root, { collide: xform.collide, scale: s, lib: xform.lib ?? null, localFrame: true });
+    scopeEntry(m, id);
   } catch (err) {
     console.error(`[physics] mesh support ${id} abstained — fit failed:`, String(err).split("\n")[0]);
     return false;
@@ -250,6 +253,32 @@ export async function registerMeshSupport(
 }
 
 const WALKING = colliderFor(1);
+
+/** Support ids are `<world>/<entity>…` (agent.ts): the entry belongs to that
+ *  world, and queries made inside another world (inWorld) don't see it. */
+function scopeEntry(m: NonNullable<typeof simMods>, id: string) {
+  const e = m.colliders.colliders?.get(id), slash = id.indexOf("/");
+  if (e && slash > 0) e.scope = id.slice(0, slash);
+}
+
+/** test/debug probe — what a registered support id was fitted as: the exact
+ *  triangles, a box (or pillar), a heightfield grid, or a data box. */
+export function supportShape(id: string): "exact" | "box" | "pillar" | "grid" | "data-box" | null {
+  const e = simMods?.colliders.colliders?.get(id);
+  if (!e) return null;
+  return e.exact ? "exact" : e.grid ? "grid" : e.support ? "data-box" : e.pillar ? "pillar" : "box";
+}
+
+/** Run `fn` with the collider queries scoped to `world`: an agent process can
+ *  hold several worlds' colliders, and a body in one must not stand on, or
+ *  be stopped by, a floor or a wall in another at the same coordinates. */
+export function inWorld<T>(world: string | null | undefined, fn: () => T): T {
+  const C = simMods?.colliders;
+  if (!C?.setColliderScope || !world) return fn();
+  const prev = C.colliderScope();
+  C.setColliderScope(world);
+  try { return fn(); } finally { C.setColliderScope(prev); }
+}
 
 /** Are the collision modules loaded? Asking starts the load: a body's feet
  *  use the terrain clamp until the answer is yes. */
@@ -422,7 +451,11 @@ export class HeadlessBody {
    *  given pose (a drag release) falling free. Everything is WORLD y —
    *  `rootY`, pins, the seed — and the sim clamps against the live height
    *  field and registered supports as it runs. */
-  begin(opts: {
+  /** The world this body falls in: its ragdoll sees that world's colliders only. */
+  scope: string | null = null;
+  begin(opts: Parameters<HeadlessBody["beginIn"]>[0]) { return inWorld(this.scope, () => this.beginIn(opts)); }
+  step(dt: number) { return inWorld(this.scope, () => this.stepIn(dt)); }
+  private beginIn(opts: {
     x: number; z: number; yaw: number;
     lean?: number[] | null;
     pose?: Record<string, unknown> | null;
@@ -548,7 +581,7 @@ export class HeadlessBody {
   }
 
   /** Advance; returns what to stream, or null once the sim has captured. */
-  step(dt: number): { pose: Record<string, number[]>; p: number[]; done: boolean } | null {
+  private stepIn(dt: number): { pose: Record<string, number[]>; p: number[]; done: boolean } | null {
     if (!this.rd) return null;
     this.rd.step(dt);
     const pose = this.rd.done ? this.rd.finalPose : this.rd.pose;

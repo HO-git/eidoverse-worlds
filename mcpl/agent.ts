@@ -12,7 +12,7 @@ import * as TSL from "three/tsl";
 import { NoiseGate, SHORT_STINT_MS, APPROACH_REFRACT_MS, APPROACH_RADIUS, REARM_RADIUS,
   APPROACH_DWELL_MS, APPROACH_STILL_MPS, APPROACH_MAX_WAIT_MS,
   ACTIVITY_RADIUS_M, ACTIVITY_PULSE_MS, ACTIVITY_REFRESH_MS, MOVER_MIN_M } from "./denoise.ts";
-import { HeadlessBody, ReachBody, setHeightField, registerSupport, registerSupportGrid, registerMeshSupport, removeSupport, standOn, collidersReady } from "./physics.ts";
+import { HeadlessBody, ReachBody, setHeightField, registerSupport, registerSupportGrid, registerMeshSupport, removeSupport, standOn, collidersReady, inWorld } from "./physics.ts";
 import { collisionTriangles } from "../server/geometry.ts";
 // FLIGHT. The same deterministic integrator the browser bench and the capture
 // path run -- one function, every runtime, per the spec's Q2 ruling.
@@ -69,7 +69,9 @@ const COLLIDE_SUBSTEP = 0.1;
  *  STALL_TICKS consecutive ticks is held by something solid: it ends, saying
  *  so, instead of pressing against the wall until the 90s timeout. */
 const STALL_PROGRESS = 0.2, STALL_TICKS = 15;
-const GRAVITY = 16;   // client/lib/controller.js: vy -= 16 * dt
+const GRAVITY = 16;
+/** How far below its supporting surface a settled ragdoll's root lies. */
+const RAGDOLL_ROOT_DROP = 0.7;   // client/lib/controller.js: vy -= 16 * dt
 /** Quiet window for world-change narration, per (entity, component). Tuning a
  *  live emitter is a burst of `comp` entries; this is how long they fold into
  *  one line. Long enough to swallow a slider drag, short enough that "puts the
@@ -84,6 +86,21 @@ type CollisionMesh = { positions: Float32Array; indices: Uint32Array };
  *  the decode is the expensive part — a world full of agents decodes each
  *  model once. */
 const meshCache = new Map<string, Promise<CollisionMesh | null>>();
+/** Decoded bytes the cache may keep. The colliders fitted from a model hold
+ *  its geometry for as long as they stand; this only bounds what is kept for
+ *  fits yet to come. Least recently used goes first; downloads in flight stay. */
+const MESH_CACHE_BYTES = 256 * 1024 * 1024, MESH_FETCH_MS = 8000;
+const meshBytes = new Map<string, number>();
+function trimMeshCache(key: string, m: CollisionMesh) {
+  meshBytes.set(key, m.positions.byteLength + m.indices.byteLength);
+  let total = 0;
+  for (const b of meshBytes.values()) total += b;
+  for (const k of [...meshCache.keys()]) {
+    if (total <= MESH_CACHE_BYTES) break;
+    if (k === key || !meshBytes.has(k)) continue;
+    total -= meshBytes.get(k)!; meshBytes.delete(k); meshCache.delete(k);
+  }
+}
 type Pose = PublicPose;
 type Entity = { id: string; lib: string; pos: number[]; yaw: number; actor: string; scale?: number;
   /** the spawn's collider override ("exact" | "box"); the browser's decide() reads it, and so does ours */
@@ -1727,13 +1744,15 @@ export class WorldAgent {
   private meshFor(lib: string): Promise<CollisionMesh | null> {
     const key = `${this.httpBase}|${lib}`;
     let p = meshCache.get(key);
-    if (!p) {
-      p = fetch(`${this.httpBase}/library/${lib}`)
-        .then((r) => (r.ok ? r.arrayBuffer() : null))
-        .then((b) => (b ? collisionTriangles(new Uint8Array(b)) : null))
-        .catch(() => null);                            // no mesh: the /geom summary path stands in
-      meshCache.set(key, p);
-    }
+    if (p) { meshCache.delete(key); meshCache.set(key, p); return p; }   // most recently used last
+    // bounded: a stalled /library must not hold up the /geom fallback, and
+    // a failure is forgotten so a later sync tries again
+    p = fetch(`${this.httpBase}/library/${lib}`, { signal: AbortSignal.timeout(MESH_FETCH_MS) })
+      .then((r) => (r.ok ? r.arrayBuffer() : null))
+      .then((b) => (b ? collisionTriangles(new Uint8Array(b)) : null))
+      .then((m) => { if (!m) meshCache.delete(key); else trimMeshCache(key, m); return m; })
+      .catch(() => { meshCache.delete(key); return null; });   // no mesh: the /geom summary path stands in
+    meshCache.set(key, p);
     return p;
   }
 
@@ -1793,11 +1812,21 @@ export class WorldAgent {
     if (mesh) {
       const bid = `${this.world}/${id}`;
       // awaited, unlike the summary boxes below: the fit itself is what a
-      // joining body's feet wait on (supportReady), and it cannot throw
-      if (await registerMeshSupport(this.supportHolder, bid, mesh, { ...xform, collide: e.collide, lib: e.lib })) {
-        this.supportIds.set(id, [bid]);
+      // joining body's feet wait on (supportReady), and it cannot throw.
+      // The id is RESERVED before the wait, so a remove, mount or close
+      // during it has something to drop — and if one happened, the fit that
+      // lands afterwards is taken straight back out.
+      this.supportIds.set(id, [bid]);
+      const ok = await registerMeshSupport(this.supportHolder, bid, mesh, { ...xform, collide: e.collide, lib: e.lib });
+      const now = this.entities.get(id);
+      const superseded = !this.supportIds.get(id)?.includes(bid);
+      if (superseded || this.closed || !now || now.lib !== e.lib || this.mounts.has(id) || this.hasActiveMotion(now)) {
+        if (ok && (superseded || this.closed)) void removeSupport(this.supportHolder, bid);
+        else if (ok) this.dropSupport(id);
         return;
       }
+      if (ok) return;
+      this.supportIds.delete(id);
     }
     if (!g) return;
     const [w, h, d] = [g.bbox.size[0] * s, g.bbox.size[1] * s, g.bbox.size[2] * s];
@@ -1850,7 +1879,9 @@ export class WorldAgent {
     this.supportIds.delete(id);
   }
 
-  private tick() {
+  /** Every collider query a tick makes is about this agent's own world. */
+  private tick() { inWorld(this.world, () => this.tickInWorld()); }
+  private tickInWorld() {
     if (!this.joined) return;
     const dt = TICK_MS / 1000;
     // §24k R0 (survey A7): advance the sim fold and stamp live body
@@ -1917,7 +1948,7 @@ export class WorldAgent {
     const feetFree = !this.draggedBy && this.pins.size === 0 && this.clip !== "ragdoll" && !this.flight;
     const ground = admittedHeight ?? ((x: number, z: number) => this.heightAt(x, z));
     const target = this.target;
-    if (feetFree && collidersReady() && (this.mounts.has(this.name) || this.feetSettling)) {
+    if (feetFree && ((collidersReady() && this.mounts.has(this.name)) || this.feetSettling)) {
       // seated: the seat holds the body, and the feet keep the floor they
       // last stood on — standing up resolves from there (walkTo, setPosture).
       // Just joined: the same hold, until this join's floors are fitted.
@@ -2000,6 +2031,7 @@ export class WorldAgent {
   private async ensureBody(): Promise<HeadlessBody | null> {
     if (this.body !== undefined) return this.body;
     this.body = await HeadlessBody.create(this.httpBase, this.avatar);
+    if (this.body) this.body.scope = this.world;
     return this.body;
   }
 
@@ -2784,7 +2816,7 @@ export class WorldAgent {
     // floor under the feet found from where the body is (a body seated
     // upstairs stands up upstairs); the planner's support answer otherwise
     const supportAt = support.kind === "terrain" ? (wx: number, wz: number) => this.heightAt(wx, wz) : () => support.height;
-    this.pos.y = (collidersReady() ? standOn(this.pos, supportAt) : null) ?? support.height;
+    this.pos.y = inWorld(this.world, () => (collidersReady() ? standOn(this.pos, supportAt) : null)) ?? support.height;
     this.vy = 0; this.grounded = true; this.stallTicks = 0; this.walkStall = null;
     this.walkTolerance = tolerance;
     // A terrain walk reads the live terrain each tick, as the planner read it;
@@ -2831,9 +2863,15 @@ export class WorldAgent {
 
   /** The ground under the feet as a standing body finds it: the fitted
    *  colliders when loaded (an upstairs floor stays upstairs), else terrain. */
-  private feetGround(): number {
+  private feetGround(fromRagdoll = false): number {
     const terrain = (x: number, z: number) => this.heightAt(x, z);
-    return (collidersReady() ? standOn(this.pos, terrain) : null) ?? terrain(this.pos.x, this.pos.z);
+    // a settled ragdoll's root lies ~0.68m BELOW the surface holding it up
+    // (support-lifecycle-test's hipsOffset); probing from the root itself
+    // would start under a thin upper floor and find the storey beneath
+    const from = { x: this.pos.x, y: this.pos.y + (fromRagdoll ? RAGDOLL_ROOT_DROP : 0), z: this.pos.z };
+    const g = inWorld(this.world, () => (collidersReady() ? standOn(from, terrain) : null));
+    if (g != null) { this.pos.x = from.x; this.pos.z = from.z; }
+    return g ?? terrain(this.pos.x, this.pos.z);
   }
 
   /** A walk pressed against something solid ends, and says so. Progress is
@@ -2985,7 +3023,7 @@ export class WorldAgent {
     if (bones == null && this.clip === "ragdoll") {
       this.body?.stop(); this.stopSim();
       this.clip = "idle";
-      this.pos.y = this.feetGround();
+      this.pos.y = this.feetGround(true);
     }
   }
 
@@ -3216,7 +3254,7 @@ export class WorldAgent {
     if (this.clip === "ragdoll" || (this.heldPose && !this.heldPoseAuthored)) {
       this.body?.stop(); this.stopSim();
       this.heldPose = null; this.heldPoseAuthored = false;
-      this.pos.y = this.feetGround();
+      this.pos.y = this.feetGround(true);
     }
     // and standing up IS getting off the seat
     if (clip === "idle" && this.joined && this.mounts.has(this.name)) this.verb("dismount", { id: this.name });

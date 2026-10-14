@@ -81,6 +81,31 @@ export function paintGround(body) {
     body.appendChild(btnRow(btn('↻ reshuffle', () => { st.seed = Math.floor(Math.random() * 9999); growTerrain({ seed: st.seed }); })));
     body.appendChild(heightmapRow());
 
+    // 💧 water: one level for the world — every bit of ground below it is under water. The level starts
+    // a quarter of the way up the ground's current range (a pond in the low places), or where it is now.
+    {
+      const lvl = document.createElement('input');
+      lvl.type = 'number'; lvl.step = '0.25'; lvl.title = 'water level (m)';
+      lvl.style.cssText = 'width:4.5em;font-size:11px';
+      const cur = currentTerrainArgs()?.water?.level;
+      if (Number.isFinite(cur)) lvl.value = String(cur);
+      else fetch(`/heightmap?world=${encodeURIComponent(CONFIG.world)}&format=json`).then((r) => (r.ok ? r.json() : null))
+        .then((m) => { if (m && !lvl.value) lvl.value = (m.min + (m.max - m.min) * 0.25).toFixed(1); }).catch(() => {});
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:4px;align-items:center;font-size:11px;color:var(--dim)';
+      row.append('💧 level', lvl, 'm');
+      body.appendChild(row);
+      body.appendChild(btnRow(
+        btn('fill', () => {
+          const level = Number(lvl.value);
+          if (!Number.isFinite(level)) { flashHint('set a water level first'); return; }
+          growTerrain({ water: { ...(currentTerrainArgs()?.water ?? {}), level } });
+          flashHint(`water at ${level} m`);
+        }),
+        btn('drain', () => { growTerrain({ water: null }); flashHint('water drained'); }),
+      ));
+    }
+
     // WHAT THE WORLD HAS NOW, and what you're seeing instead (only while those differ). The dials below are a
     // COMPOSER (what 🌱 grow will plant) and they default to meadow, so on their own they read like a report of the
     // field (the owner and I both took galleta_dry for meadow, 09-24).

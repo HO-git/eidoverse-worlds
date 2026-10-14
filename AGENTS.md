@@ -580,6 +580,13 @@ flatHeight, layers}` rolls noise hills; two optional keys say WHERE
   noise as the base: black = `min` m, white = `max` m, stretched over the
   `size` square (image x → +x, image down → +z). Features still apply on top.
 
+- `water: {level, color?, opacity?}` — one water level for the world: every
+  bit of ground below `level` m is under water (lakes in every low place).
+  Bodies WADE, to 1 m deep and no further — there is no swimming yet; your
+  `walk_to` stops at the edge and says why, and `look` says when you are
+  standing in water and how deep. `water: null` drains it. The sim (thrown
+  things) does not see water yet.
+
 The verb replaces the whole terrain bag, so send every key you mean to keep.
 
 ## Geometry — shape as data

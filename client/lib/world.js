@@ -22,6 +22,7 @@ import { beginWork } from './loadwork.js';
 import { reindexCollider } from './colliders.js';
 import { setTerrain, setGrass, clearGrass, heightAt } from './terrain.js';
 import { shapeParams, shapedHeightAt, gridFor, registerGrid, decodeGrid } from '../../shared/terrainshape.js';
+import { applyWater } from './water.js';
 import { buildFloraField, warmField, loadFloraModule } from './flora.js';
 import { applySky, whenSkyWarm } from './sky.js';
 import { whenBooted, bootDone } from './boot.js';
@@ -158,6 +159,8 @@ export function applyTerrainState(args) {
       await warm('compile terrain', () => renderer.compileAsync(t.mesh, camera, scene).catch(() => {}), { p: P_GATE });
     }
     setTerrain(t);
+    // the water reads the ground it fills (its per-vertex depth), so it is built on THIS terrain
+    try { applyWater(args, heightAt); } catch (e) { report('water', e); }
     // re-seat only ground-level entities — anything with a meaningful y
     // (seated on furniture, elevated) keeps its logged height
     for (const [id, obj] of entities) {

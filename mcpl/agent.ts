@@ -7,7 +7,7 @@
 import { BodyStateReader, type BodyObservation, type PublicPose } from "./body-state.ts";
 import { mentionRegex } from "./mention.ts";
 import { mergePose } from "../shared/humanoid.js";
-import { shapeParams, shapedHeightAt, gridFor, registerGrid, decodeGrid } from "../shared/terrainshape.js";
+import { shapeParams, shapedHeightAt, gridFor, registerGrid, decodeGrid, waterParams, wadeAllowed, WADE_DEPTH } from "../shared/terrainshape.js";
 import * as THREE_W from "three/webgpu";
 import * as TSL from "three/tsl";
 import { NoiseGate, SHORT_STINT_MS, APPROACH_REFRACT_MS, APPROACH_RADIUS, REARM_RADIUS,
@@ -238,6 +238,10 @@ export class WorldAgent {
    * this immediately after walkTo() so a later replacement walk cannot change
    * its refusal receipt. */
   walkRefusal: string | null = null;
+  /** Why the last walk stopped short, when something stopped it mid-way (the water's edge). */
+  walkStopReason: string | null = null;
+  /** The world's water (shared/terrainshape.js), from the terrain bag; null when it has none. */
+  water: { level: number } | null = null;
   /** A held custom pose — sparse humanoid-bone quaternions. Presence only:
    *  it rides the pose packet and is never a log verb, because it is a moment,
    *  not a change to the world. `null` clears. */
@@ -1605,6 +1609,7 @@ export class WorldAgent {
     }
     const t = (globalThis as any).makeTerrain({ ...args, layers: [] });
     this.terrain = shape ? { heightAt: shapedHeightAt(t.heightAt, args) } : t;
+    this.water = waterParams(args);
     // the settle sim clamps against the SAME ground the walking clamp reads —
     // not one height sampled at the fall site (#17)
     void setHeightField((x, z) => this.heightAt(x, z));
@@ -1857,11 +1862,25 @@ export class WorldAgent {
         this.speed = sp; this.clip = this.target.run ? "run" : "walk";
         this.yaw = Math.atan2(dx, dz);
         const step = Math.min(dist, sp * dt);
-        if (step === dist) {
+        // WADING, the same rule the browser's controller applies: water to the waist and no deeper (no
+        // swimming yet). The walk stops at the edge and says why, rather than marching along a lakebed.
+        if (this.water) {
+          const nx = step === dist ? this.target.x : this.pos.x + (dx / dist) * step;
+          const nz = step === dist ? this.target.z : this.pos.z + (dz / dist) * step;
+          const ground = admittedHeight ?? ((x: number, z: number) => this.heightAt(x, z));
+          const to = ground(nx, nz);
+          if (!wadeAllowed(this.water.level, ground(this.pos.x, this.pos.z), to)) {
+            this.walkStopReason = `stopped at the water's edge at (${this.pos.x.toFixed(1)}, ${this.pos.z.toFixed(1)}): `
+              + `the water ahead is ${(this.water.level - to).toFixed(1)}m deep, and a body wades only to ${WADE_DEPTH}m — there is no swimming yet. Walk around it.`;
+            this.target = null; this.legs = []; this.walkHeightAt = null; this.speed = 0; this.clip = "idle";
+            this.walkDone?.(false); this.walkDone = null;
+          }
+        }
+        if (this.target && step === dist) {
           // Land on the validated point exactly, rather than allowing a
           // tolerance or floating residual to cut the next corner.
           this.pos.x = this.target.x; this.pos.z = this.target.z;
-        } else {
+        } else if (this.target) {
           this.pos.x += (dx / dist) * step;
           this.pos.z += (dz / dist) * step;
         }
@@ -2686,6 +2705,7 @@ export class WorldAgent {
     // A new request supersedes the walk under way, whether or not it can be walked.
     if (this.walkDone || this.target) this.abandonWalk();
     this.walkRefusal = null;
+    this.walkStopReason = null;
     // Plan before touching the body, from the ground under it: a refused walk
     // leaves it seated, pinned, dragged, posed or tumbling as it was.
     const support = this.walkSupport();
@@ -3265,7 +3285,7 @@ export class WorldAgent {
     const selfSeatNote = selfEff?.ok && selfEff.seat?.state === "approximate" ? ` (seat approximate: ${selfEff.seat.reason})` : "";
     const seated = selfRide ? `, seated on ${selfRide.to}${selfEff?.ok && selfEff.moving ? ` (riding its ${selfEff.moving})` : ""}${selfSeatNote}` : "";
     if (meKnown) {
-      L.push(`You are "${this.name}" in world "${this.world}" at (${me.x.toFixed(1)}, ${me.z.toFixed(1)}), ground height ${me.y.toFixed(2)}m, facing ${this.bearing(Math.sin(this.yaw), Math.cos(this.yaw))}${seated}.`);
+      L.push(`You are "${this.name}" in world "${this.world}" at (${me.x.toFixed(1)}, ${me.z.toFixed(1)}), ground height ${me.y.toFixed(2)}m${this.water && this.water.level > me.y + 0.02 ? `, standing in water ${(this.water.level - me.y).toFixed(1)}m deep` : ""}, facing ${this.bearing(Math.sin(this.yaw), Math.cos(this.yaw))}${seated}.`);
     } else {
       L.push(`You are "${this.name}" in world "${this.world}", position unknown (${selfEff && !selfEff.ok ? selfEff.why : "seat unresolved"}), facing ${this.bearing(Math.sin(this.yaw), Math.cos(this.yaw))}${seated}. Distances are withheld until your seat resolves — dismount {id: "${this.name}"} restores a stamped position.`);
     }

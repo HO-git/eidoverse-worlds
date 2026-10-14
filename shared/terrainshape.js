@@ -157,6 +157,40 @@ export function shapeHeight(base, S, size) {
   };
 }
 
+// ---- water ---------------------------------------------------------------------
+// One level per world, riding the terrain bag: `water: {level, color?, opacity?}`.
+// Every point of ground below `level` is under water, so one number makes every
+// low place a lake. It is presence-free world state like the ground itself:
+// rendered by every client, read by every agent, and (v1) ignored by the sim —
+// a thrown thing still lands on the lakebed.
+//
+// There is no swimming yet, so a body WADES: water up to WADE_DEPTH metres
+// (scaled by the body's size) and no deeper. A step that would go deeper AND
+// deeper than where it stands is refused, so a body the water rose over can
+// always walk back out. The client's controller and the agents' walk both read
+// this one number.
+export const WADE_DEPTH = 1.0;
+const HEX = /^#[0-9a-fA-F]{6}$/;
+
+/** A world's water, normalized — or null when it has none.
+ *  @param {Record<string, any>} a  terrain-verb args */
+export function waterParams(a) {
+  const w = a?.water;
+  if (!w || typeof w.level !== 'number' || !Number.isFinite(w.level)) return null;
+  return {
+    level: clamp(w.level, -500, 500),
+    color: typeof w.color === 'string' && HEX.test(w.color) ? w.color : '#1d5a6e',
+    opacity: clamp(num(w.opacity, 0.82), 0.1, 1),
+  };
+}
+
+/** May a body step from ground height `from` to `to` under water at `level`? */
+export function wadeAllowed(level, from, to, scale = 1) {
+  if (level == null) return true;
+  const dTo = level - to;
+  return dTo <= WADE_DEPTH * scale || dTo <= level - from;
+}
+
 /** The shaped heightAt for terrain-verb args over a base law — or the base
  *  itself when the args shape nothing. What the client and agents call. */
 export function shapedHeightAt(base, args) {

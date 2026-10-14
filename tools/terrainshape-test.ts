@@ -10,7 +10,7 @@ import { PNG } from "pngjs";
 process.env.OPT_DIR = mkdtempSync(join(tmpdir(), "terrainshape-opt-"));
 process.env.WORLDS_DIR = mkdtempSync(join(tmpdir(), "terrainshape-worlds-"));
 
-const { shapeParams, shapeHeight, shapedHeightAt, encodeGrid, decodeGrid, registerGrid, MAX_FEATURES } =
+const { shapeParams, shapeHeight, shapedHeightAt, encodeGrid, decodeGrid, registerGrid, MAX_FEATURES, waterParams, wadeAllowed, WADE_DEPTH } =
   await import("../shared/terrainshape.js");
 const { terrainParams, makeHeightField } = await import("../shared/terrainmath.js");
 const { ingestHeightmap, exportHeightmap } = await import("../server/heightmap.ts");
@@ -133,6 +133,22 @@ console.log("\nexport → edit → import (server/heightmap.ts)");
   check("...scaled to the full 16-bit range", g.data[0] === 0 && g.data[15] === 65535);
   const big = ingestHeightmap(new Uint8Array(PNG.sync.write(new PNG({ width: 1100, height: 2 }))), "00000000000000cc") as any;
   check("an oversized image is refused with the size it wants", big.status === 413 && /1025/.test(big.error));
+}
+
+console.log("\nwater");
+{
+  check("no water key, no water", waterParams({ seed: 7 }) === null && waterParams({ water: null }) === null);
+  const W = waterParams({ water: { level: -0.5 } })!;
+  check("a level alone is enough, with a default colour and opacity", W.level === -0.5 && /^#/.test(W.color) && W.opacity > 0);
+  check("a bad colour falls back, opacity is clamped", waterParams({ water: { level: 0, color: "red", opacity: 9 } })!.color !== "red"
+    && waterParams({ water: { level: 0, opacity: 9 } })!.opacity === 1);
+  check("a non-number level is no water", waterParams({ water: { level: "deep" } }) === null);
+  check("water is not shaping: it never moves the ground", shapeParams({ water: { level: 3 } }) === null);
+  check(`wading: a step into water ${WADE_DEPTH}m deep is fine`, wadeAllowed(0, 0.5, -WADE_DEPTH));
+  check("...deeper than that is refused", !wadeAllowed(0, -0.5, -1.4));
+  check("...unless it is no deeper than where you already stand (you can always walk out)", wadeAllowed(0, -2, -1.6));
+  check("...a bigger body wades deeper", wadeAllowed(0, -0.5, -1.4, 1.5));
+  check("...and no water, no rule", wadeAllowed(null, 0, -50));
 }
 
 console.log(failures ? `\n\x1b[31m${failures} failed\x1b[0m` : "\n\x1b[32mall passed\x1b[0m");

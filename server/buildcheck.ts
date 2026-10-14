@@ -50,6 +50,11 @@ const NUDGE = 0.05;   // navgrid NAV_NUDGE
 /** How far (cells) a room grows past its eroded core — the erosion's own depth. */
 const GROW = 3;
 const AREA = NAV_CELL * NAV_CELL;
+/** The most lattice columns (footprint plus margin) a check walks: ~100m square. */
+const MAX_COLUMNS = 250_000, MAX_SIDE = Math.sqrt(MAX_COLUMNS) * NAV_CELL, MAX_HEIGHT = 120;
+/** A surface a body can't step onto with a floor this close beneath it is
+ *  furniture (a table, a counter, a bunk), not a floor of the building. */
+const FURNITURE_MAX = 1.2;
 const r2 = (v: number) => Math.round(v * 100) / 100;
 
 /** Check the GLB at `file`. `C` is client/lib/colliders.js, `THREE` its three
@@ -67,11 +72,6 @@ export async function checkModel(file: string, C: any, THREE: any): Promise<Chec
   }
   const w = mx[0] - mn[0], d = mx[2] - mn[2], h = mx[1] - mn[1];
   const roomScale = decideSupportClass({ w, d, h }).roomScale;
-  if (!roomScale) warnings.push({ kind: "solid", message:
-    `${w.toFixed(1)}×${d.toFixed(1)}m and ${h.toFixed(1)}m tall is under the walk-in size (a 16m² footprint and 2.2m height): `
-    + `the world fits it as one solid box, so nobody can go inside. If it is meant to be entered, spawn it with collide: "exact". `
-    + `(The rest of this report reads it as if it were.)` });
-
   // ---- performance
   const pf = glbPerfOfFile(file);
   const rank = pf ? rankOf(pf) : null;
@@ -79,6 +79,18 @@ export async function checkModel(file: string, C: any, THREE: any): Promise<Chec
   if (pf && rank && rank.rank >= 3) warnings.push({ kind: "perf", message:
     `rendering cost is "${TIER_NAMES[rank.rank]}" (${pf.tris} triangles, ${pf.draws} draw calls, ${pf.mats} materials; set by ${rank.worst}) — `
     + `merge static parts into one mesh and share materials (colour can ride vertex colours) to bring draws under 12` });
+  const walkIn = { roomScale, footprint: r2(w * d), height: r2(h) };
+  // ---- too big to walk through cell by cell: the size and budget only
+  const columns = ((w + 2 * MARGIN) / NAV_CELL + 1) * ((d + 2 * MARGIN) / NAV_CELL + 1);
+  if (!(columns <= MAX_COLUMNS) || !(h <= MAX_HEIGHT)) {
+    warnings.push({ kind: "too-large", message: `${w.toFixed(0)}×${d.toFixed(0)}m and ${h.toFixed(0)}m tall is more than the check walks through `
+      + `(${Math.round(MAX_SIDE)}m square, ${MAX_HEIGHT}m tall): floors, rooms and reachability were not checked — the upload is fine either way` });
+    return { ok: false, walkIn, perf, levels: [], suggested: { rooms: [], doors: [], stairs: [], places: {} }, warnings, ms: Math.round(performance.now() - t0) };
+  }
+  if (!roomScale) warnings.push({ kind: "solid", message:
+    `${w.toFixed(1)}×${d.toFixed(1)}m and ${h.toFixed(1)}m tall is under the walk-in size (a 16m² footprint and 2.2m height): `
+    + `the world fits it as one solid box, so nobody can go inside. If it is meant to be entered, spawn it with collide: "exact". `
+    + `(The rest of this report reads it as if it were.)` });
 
   // ---- fit it as a spawn would (forced exact: we read its inside either way)
   C.clearColliders();
@@ -139,19 +151,49 @@ export async function checkModel(file: string, C: any, THREE: any): Promise<Chec
   const reach = bfs(body, rim, () => true);
 
   // ---- floors: the covered heights with room to stand
-  const covered = [...nodes.values()].filter((n) => n.covered && n.roomy);
-  const levels: { y: number; nodes: N[] }[] = [];
-  let prevY = -Infinity;
-  for (const n of [...covered].sort((a, b) => a.y - b.y)) {
-    // heights within 0.15m of the last one are one floor (a threshold sill
-    // with it); a stair's 0.19m treads stay apart
-    const L = levels[levels.length - 1];
-    if (L && n.y - prevY < 0.15) L.nodes.push(n); else levels.push({ y: n.y, nodes: [n] });
-    prevY = n.y;
+  // a tabletop has open air and then a floor a metre or so beneath it; a body
+  // can't step onto it, and it is no floor to reach. Looked for with front
+  // faces only: from inside a solid plinth the first face down is its own
+  // underside, seen from behind, and doesn't count.
+  const bvh = [...C.nearColliders((mn[0] + mx[0]) / 2, (mn[2] + mx[2]) / 2, Math.max(w, d))].find(([id]: any) => id === "model")?.[1]?.exact?.bvh;
+  const down = new THREE.Ray(new THREE.Vector3(), new THREE.Vector3(0, -1, 0)), up_ = new THREE.Ray(new THREE.Vector3(), new THREE.Vector3(0, 1, 0));
+  const furniture = (n: N) => {
+    if (!bvh) return false;
+    down.origin.set(body.at(n.i), n.y - 0.1, body.at(n.j));
+    const hit = bvh.raycastFirst(down, THREE.FrontSide);
+    if (!hit) return false;
+    const drop = n.y - hit.point.y;
+    if (!(drop > NAV_STEP && drop <= FURNITURE_MAX)) return false;
+    // ...and open air between: looking up from that floor, the first face is
+    // the top's underside. A solid block (a stair's tread built down to the
+    // floor) shows none — from inside it, its faces are all seen from behind.
+    up_.origin.set(body.at(n.i), hit.point.y + 0.05, body.at(n.j));
+    const under = bvh.raycastFirst(up_, THREE.FrontSide);
+    return !!under && under.point.y < n.y + 0.01;
+  };
+  const covered = [...nodes.values()].filter((n) => n.covered && n.roomy && !furniture(n));
+  // A floor is a height a lot of standing room shares; a stair's treads
+  // each hold a little. So heights are binned (5cm), the bins holding a
+  // square metre or more are floors (with neighbouring dense bins — a
+  // floor that isn't quite level), and the sparse heights near a floor (a
+  // threshold sill) join it. Chaining height to nearest height instead runs
+  // a shallow stair's treads from one floor into the next.
+  const BIN = 0.05, binOf = (y: number) => Math.round(y / BIN);
+  const bins = new Map<number, N[]>();
+  for (const n of covered) (bins.get(binOf(n.y)) ?? bins.set(binOf(n.y), []).get(binOf(n.y))!).push(n);
+  const dense = [...bins.keys()].filter((b) => bins.get(b)!.length * AREA >= 1).sort((a, b) => a - b);
+  const bands: { lo: number; hi: number }[] = [];
+  for (const b of dense) {
+    const last = bands[bands.length - 1];
+    if (last && b - last.hi <= 2) last.hi = b; else bands.push({ lo: b, hi: b });
   }
-  const floors = levels.filter((L) => L.nodes.length * AREA >= 2).map((L) => ({
-    y: r2(L.nodes.reduce((s, n) => s + n.y, 0) / L.nodes.length), nodes: L.nodes,
-  }));
+  const levels = bands.map((B) => ({ nodes: covered.filter((n) => n.y >= (B.lo - 1.5) * BIN && n.y <= (B.hi + 1.5) * BIN) }));
+  const floors = levels.filter((L) => L.nodes.length * AREA >= 2).map((L) => {
+    // its height: the densest bin's, not an average dragged by a sill
+    const best = [...new Set(L.nodes.map((n) => binOf(n.y)))].sort((a, b) => bins.get(b)!.length - bins.get(a)!.length)[0];
+    const at = bins.get(best)!;
+    return { y: r2(at.reduce((s, n) => s + n.y, 0) / at.length), nodes: L.nodes };
+  });
   const levelOf = (n: { y: number }) => floors.findIndex((f) => Math.abs(f.y - n.y) < 0.15);
   if (!covered.length) warnings.push({ kind: "no-inside", message: "nowhere under a roof or ceiling has room to stand — it has no inside a body can be in" });
 
@@ -231,6 +273,7 @@ export async function checkModel(file: string, C: any, THREE: any): Promise<Chec
   // standing open all cross it. (The probe: the collider code's own wall
   // band, for a 0.4m-tall body whose feet are 1.5m up.)
   const rooms: CheckReport["suggested"]["rooms"] = [];
+  let roomSeq = 0;                                        // ids never reused, though rooms are dropped
   const roomOf = new Map<string, string>();               // standing node -> room
   const wallBand = probeAt(BODY_R, 0.4);
   floors.forEach((f, li) => {
@@ -264,7 +307,7 @@ export async function checkModel(file: string, C: any, THREE: any): Promise<Chec
     const mine: string[] = [];
     for (const cmp of flatComps([...space.values()].filter((c) => (dist.get(`${c.i},${c.j}`) ?? 0) >= 2))) {
       if (cmp.length * AREA < 1) continue;
-      const id = `room_${rooms.length + 1}`; mine.push(id);
+      const id = `room_${++roomSeq}`; mine.push(id);
       for (const c of cmp) { label.set(`${c.i},${c.j}`, id); grown.set(`${c.i},${c.j}`, 0); front.push(c); }
       rooms.push({ id, min: [], max: [], area: 0, level: li });
     }
@@ -281,7 +324,7 @@ export async function checkModel(file: string, C: any, THREE: any): Promise<Chec
     // a middle, still a place of its own. A sliver along a wall is not.
     for (const cmp of flatComps([...space.values()].filter((c) => !label.has(`${c.i},${c.j}`)))) {
       if (cmp.length * AREA < 1.5 || cmp.filter((c) => (dist.get(`${c.i},${c.j}`) ?? 0) >= 1).length * AREA < 1) continue;
-      const id = `room_${rooms.length + 1}`; mine.push(id);
+      const id = `room_${++roomSeq}`; mine.push(id);
       for (const c of cmp) label.set(`${c.i},${c.j}`, id);
       rooms.push({ id, min: [], max: [], area: 0, level: li });
     }
@@ -399,7 +442,7 @@ export async function checkModel(file: string, C: any, THREE: any): Promise<Chec
   C.clearColliders();
   return {
     ok: warnings.length === 0,
-    walkIn: { roomScale, footprint: r2(w * d), height: r2(h) },
+    walkIn,
     perf,
     levels: floors.map((f) => ({ y: f.y, area: r2(f.nodes.length * AREA), reachable: r2(f.nodes.filter((n) => reach.has(key(n.i, n.j, n.y))).length * AREA) })),
     suggested: { rooms, doors, stairs, places },

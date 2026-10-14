@@ -42,6 +42,14 @@ try {
   const said = await tool("check_model", { id: "tower" });
   check("check_model reads it out for a placed thing: walk-in, floors, no problems, suggestions and the comp to name them",
     /\[tower\].*walk-in; 2 floors/.test(said) && /No problems found/.test(said) && /Suggested places/.test(said) && /comp \{id: "tower", type: "places"/.test(said), said);
+  a.verb("spawn", { id: "small", lib: up.path, pos: [40, a.heightAt(40, 0), 0], yaw: 0, scale: 0.5 });
+  a.verb("spawn", { id: "forced", lib: up.path, pos: [60, a.heightAt(60, 0), 0], yaw: 0, collide: "box" });
+  for (let i = 0; i < 40 && !(a.entities.get("small") && a.entities.get("forced")); i++) await sleep(50);
+  const saidSmall = await tool("check_model", { id: "small" });
+  check("check_model on a thing placed at half size: solid as placed, and says the report is the file's own size",
+    /\[small\].*SOLID/.test(saidSmall) && /at scale 0.5/.test(saidSmall) && /Note: measured on the model file at its own size/.test(saidSmall), saidSmall.slice(0, 500));
+  const saidForced = await tool("check_model", { id: "forced" });
+  check("...and on one spawned collide: \"box\": solid, for that reason", /SOLID/.test(saidForced) && /collide: "box"/.test(saidForced), saidForced.slice(0, 300));
   const saidBad = await tool("check_model", { lib: bad.path });
   check("...and the problems, for a library path", /Problems:\n  - .*narrower than a body/.test(saidBad), saidBad.slice(0, 400));
 } finally {

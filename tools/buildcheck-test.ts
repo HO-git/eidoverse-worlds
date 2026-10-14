@@ -73,6 +73,25 @@ try {
   check("a 2.8m hut: under the walk-in size — a solid box unless spawned collide: \"exact\"",
     kinds(hut).includes("solid") && /collide: "exact"/.test(say(hut)) && hut.walkIn.roomScale === false, say(hut));
 
+  check("...and its raised floor, a solid plinth 0.8m up, is a floor — not furniture", rise.levels.some((l: any) => Math.abs(l.y - RAISED) < 0.1), JSON.stringify(rise.levels));
+
+  console.log("\nwhat is not a floor, and what is:");
+  // a 2×2m table 0.75m up in the hall, room above it: furniture, no floor
+  const table = await run("table", [...boxes, [-2.6, FLOOR + 0.7, 0.4, -0.6, FLOOR + 0.75, 2.4]], { building });
+  check("a large tabletop is furniture: no extra floor, no warning", table.ok && table.levels.length === 2, `${say(table)} ${JSON.stringify(table.levels)}`);
+  // the same climb in 0.10m risers: the treads are not one floor with both storeys
+  const shallow = await run("shallow", [...boxes.filter((b: number[]) => !(b[0] === 1.6 && b[3] === 2.8 && b[1] === FLOOR && b[4] < UPPER - 0.01)),
+    ...Array.from({ length: 30 }, (_, k) => [1.6, FLOOR, STAIR_FOOT - (k + 1) * GOING / 2, 2.8, FLOOR + (k + 1) * RISE / 2, STAIR_FOOT - k * GOING / 2])]);
+  check("a stair of 0.10m risers leaves the two floors apart, joined by a stair",
+    shallow.levels.length === 2 && shallow.levels.some((l: any) => Math.abs(l.y - FLOOR) < 0.1) && shallow.levels.some((l: any) => Math.abs(l.y - UPPER) < 0.1)
+      && shallow.suggested.stairs.length === 1, `${JSON.stringify(shallow.levels)} stairs ${shallow.suggested.stairs.length} | ${say(shallow)}`);
+  check("room ids are never reused", [good, table, shallow].every((r: any) => new Set(r.suggested.rooms.map((x: any) => x.id)).size === r.suggested.rooms.length));
+
+  console.log("\nsize:");
+  const huge = await run("huge", [[-200, 0, -200, 200, 0.1, 200], [-1, 0.1, -1, 1, 3, 1]], {}, false);
+  check("a model 400m across gets its size and budget, not a cell-by-cell walk", kinds(huge).includes("too-large") && huge.levels.length === 0 && huge.ms < 5000,
+    `${huge.ms}ms ${say(huge)}`);
+
   check("each check takes seconds, not minutes", [good, narrow, overhang, sealed, rise].every((r: any) => r.ms < 20_000),
     [good, narrow, overhang, sealed, rise].map((r: any) => `${r.ms}ms`).join(" "));
 } finally {

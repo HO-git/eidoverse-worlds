@@ -5,7 +5,8 @@
 // ever spawns it and reads the JSON back. Reports are cached in memory and on
 // disk (OPT_DIR/checks/), keyed by the model's path and invalidated by its
 // mtime — store uploads are content-addressed, so theirs never change, and a
-// re-exported library model is checked again. Concurrent asks for one file
+// re-exported library model is checked again. CHECK_VERSION retires every
+// stored report when the check itself changes. Concurrent asks for one file
 // share the run.
 
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
@@ -14,6 +15,9 @@ import { OPT_DIR, ROOT } from "./config.ts";
 import { atomicWrite } from "./fsutil.ts";
 
 const CHECK_TIMEOUT_MS = 90_000;
+/** Bump when what a check finds changes (server/buildcheck.ts, the navgrid
+ *  moves it walks, the collider rules): stored reports from before are stale. */
+export const CHECK_VERSION = 2;
 const memo = new Map<string, { mtime: number; report: unknown }>();
 const running = new Map<string, Promise<unknown>>();
 let queue: Promise<unknown> = Promise.resolve();
@@ -29,7 +33,7 @@ export function checkFile(file: string): Promise<unknown> {
   if (hit && hit.mtime === mtime) return Promise.resolve(hit.report);
   try {
     const d = JSON.parse(readFileSync(diskPath(file), "utf8"));
-    if (d?.file === file && d.mtime === mtime) { memo.set(file, { mtime, report: d.report }); return Promise.resolve(d.report); }
+    if (d?.file === file && d.mtime === mtime && d.version === CHECK_VERSION) { memo.set(file, { mtime, report: d.report }); return Promise.resolve(d.report); }
   } catch { /* not checked yet */ }
   const inflight = running.get(file);
   if (inflight) return inflight;
@@ -46,7 +50,7 @@ export function checkFile(file: string): Promise<unknown> {
     memo.set(file, { mtime, report });
     try {
       if (!existsSync(join(OPT_DIR, "checks"))) mkdirSync(join(OPT_DIR, "checks"), { recursive: true });
-      atomicWrite(diskPath(file), JSON.stringify({ file, mtime, report }));
+      atomicWrite(diskPath(file), JSON.stringify({ version: CHECK_VERSION, file, mtime, report }));
     } catch { /* memory still has it */ }
     return report;
   });

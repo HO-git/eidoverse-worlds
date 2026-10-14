@@ -356,7 +356,8 @@ export const HANDLERS: Record<string, ToolHandler> = {
       try { r = await (await fetch(`${ag.httpBase}/check?lib=${encodeURIComponent(lib)}`)).json(); }
       catch (err) { return text(`the check could not be reached: ${String((err as Error)?.message ?? err)}`); }
       if (r.error) return text(`couldn't check ${lib}: ${r.error}`);
-      return text(describeCheck(e ? `[${e.id}] ${lib}` : lib, r, e ? ag.placesOn(e).length : 0, e?.id));
+      return text(describeCheck(e ? `[${e.id}] ${lib}` : lib, r, e ? ag.placesOn(e).length : 0, e?.id,
+        e ? { scale: e.scale && e.scale > 0 ? e.scale : 1, collide: e.collide } : undefined));
   },
   name_place: async (ag, a) => {
       // coordinates: x and z together (y optional: the floor there nearest
@@ -819,10 +820,22 @@ export const HANDLERS: Record<string, ToolHandler> = {
 }
 
 /** A build check (server/buildcheck.ts) as text a reader can act on. */
-function describeCheck(what: string, r: any, named: number, id?: string): string {
+function describeCheck(what: string, r: any, named: number, id?: string, placed?: { scale: number; collide?: string }): string {
   const L: string[] = [];
+  let note = "";
+  // a placed thing: walk-in or solid as IT is placed — its scale and any
+  // collide it was spawned with; the rest is measured on the file at its own size
+  if (placed && (placed.scale !== 1 || placed.collide)) {
+    const s = placed.scale, fp = (r.walkIn?.footprint ?? 0) * s * s, ht = (r.walkIn?.height ?? 0) * s;
+    const walkIn = placed.collide === "exact" ? true : placed.collide === "box" ? false : fp >= 16 && ht >= 2.2;
+    r = { ...r, walkIn: { ...r.walkIn, roomScale: walkIn } };
+    const why = placed.collide ? `spawned with collide: "${placed.collide}"` : `${fp.toFixed(1)}m² and ${ht.toFixed(1)}m tall at scale ${s}`;
+    r.warnings = (r.warnings ?? []).filter((w: any) => w.kind !== "solid");
+    if (!walkIn) r.warnings.unshift({ kind: "solid", message: `as placed (${why}) it is one solid box: nobody can go inside — spawn it with collide: "exact" to change that` });
+    if (s !== 1) note = `Note: measured on the model file at its own size; [${id}] is placed at scale ${s}, so its floors, passages and rises are ${s}× what follows (a body is not scaled) — re-export at the size you place it to check that size.`;
+  }
   const floors = (r.levels ?? []).map((l: any) => `${l.y}m (${l.reachable}m² of ${l.area}m² reachable)`).join(", ");
-  L.push(`${what}: ${r.walkIn?.roomScale ? "walk-in" : "SOLID — under the walk-in size"}; ${(r.levels ?? []).length} floor${(r.levels ?? []).length === 1 ? "" : "s"}${floors ? `: ${floors}` : ""}`
+  L.push(`${what}: ${r.walkIn?.roomScale ? "walk-in" : placed?.collide === "box" ? "SOLID — spawned as a box" : "SOLID — under the walk-in size"}; ${(r.levels ?? []).length} floor${(r.levels ?? []).length === 1 ? "" : "s"}${floors ? `: ${floors}` : ""}`
     + `${r.perf ? `; rendering ${r.perf.rank} (${r.perf.tris} triangles, ${r.perf.draws} draw calls)` : ""}.`);
   if (r.warnings?.length) { L.push("Problems:"); for (const w of r.warnings) L.push(`  - ${w.message}`); }
   else L.push("No problems found: every floor under its roof can be reached from outside.");
@@ -837,6 +850,7 @@ function describeCheck(what: string, r: any, named: number, id?: string): string
     L.push(`To name them, rename the keys and send: comp {id: "${id ?? "<thing>"}", type: "places", data: ${JSON.stringify(s.places)}}`
       + ` — merged with any places it already has, since a comp replaces the whole bag — or stand in each and use name_place.`);
   }
+  if (note) L.push(note);
   return L.join("\n");
 }
 

@@ -596,12 +596,31 @@ first:
 
 **`walk_to` finds its own way through them.** One call: round the furniture, in at the door, up the stair, along the upper floor, out onto the balcony (`mcpl/navgrid.ts`). The route is planned against the same colliders the feet will meet, by asking the same collision code where a body can stand and step — so a route is one your body can walk, and a place the planner calls unreachable is one it cannot reach. On open ground it is the one straight leg it always was.
 
-- **Which floor** at the destination: `y` picks it — the highest place to stand no more than a step above that height (`y: 0` for a ground floor, an upper storey's floor height for that storey). Without `y`: your own storey if the destination has a floor within a step of yours, else the lowest one there (the ground floor of the next building, the ground under a balcony).
+- **Which floor** at the destination: `y` picks it — the place to stand nearest that height, no more than a step above it (`y: 0` for a ground floor, an upper storey's floor height for that storey). Without `y`: your own storey if the destination has a floor within a step of yours, else the lowest one there (the ground floor of the next building, the ground under a balcony).
 - **Where nothing can stand** (inside a wall, a chair, closer to a wall than a body fits), the walk ends at the nearest place that can, on your side of it, and says how far from the point that is.
 - **Refusals carry the reason**: nowhere to stand near the point; no walkable way there (sealed off, or only by a climb or drop of more than 0.55m — a route never steps off a balcony); or a search that ran too long (walk part of the way first).
 - **Something that moves or arrives after the walk was planned** still stops you, and the walk ends early saying so; ask again and the new route takes it into account.
 
 Griddled structures route by their own planner, below; a walk through one is not re-planned around placed models.
+
+### Named places
+
+Things can have **named places** — rooms, doors, seats, a balcony — and `walk_to {to: …}` goes to them by name: `"lookout/balcony"` (thing/place), `"the reading room"` (a place's name or label alone — the nearest thing that has one), `"lantern-house"` (a thing alone: its entrance, else a door), or a person's name (you stop beside them). A room is reached anywhere on its own floor; a seat, on the floor beside it (`mount` to sit). `look` lists each thing's places and says which named room you are standing in.
+
+A place belongs to its thing and is written in the thing's model frame (Y up, metres — the frame sockets use), so it moves, turns and scales with it. Two sources, the second overriding the first name by name (`mcpl/places.ts`):
+
+1. **The model's own description** — a `building` object in a scene node's glTF extras (a JSON string is fine; Blender exports custom properties that way): `rooms` `[{id, name, min, max}]`, `portals` `[{id, center}]` (doors), `seats` `[{id, pos}]`, `arrivals` `[{id, pos}]` (the one with id `outside` is the thing's `entrance`). It survives the server's optimized copy.
+2. **The thing's `places` component** — added, re-pointed or retired at any time, long after the thing was built, by anyone with builder rank:
+
+```
+comp {id: "lookout", type: "places", data: {
+  balcony:  {at: [0, 3.15, 2.9], label: "the balcony"},                          # a point; its y is the floor there
+  upstairs: {min: [-2.2, 3.15, -2.2], max: [2.2, 5.8, 2.2], label: "the lookout room"},   # a room; min y is its floor
+  porch_bench: null                                                           # hides a place the model declares
+}}
+```
+
+A `comp` replaces the whole bag, so send every entry you mean to keep. The **`name_place` tool** does that for you: `name_place {name, label?}` names the spot where you stand, on the thing you are in (or the nearest within 15m, or `on`), merging into what is there; `remove: true` retires a name.
 
 `walk_to {x, z, run?, tolerance?}` routes through doors and arches in griddled structures, including entry, exit, and outdoor walks obstructed by a building. Its support basis comes from the standing implementation, not floor order or horizontal overlap. Main supplies **terrain mode**: the feet follow the live terrain each tick of the walk, as the planner read it at each wall crossing. Thus a basement does not redefine ground and an overhead tile does not confine a ground walker. Main does not supply elevated standing; that remains #140/PR #200's separate capability.
 

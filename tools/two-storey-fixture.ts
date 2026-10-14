@@ -14,6 +14,16 @@ import { KHRDracoMeshCompression, ALL_EXTENSIONS } from "@gltf-transform/extensi
 import draco3d from "draco3dgltf";
 
 export const FLOOR = 0.3, UPPER = 3.3, RISE = 0.1875, GOING = 0.25, STAIR_FOOT = 2.0;
+/** The fixture's own description of itself, as a modelling tool would write it. */
+export const building = {
+  kind: "building", name: "the tower",
+  rooms: [
+    { id: "hall", name: "the hall", min: [-2.8, FLOOR, -2.8], max: [2.8, 3.1, 2.8] },
+    { id: "upstairs", name: "the upper room", min: [-2.8, UPPER, -2.8], max: [1.55, 6.3, 2.8] },
+  ],
+  portals: [{ id: "front_door", center: [0, FLOOR, 2.9] }],
+  arrivals: [{ id: "outside", pos: [0, 0, 5] }],
+};
 const STAIR_TOP = STAIR_FOOT - 15 * GOING;                   // -1.75
 export type Box = [number, number, number, number, number, number];   // minX minY minZ maxX maxY maxZ
 export const boxes: Box[] = [
@@ -40,7 +50,11 @@ export function boxMesh(list: Box[]) {
 
 /** A GLB whose one mesh sits under a translated parent node (so the world
  *  matrix matters), with an orphan mesh node outside the scene. */
-export async function buildGlb(list: Box[], { draco = false, lift = 0 } = {}) {
+/** `building`: a description the model carries of itself (rooms, portals,
+ *  seats, arrivals), stored in the root node's extras as a JSON string —
+ *  the way Blender exports a custom property — where mcpl/places.ts reads
+ *  named places from. */
+export async function buildGlb(list: Box[], { draco = false, lift = 0, building = null as unknown } = {}) {
   const doc = new Document();
   const buf = doc.createBuffer();
   const make = (l: Box[]) => {
@@ -50,6 +64,7 @@ export async function buildGlb(list: Box[], { draco = false, lift = 0 } = {}) {
       .setIndices(doc.createAccessor().setType("SCALAR").setArray(idx).setBuffer(buf)));
   };
   const parent = doc.createNode("lift").setTranslation([0, lift, 0]);
+  if (building) parent.setExtras({ building: JSON.stringify(building) });
   parent.addChild(doc.createNode("building").setMesh(make(list)).setTranslation([0, -lift, 0]));
   doc.createScene("s").addChild(parent);
   doc.createNode("orphan").setMesh(make([[50, 0, 50, 51, 1, 51]]));

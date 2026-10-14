@@ -14,6 +14,7 @@ import { NoiseGate, SHORT_STINT_MS, APPROACH_REFRACT_MS, APPROACH_RADIUS, REARM_
   ACTIVITY_RADIUS_M, ACTIVITY_PULSE_MS, ACTIVITY_REFRESH_MS, MOVER_MIN_M } from "./denoise.ts";
 import { HeadlessBody, ReachBody, setHeightField, registerSupport, registerSupportGrid, registerMeshSupport, removeSupport, standOn, collidersReady, navProbe, collidersGeneration } from "./physics.ts";
 import { makeNavGrid, NAV_SUBSTEP, NAV_NUDGE } from "./navgrid.ts";
+import { placesOf, inRegion, names, destinationOf, toLocal, type Place, type Destination } from "./places.ts";
 import { collisionTriangles } from "../server/geometry.ts";
 // FLIGHT. The same deterministic integrator the browser bench and the capture
 // path run -- one function, every runtime, per the spec's Q2 ruling.
@@ -79,13 +80,16 @@ const GRAVITY = 16;   // client/lib/controller.js: vy -= 16 * dt
 const EMITTER_COALESCE_MS = Number(process.env.EW_EMITTER_COALESCE_SEC ?? 4) * 1000;
 
 type Vec2 = { x: number; z: number };
-type CollisionMesh = { positions: Float32Array; indices: Uint32Array };
+type CollisionMesh = { positions: Float32Array; indices: Uint32Array; building?: unknown };
 /** Collision triangles per (sequencer, lib), for every agent in this process.
  *  A lib's bytes are immutable for its lifetime here (store paths are content
  *  hashes; library models change only on a redeploy, which restarts us), and
  *  the decode is the expensive part — a world full of agents decodes each
  *  model once. */
 const meshCache = new Map<string, Promise<CollisionMesh | null>>();
+/** Each model's own description of itself (its `building` extras), by the same
+ *  key, once its bytes have been read — the defaults for its named places. */
+const modelMeta = new Map<string, unknown>();
 type Pose = PublicPose;
 type Entity = { id: string; lib: string; pos: number[]; yaw: number; actor: string; scale?: number;
   /** the spawn's collider override ("exact" | "box"); the browser's decide() reads it, and so does ours */
@@ -1733,6 +1737,7 @@ export class WorldAgent {
       p = fetch(`${this.httpBase}/library/${lib}`)
         .then((r) => (r.ok ? r.arrayBuffer() : null))
         .then((b) => (b ? collisionTriangles(new Uint8Array(b)) : null))
+        .then((m) => { if (m?.building) modelMeta.set(key, m.building); return m; })
         .catch(() => null);                            // no mesh: the /geom summary path stands in
       meshCache.set(key, p);
     }
@@ -2743,10 +2748,15 @@ export class WorldAgent {
     return { refusal: "the body stands in a wall, with no clear point within half a metre to step out to" };
   }
 
-  /** `y`, when given, picks the floor at the destination: the highest place
-   *  to stand no more than a step above that height. Without it, the body's own storey if the
-   *  destination has a floor within a step of it, else the lowest there. */
-  walkTo(x: number, z: number, run = false, timeoutMs = 90_000, tolerance = ARRIVE, y?: number): Promise<boolean> {
+  /** `y`, when given, picks the floor at the destination: the place to stand
+   *  nearest that height, no more than a step above it. Without it, the body's own storey if the
+   *  destination has a floor within a step of it, else the lowest there.
+   *  `near.reach`: how far from (x, z) a place to stand may be (a room is
+   *  reached anywhere in it; a point within a hand's width or so).
+   *  `near.above`: how far above y its floor may be (a step, unless the floor's
+   *  height is known exactly, as a named room's is). */
+  walkTo(x: number, z: number, run = false, timeoutMs = 90_000, tolerance = ARRIVE, y?: number,
+    near: { reach?: number; above?: number } = {}): Promise<boolean> {
     if (![x, z, tolerance].every(Number.isFinite) || tolerance < 0 || tolerance > 0.4 || (y != null && !Number.isFinite(y))) {
       // Not a walk request at all: the walk under way, if any, goes on.
       this.walkRefusal = WALK_ARGS_REASON;
@@ -2771,7 +2781,7 @@ export class WorldAgent {
       const feet = { x: this.pos.x, y: this.pos.y, z: this.pos.z };
       const fy = standOn(feet, (wx, wz) => this.heightAt(wx, wz)) ?? this.pos.y;
       if (this.navGrid?.gen !== collidersGeneration()) this.navGrid = { gen: collidersGeneration(), grid: makeNavGrid(probe) };
-      const nav = this.navGrid.grid.route({ x: this.pos.x, y: fy, z: this.pos.z }, { x, z, y });
+      const nav = this.navGrid.grid.route({ x: this.pos.x, y: fy, z: this.pos.z }, { x, z, y, reach: near.reach, above: near.above });
       if ("refusal" in nav) { this.walkRefusal = nav.refusal; return Promise.resolve(false); }
       legs = nav.points.map((p) => ({ x: p.x, z: p.z }));
       snapped = nav.snapped; routed = true;
@@ -2824,6 +2834,103 @@ export class WorldAgent {
       this.walkDone = resolve;
       setTimeout(() => { if (this.walkDone === resolve) this.abandonWalk(); }, timeoutMs);
     });
+  }
+
+  // ---- named places (mcpl/places.ts) ----------------------------------------
+
+  /** A thing's named places: its model's own (rooms, doors, seats, arrivals),
+   *  then its `places` component on top — which anyone with builder rank can
+   *  change at any time. */
+  placesOn(e: Entity): Place[] {
+    if (!e.lib || e.lib === "(light)") return [];
+    return placesOf(modelMeta.get(`${this.httpBase}|${e.lib}`), e.comp?.places);
+  }
+
+  /** The named regions a body standing at `w` is in, smallest first (a room
+   *  before the building it is in). */
+  placesAt(w: number[]): { entity: Entity; place: Place }[] {
+    const out: { entity: Entity; place: Place; vol: number }[] = [];
+    for (const e of this.entities.values()) {
+      if (!isFiniteVec3(e.pos)) continue;
+      for (const p of this.placesOn(e)) {
+        if (!inRegion(e, p, w)) continue;
+        out.push({ entity: e, place: p, vol: (p.max![0] - p.min![0]) * (p.max![1] - p.min![1]) * (p.max![2] - p.min![2]) });
+      }
+    }
+    return out.sort((a, b) => a.vol - b.vol);
+  }
+
+  /** Where `to` is, as a walk can aim at it: "thing/place", a place's name or
+   *  label alone (the nearest, if several things have one), a thing alone
+   *  (its entrance, else its door), or a person (stopping short of them). */
+  destination(to: string): Destination | { refusal: string } {
+    const q = to.trim();
+    if (!q) return { refusal: "walk_to's to names nothing" };
+    const me = this.pos;
+    const ci = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+    // a person
+    for (const p of this.people.values()) {
+      if (!ci(p.id, q)) continue;
+      const xyz = posePosition(p.pose);
+      if (!xyz) return { refusal: `${p.id}'s position is not known yet` };
+      const [x, y, z] = xyz, d = Math.hypot(me.x - x, me.z - z), back = d > 0.01 ? Math.min(0.9, d) / d : 0;
+      return { x: x + (me.x - x) * back, y, z: z + (me.z - z) * back, reach: 0.6, label: p.id };
+    }
+    const slash = q.indexOf("/");
+    const ents = [...this.entities.values()].filter((e) => isFiniteVec3(e.pos));
+    if (slash > 0) {
+      const e = ents.find((x) => ci(x.id, q.slice(0, slash)));
+      if (!e) return { refusal: `no thing called "${q.slice(0, slash)}" here` };
+      const name = q.slice(slash + 1), ps = this.placesOn(e), p = ps.find((x) => names(x, name));
+      if (!p) return { refusal: `[${e.id}] has no place called "${name}"${ps.length ? ` — its places: ${ps.map((x) => x.name).join(", ")}` : " (it has no named places)"}` };
+      return destinationOf(e, p);
+    }
+    const e = ents.find((x) => ci(x.id, q));
+    if (e) {
+      const ps = this.placesOn(e);
+      const p = ps.find((x) => x.name === "entrance") ?? ps.find((x) => x.kind === "door");
+      if (p) return destinationOf(e, p);
+      return { refusal: `[${e.id}] has no entrance or door named — walk_to its places by name${ps.length ? ` (${ps.map((x) => x.name).join(", ")})` : ""}, or to its coordinates` };
+    }
+    const hits: Destination[] = [];
+    for (const x of ents) for (const p of this.placesOn(x)) if (names(p, q)) hits.push(destinationOf(x, p));
+    if (hits.length) return hits.sort((a, b) => Math.hypot(a.x - me.x, a.z - me.z) - Math.hypot(b.x - me.x, b.z - me.z))[0];
+    const known = ents.flatMap((x) => this.placesOn(x).map((p) => `${x.id}/${p.name}`)).slice(0, 16);
+    return { refusal: `nothing here is called "${q}"${known.length ? ` — named places: ${known.join(", ")}` : ""}` };
+  }
+
+  /** Name a spot (the body's own, by default) as a place on a thing: written
+   *  into that thing's `places` component, in its frame, alongside what is
+   *  already there. `remove` retires a name — one the model itself declares
+   *  is hidden (null), one only the component held is dropped. */
+  namePlace(name: string, opts: { on?: string; label?: string; remove?: boolean; at?: number[] } = {}): string {
+    if (!/^[A-Za-z0-9_][A-Za-z0-9_ .:'-]{0,47}$/.test(name)) return "a place name is 1-48 letters, digits, spaces, _ . : ' or -, starting with a letter, digit or _";
+    const w = opts.at && isFiniteVec3(opts.at) ? opts.at : [this.pos.x, this.pos.y, this.pos.z];
+    let e: Entity | undefined;
+    if (opts.on) e = [...this.entities.values()].find((x) => x.id.toLowerCase() === opts.on!.toLowerCase());
+    else {
+      e = this.placesAt(w)[0]?.entity;
+      if (!e) {
+        let best = Infinity;
+        for (const x of this.entities.values()) {
+          if (!x.lib || x.lib === "(light)" || !isFiniteVec3(x.pos)) continue;
+          const d = Math.hypot(x.pos[0] - w[0], x.pos[2] - w[2]);
+          if (d < best && d <= 15) { best = d; e = x; }
+        }
+      }
+    }
+    if (!e) return opts.on ? `no thing called "${opts.on}" here` : "no placed thing within 15m to hang the name on — pass on: <thing id>";
+    const cur = (e.comp?.places && typeof e.comp.places === "object") ? { ...e.comp.places } : {};
+    if (opts.remove) {
+      const fromModel = placesOf(modelMeta.get(`${this.httpBase}|${e.lib}`), null).some((p) => p.name === name);
+      if (fromModel) cur[name] = null; else delete cur[name];
+    } else {
+      const l = toLocal(e, w).map((v) => Math.round(v * 1000) / 1000);
+      cur[name] = { at: l, ...(opts.label ? { label: opts.label.slice(0, 80) } : {}) };
+    }
+    if (JSON.stringify(cur).length > 8000) return `[${e.id}]'s places would exceed the 8KB component limit — retire some first`;
+    this.verb("comp", { id: e.id, type: "places", data: cur });
+    return opts.remove ? `retired "${name}" on [${e.id}]` : `named this spot "${name}" on [${e.id}] — walk_to {to: "${e.id}/${name}"} reaches it`;
   }
 
   // ---- feet ----------------------------------------------------------------
@@ -3442,6 +3549,11 @@ export class WorldAgent {
         } catch { /* one malformed house must not cost the whole percept */ }
       }
     }
+    // ...and in named places: a room a model or a builder declared
+    if (meKnown) {
+      const here = this.placesAt([me.x, me.y, me.z]);
+      if (here.length) L.push(`You are in ${here.map(({ entity, place }) => `${place.label ?? place.name} (${entity.id}/${place.name})`).join(", within ")}.`);
+    }
     // Structured object, NEVER a bare string: consumers of look() were
     // reading {hours, azimuth, clouds, ts, …} long before the forecast
     // existed, and a type change here silently breaks them (Sill, postdeploy
@@ -3502,6 +3614,8 @@ export class WorldAgent {
       const c = e.comp ?? {};
       const aff: string[] = [];
       if (c.sockets) aff.push(`sit/mount: ${Object.keys(c.sockets).join(", ")}`);
+      const named = this.placesOn(e);
+      if (named.length) aff.push(`places (walk_to {to: "${e.id}/<place>"}): ${named.slice(0, 14).map((p) => p.label && p.label !== p.name.replace(/_/g, " ") ? `${p.name} "${p.label}"` : p.name).join(", ")}${named.length > 14 ? ` +${named.length - 14} more` : ""}`);
       if (c.reactions) aff.push(`reacts to: ${Object.keys(c.reactions).join(", ")}`);
       if (c.motion?.type) aff.push(`in motion (${c.motion.type})`);
       // The emitter is named as the SEMANTIC thing it is on the entity that

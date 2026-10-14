@@ -204,10 +204,12 @@ export function makeNavGrid(probe: NavProbe) {
 
   /** Route from a standing body to (to.x, to.z), arriving on the floor the
    *  walk means:
-   *   - `to.y` given: the highest place to stand no more than a step above
-   *     it (y means "on the floor at about this height": 0 is a ground floor
-   *     raised 0.3m), and only that — asked for an upper room that is sealed
-   *     off, the answer is a refusal, not the room below it;
+   *   - `to.y` given: the place to stand nearest that height, no more than a
+   *     step above it (y means "on the floor at about this height": 0 is a
+   *     ground floor raised 0.3m) — or no more than `to.above` above it, when the floor's
+   *     height is known exactly (a named room's: a stair tread inside the
+   *     room is not its floor) — and only that: asked for an upper room that
+   *     is sealed off, the answer is a refusal, not the room below it;
    *   - otherwise the body's own storey when the destination has a floor
    *     within a step of it (a walk across an upper floor stays on it), else
    *     the lowest place to stand there (the ground floor of another
@@ -218,21 +220,27 @@ export function makeNavGrid(probe: NavProbe) {
    *  most cheaply, counting distance from the point asked for twice over —
    *  a point inside a wall is reached on the side the body is already on,
    *  not round by the door. */
-  function route(from: NavPoint, to: { x: number; z: number; y?: number }): NavResult {
+  function route(from: NavPoint, to: { x: number; z: number; y?: number; reach?: number; above?: number }): NavResult {
     const start = standingNear(from.x, from.z, (ls) => nearestOf(ls, from.y, NAV_STEP), from.y)[0];
     if (!start) return { refusal: `nowhere to stand within 0.6m of where the body is (${from.x.toFixed(2)}, ${from.y.toFixed(2)}, ${from.z.toFixed(2)})` };
     const want = to.y != null && Number.isFinite(to.y) ? to.y : null;
     // the destination itself when its own lattice cell stands (arriving there
     // IS arriving at the point asked for), else the spot
     const exactOf = (g: Spot) => Math.abs(to.x - at(g.i)) <= NAV_CELL / 2 && Math.abs(to.z - at(g.j)) <= NAV_CELL / 2;
-    const spots = spotsNear(to.x, to.z);
+    const spots = spotsNear(to.x, to.z, to.reach ?? 0.6);
     const sameStorey = spots.some((g) => Math.abs(g.y - from.y) <= NAV_STEP);
-    // the floor y picks: the highest place to stand at or below y + a step
-    // ANYWHERE near the point — not each column's own highest, or a column
-    // the upper floor does not reach (a stool beside it pushes) would offer
-    // the ground floor beneath as a match
+    // the floor y picks: of every place to stand near the point (not column
+    // by column — a column the upper floor does not reach, a stool beside it
+    // pushing, would offer the ground floor beneath as a match), the height
+    // CLOSEST to y, no more than a step above it. Closest, not highest: a
+    // footstool a step above a named spot on the floor is not that spot.
     let floorY = -Infinity;
-    if (want != null) for (const g of spots) if (g.y <= want + NAV_STEP && g.y > floorY) floorY = g.y;
+    if (want != null) for (const g of spots) {
+      if (g.y > want + (to.above ?? NAV_STEP)) continue;
+      const better = Math.abs(g.y - want) < Math.abs(floorY - want) - 1e-6
+        || (Math.abs(Math.abs(g.y - want) - Math.abs(floorY - want)) <= 1e-6 && g.y > floorY);
+      if (better) floorY = g.y;
+    }
     const preferred = (g: Spot) => want != null ? Math.abs(g.y - floorY) < 0.05
       : sameStorey ? Math.abs(g.y - from.y) <= NAV_STEP : g.lowest;
     const goals = spots
@@ -241,7 +249,7 @@ export function makeNavGrid(probe: NavProbe) {
       .sort((a, b) => a.score - b.score);
     const goal = goals[0];
     if (!goal) {
-      return { refusal: `nowhere to stand within 0.6m of (${to.x.toFixed(2)}, ${to.z.toFixed(2)})` +
+      return { refusal: `nowhere to stand within ${(to.reach ?? 0.6).toFixed(1)}m of (${to.x.toFixed(2)}, ${to.z.toFixed(2)})` +
         `${want != null ? ` at or below ${(want + NAV_STEP).toFixed(2)}m` : ""}: it is inside something solid, or closer to a wall than a body fits` };
     }
     const startP = { x: from.x, y: start.y, z: from.z };

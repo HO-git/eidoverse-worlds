@@ -10,10 +10,10 @@ import { PNG } from "pngjs";
 process.env.OPT_DIR = mkdtempSync(join(tmpdir(), "terrainshape-opt-"));
 process.env.WORLDS_DIR = mkdtempSync(join(tmpdir(), "terrainshape-worlds-"));
 
-const { shapeParams, shapeHeight, shapedHeightAt, encodeGrid, decodeGrid, registerGrid, MAX_FEATURES, waterParams, wadeAllowed, WADE_DEPTH } =
+const { shapeParams, shapeHeight, shapedHeightAt, encodeGrid, decodeGrid, registerGrid, gridFor, requestGrid, setGridFetcher, shapeReady, MAX_FEATURES, waterParams, wadeAllowed, WADE_DEPTH } =
   await import("../shared/terrainshape.js");
 const { terrainParams, makeHeightField } = await import("../shared/terrainmath.js");
-const { ingestHeightmap, exportHeightmap } = await import("../server/heightmap.ts");
+const { ingestHeightmap, exportHeightmap, exportHeightmapCached, heightRange, EXPORT_MAX } = await import("../server/heightmap.ts");
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = "") => {
@@ -133,6 +133,39 @@ console.log("\nexport → edit → import (server/heightmap.ts)");
   check("...scaled to the full 16-bit range", g.data[0] === 0 && g.data[15] === 65535);
   const big = ingestHeightmap(new Uint8Array(PNG.sync.write(new PNG({ width: 1100, height: 2 }))), "00000000000000cc") as any;
   check("an oversized image is refused with the size it wants", big.status === 413 && /1025/.test(big.error));
+  // a header that claims a huge image is refused from the header alone, before any pixel is decoded
+  const lie = new Uint8Array(PNG.sync.write(new PNG({ width: 4, height: 4 })));
+  new DataView(lie.buffer).setUint32(16, 60000); new DataView(lie.buffer).setUint32(20, 60000);
+  const t0 = performance.now(), liar = ingestHeightmap(lie, "00000000000000dd") as any;
+  check("a 60000×60000 header is refused before decoding", liar.status === 413 && performance.now() - t0 < 50, JSON.stringify(liar));
+  check("...and a body that is not a PNG says so", (ingestHeightmap(new Uint8Array(8), "00000000000000ee") as any).status === 415);
+}
+{
+  const args = { seed: 3, size: 100, amplitude: 3 };
+  const a = exportHeightmapCached(args, 4097, "cap");
+  check(`an export's resolution is capped at ${EXPORT_MAX}`, PNG.sync.read(Buffer.from(a.png)).width === EXPORT_MAX && !a.cached);
+  check("...and the same export again is served from the cache", exportHeightmapCached(args, 4097, "cap").cached);
+  const r = heightRange(args);
+  check("the json range answer agrees with the export's", Math.abs(r.min - a.meta.min) < 0.2 && Math.abs(r.max - a.meta.max) < 0.2, JSON.stringify([r, a.meta]));
+}
+
+console.log("\ngrid loading");
+{
+  const ref = (n: number) => `store/heightmaps/${n.toString(16).padStart(16, "0")}.json`;
+  const one = { w: 2, h: 2, data: new Uint16Array([1, 2, 3, 4]) };
+  for (let i = 0; i < 20; i++) registerGrid(ref(0x100 + i), one);
+  check("only the most recent grids are kept", gridFor(ref(0x100)) === null && gridFor(ref(0x113)) === one);
+  let calls = 0;
+  setGridFetcher(async (r: string) => { calls++; if (r === ref(0x200)) return encodeGrid(one); throw new Error("404"); });
+  const [p1, p2] = [requestGrid(ref(0x200)), requestGrid(ref(0x200))];
+  const g = await p1; await p2;
+  check("two requests for one grid fetch it once", calls === 1 && !!g && gridFor(ref(0x200)) !== null);
+  calls = 0;
+  await requestGrid(ref(0x201)); await requestGrid(ref(0x201));
+  check("a grid that failed is not re-fetched at once", calls === 1);
+  const S = shapeParams({ heightmap: { grid: ref(0x202), min: 0, max: 1 } });
+  check("a shape whose grid is missing is not ready (the sim waits)", !shapeReady(S) && shapeReady(null) && shapeReady(shapeParams({ features: [{ type: "hill", x: 0, z: 0, radius: 3, height: 1 }] })));
+  setGridFetcher(null);
 }
 
 console.log("\nwater");

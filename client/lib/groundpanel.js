@@ -14,7 +14,7 @@
 // serving no palette gets a panel that says so.
 
 import { bus, report, CONFIG } from './base.js';
-import { currentTerrainArgs } from './world.js';
+import { currentTerrainArgs, terrainEditBase, noteTerrainSent } from './world.js';
 import { defsRegistry } from './defs.js';
 import { sendVerb } from './net.js';
 import { flashHint } from './ui.js';
@@ -56,8 +56,8 @@ export function paintGround(body) {
       layers: [{ color: pal.tints[st.tint].layer, repeat: 16 }],
     });
     const growTerrain = (patch) => {
-      const cur = currentTerrainArgs();
-      sendVerb('terrain', cur ? { ...cur, ...patch } : { ...fresh(), ...patch });
+      const cur = terrainEditBase();
+      sendVerb('terrain', noteTerrainSent(cur ? { ...cur, ...patch } : { ...fresh(), ...patch }));
     };
     // what "grow" plants — every option is one bag on the singleton grass
     // verb, straight from the def; blade plantings take the height dial and
@@ -99,7 +99,7 @@ export function paintGround(body) {
         btn('fill', () => {
           const level = Number(lvl.value);
           if (!Number.isFinite(level)) { flashHint('set a water level first'); return; }
-          growTerrain({ water: { ...(currentTerrainArgs()?.water ?? {}), level } });
+          growTerrain({ water: { ...(terrainEditBase()?.water ?? {}), level } });
           flashHint(`water at ${level} m`);
         }),
         btn('drain', () => { growTerrain({ water: null }); flashHint('water drained'); }),
@@ -220,12 +220,13 @@ export function paintGround(body) {
           return;
         }
         lo.value = (+min).toFixed(1); hi.value = (+max).toFixed(1);
-        const cur = currentTerrainArgs() ?? { seed: st.seed, segments: 200, layers: [{ color: pal().tints[st.tint].layer, repeat: 16 }] };
-        sendVerb('terrain', {
+        const cur = terrainEditBase() ?? { seed: st.seed, segments: 200, layers: [{ color: pal().tints[st.tint].layer, repeat: 16 }] };
+        sendVerb('terrain', noteTerrainSent({
           ...cur, size: up.meta?.size ?? cur.size ?? 160,
-          segments: Math.max(cur.segments ?? 200, Math.min(512, up.w - 1)),   // enough mesh to show the image's detail
+          // enough mesh to show the image's detail along its longer side
+          segments: Math.max(cur.segments ?? 200, Math.min(512, Math.max(up.w, up.h) - 1)),
           heightmap: { grid: up.grid, min, max }, features: [],
-        });
+        }));
         flashHint(`heightmap ${up.w}×${up.h} (${up.bits}-bit): ${(+min).toFixed(1)} to ${(+max).toFixed(1)} m`);
       } catch (e) { report('heightmap import', e); flashHint(`heightmap import failed: ${e.message ?? e}`); }
     };

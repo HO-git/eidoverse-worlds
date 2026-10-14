@@ -25,7 +25,8 @@ import { resolveLibFile, libraryPath, onLadder } from "./lint.ts";
 import { summarizeGlb } from "./geometry.ts";
 import { worlds, getWorld, type World } from "./world.ts";
 import { handleUpload, optStatus, rebuildAsset } from "./upload.ts";
-import { exportHeightmap } from "./heightmap.ts";
+import { exportHeightmapCached, heightRange } from "./heightmap.ts";
+const heightmapWin = new Map<string, { t: number; n: number }>();   // per-address budget for /heightmap
 import { defsPayload, avatarDefs, animationDefs } from "./defs.ts";
 import { tickStats } from "./tick.ts";
 import { entryBusStats } from "./events.ts";
@@ -657,15 +658,22 @@ const ROUTES: Route[] = [
     // world log it is read from; never creates a world. ?res= samples a side (default 257); ?format=json
     // answers the height range alone.
     match: (u) => u.pathname === "/heightmap",
-    handler: ({ url }) => {
+    handler: ({ req, url, srv }) => {
       const name = url.searchParams.get("world") ?? "commons";
       if (!/^[a-z0-9_-]{1,64}$/i.test(name)) return new Response("bad world name", { status: 400 });
       if (!worlds.has(name) && !existsSync(join(WORLDS_DIR, name, "log.jsonl"))) return new Response("no such world", { status: 404 });
       const t = getWorld(name).state.terrain;
       if (!t) return new Response("this world has no terrain (it is flat)", { status: 404 });
+      if (url.searchParams.get("format") === "json") return Response.json({ ...heightRange(t as Record<string, unknown>), world: name });
       const res = Number(url.searchParams.get("res") ?? 257);
-      const { png, meta } = exportHeightmap(t as Record<string, unknown>, Number.isFinite(res) ? res : 257, name);
-      if (url.searchParams.get("format") === "json") return Response.json(meta);
+      // bounded work on the serving thread: capped resolution, cached results, and a per-address budget
+      // charged only for exports that actually had to be computed (server/heightmap.ts)
+      const ip = req.headers.get("x-real-ip") ?? srv?.requestIP?.(req)?.address ?? "?";
+      const win = heightmapWin.get(ip) ?? { t: 0, n: 0 };
+      if (Date.now() - win.t > 60_000) { win.t = Date.now(); win.n = 0; }
+      const { png, meta, cached } = exportHeightmapCached(t as Record<string, unknown>, Number.isFinite(res) ? res : 257, name);
+      if (!cached && ++win.n > 6) { heightmapWin.set(ip, win); return new Response("heightmap export rate limit (6 new exports a minute)", { status: 429 }); }
+      heightmapWin.set(ip, win);
       return new Response(png, { headers: {
         "content-type": "image/png", "cache-control": "no-store",
         "content-disposition": `attachment; filename="${name}-heightmap.png"`,

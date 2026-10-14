@@ -94,10 +94,10 @@ export function setMeHook(fn) { meRef = typeof fn === 'function' ? fn : (() => n
 const _gp = new THREE.Vector3();
 const _wadeFrom = new THREE.Vector3();
 let _wadeHintAt = 0;
-function groundUnder(pos) {
+function groundUnder(pos, cap = null) {
   _gp.set(pos.x, pos.y, pos.z);
-  const g = resolveColliders(_gp, heightAt);
-  return g;
+  // with a capsule: probe as the move itself will (a small body steps up less than the default one)
+  return cap ? resolveColliders(_gp, heightAt, cap.r, cap.tall, true) : resolveColliders(_gp, heightAt);
 }
 /** groundY(x, z) for the integrator: it has no y to offer, so probe from the
  *  flier's own altitude -- which is what decides whether a box is floor or
@@ -565,7 +565,8 @@ export function updateMe(dt, me) {
     // when the step goes deeper than here too, so a body the water rose over can always walk out.
     const wl = waterLevel();
     if (wl != null && !flight) {
-      const to = groundUnder(myState.pos), from = groundUnder(_wadeFrom);
+      const cap = colliderFor(me.userScale);
+      const to = groundUnder(myState.pos, cap), from = groundUnder(_wadeFrom, cap);
       if (!wadeAllowed(wl, from, to, me.userScale ?? 1)) {
         myState.pos.x = _wadeFrom.x; myState.pos.z = _wadeFrom.z;
         if (performance.now() - _wadeHintAt > 4000) { _wadeHintAt = performance.now(); flashHint?.('too deep to wade — there is no swimming yet'); }

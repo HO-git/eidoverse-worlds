@@ -67,22 +67,58 @@ export function shapeParams(a) {
 // little-endian uint16s}, decoded once by the server at upload so every
 // consumer reads integers, never an image decoder's opinion of one.
 
+// Grids are cached by ref, newest-used last, and only the last GRID_CACHE are kept: a world that has been
+// re-imaged many times does not hold every old image. A ref that failed to load is remembered for
+// MISS_RETRY_MS, so a missing file is not re-read on every height sample, and is retried after that.
+const GRID_CACHE = 8;
+const MISS_RETRY_MS = 30_000;
 const grids = new Map();
-let loader = null;
+const misses = new Map();     // ref -> when the loader last failed on it
+const fetchMisses = new Map();   // ref -> when the fetcher last failed on it
+const inflight = new Map();   // ref -> the fetch in progress
+let loader = null, fetcher = null;
+
+function keep(ref, g) {
+  grids.delete(ref); grids.set(ref, g); misses.delete(ref); fetchMisses.delete(ref);
+  while (grids.size > GRID_CACHE) grids.delete(grids.keys().next().value);
+}
+const missedLately = (ref, m = misses) => { const t = m.get(ref); return t != null && Date.now() - t < MISS_RETRY_MS; };
 
 /** Make a grid available to every height function that names it. */
-export function registerGrid(ref, grid) { grids.set(ref, grid); }
+export function registerGrid(ref, grid) { keep(ref, grid); }
 /** A synchronous source for grids not yet registered — the server's disk.
- *  Clients and agents fetch asynchronously instead (they cannot block). */
+ *  Clients and agents fetch asynchronously instead (they cannot block): see setGridFetcher. */
 export function setGridLoader(fn) { loader = fn; }
+/** An asynchronous source — `fn(ref)` resolves to the wire form ({w, h, data}) or throws. */
+export function setGridFetcher(fn) { fetcher = fn; }
 export function gridFor(ref) {
   let g = grids.get(ref);
-  if (!g && loader) {
-    try { g = loader(ref); } catch { g = null; }
-    if (g) grids.set(ref, g);
-  }
+  if (g) { grids.delete(ref); grids.set(ref, g); return g; }
+  if (!loader || missedLately(ref)) return null;
+  try { g = loader(ref); } catch { g = null; }
+  if (g) keep(ref, g); else misses.set(ref, Date.now());
   return g ?? null;
 }
+/** Fetch a grid through the fetcher, once at a time per ref: resolves to the grid, or null if it could not
+ *  be had (and then not asked for again until MISS_RETRY_MS has passed). */
+export function requestGrid(ref) {
+  const have = gridFor(ref);
+  if (have) return Promise.resolve(have);
+  if (!fetcher || missedLately(ref, fetchMisses)) return Promise.resolve(null);
+  let p = inflight.get(ref);
+  if (!p) {
+    p = (async () => {
+      try { const g = decodeGrid(await fetcher(ref)); keep(ref, g); return g; }
+      catch { fetchMisses.set(ref, Date.now()); return null; }
+      finally { inflight.delete(ref); }
+    })();
+    inflight.set(ref, p);
+  }
+  return p;
+}
+/** Whether a terrain's shaping can be computed as written — false while its heightmap grid is still
+ *  missing (the height law would fall back to noise, which nothing should commit to). */
+export function shapeReady(shape) { return !shape?.heightmap || !!gridFor(shape.heightmap.grid); }
 
 /** Wire/disk form → grid. Integer byte assembly, so it is exact everywhere. */
 export function decodeGrid(obj) {

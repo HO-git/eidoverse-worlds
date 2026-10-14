@@ -20,15 +20,20 @@ export const waterLevel = () => current?.level ?? null;
 /** Build (or replace, or remove) the water for terrain-verb args over the ground `heightAt`. */
 export function applyWater(args, heightAt) {
   if (current) {
-    scene.remove(current.mesh);
-    current.mesh.geometry.dispose();
-    current.mesh.material.dispose();
+    if (current.mesh) {
+      scene.remove(current.mesh);
+      current.mesh.geometry.dispose();
+      current.mesh.material.dispose();
+    }
     current = null;
   }
   const W = waterParams(args);
   if (!W) return;
   const size = typeof args?.size === 'number' ? args.size : 80;
-  const seg = Math.max(32, Math.min(256, Math.round(size)));
+  // The level is the world's whether or not the sheet shows: wading and depth read it, not the mesh.
+  current = { mesh: null, level: W.level };
+  // about a metre a vertex (2 m on the biggest worlds), so a small pond is not stepped over
+  const seg = Math.max(32, Math.min(512, Math.round(size)));
   const geo = new THREE.PlaneGeometry(size, size, seg, seg);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position;
@@ -40,7 +45,7 @@ export function applyWater(args, heightAt) {
     const a = idx[t], b = idx[t + 1], c = idx[t + 2];
     if (Math.max(depth[a], depth[b], depth[c]) > -0.05) keep.push(a, b, c);
   }
-  if (!keep.length) return;   // a level below every bit of ground: nothing is under water
+  if (!keep.length) return;   // no vertex is under water: nothing to draw (the level still stands)
   geo.setIndex(keep);
   geo.setAttribute('depth', new THREE.BufferAttribute(depth, 1));
 
@@ -62,5 +67,5 @@ export function applyWater(args, heightAt) {
   mesh.position.y = W.level;
   mesh.renderOrder = 2;   // after the ground and the opaque world: it is seen THROUGH
   scene.add(mesh);
-  current = { mesh, level: W.level };
+  current.mesh = mesh;
 }

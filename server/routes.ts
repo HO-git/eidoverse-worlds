@@ -25,8 +25,7 @@ import { resolveLibFile, libraryPath, onLadder } from "./lint.ts";
 import { summarizeGlb } from "./geometry.ts";
 import { worlds, getWorld, type World } from "./world.ts";
 import { handleUpload, optStatus, rebuildAsset } from "./upload.ts";
-import { exportHeightmapCached, heightRange } from "./heightmap.ts";
-const heightmapWin = new Map<string, { t: number; n: number }>();   // per-address budget for /heightmap
+import { serveHeightmapExport, heightRange } from "./heightmap.ts";
 import { defsPayload, avatarDefs, animationDefs } from "./defs.ts";
 import { tickStats } from "./tick.ts";
 import { entryBusStats } from "./events.ts";
@@ -665,15 +664,11 @@ const ROUTES: Route[] = [
       const t = getWorld(name).state.terrain;
       if (!t) return new Response("this world has no terrain (it is flat)", { status: 404 });
       if (url.searchParams.get("format") === "json") return Response.json({ ...heightRange(t as Record<string, unknown>), world: name });
-      const res = Number(url.searchParams.get("res") ?? 257);
-      // bounded work on the serving thread: capped resolution, cached results, and a per-address budget
-      // charged only for exports that actually had to be computed (server/heightmap.ts)
+      // bounded work on the serving thread, gated BEFORE the work (server/heightmap.ts serveHeightmapExport)
       const ip = req.headers.get("x-real-ip") ?? srv?.requestIP?.(req)?.address ?? "?";
-      const win = heightmapWin.get(ip) ?? { t: 0, n: 0 };
-      if (Date.now() - win.t > 60_000) { win.t = Date.now(); win.n = 0; }
-      const { png, meta, cached } = exportHeightmapCached(t as Record<string, unknown>, Number.isFinite(res) ? res : 257, name);
-      if (!cached && ++win.n > 6) { heightmapWin.set(ip, win); return new Response("heightmap export rate limit (6 new exports a minute)", { status: 429 }); }
-      heightmapWin.set(ip, win);
+      const out = serveHeightmapExport(t as Record<string, unknown>, Number(url.searchParams.get("res") ?? 257), name, ip);
+      if (!out.ok) return new Response(out.error, { status: out.status, headers: { "retry-after": String(out.retryAfter) } });
+      const { png, meta } = out;
       return new Response(png, { headers: {
         "content-type": "image/png", "cache-control": "no-store",
         "content-disposition": `attachment; filename="${name}-heightmap.png"`,

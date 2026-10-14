@@ -10,10 +10,10 @@ import { PNG } from "pngjs";
 process.env.OPT_DIR = mkdtempSync(join(tmpdir(), "terrainshape-opt-"));
 process.env.WORLDS_DIR = mkdtempSync(join(tmpdir(), "terrainshape-worlds-"));
 
-const { shapeParams, shapeHeight, shapedHeightAt, encodeGrid, decodeGrid, registerGrid, gridFor, requestGrid, setGridFetcher, shapeReady, MAX_FEATURES, waterParams, wadeAllowed, WADE_DEPTH } =
+const { shapeParams, shapeHeight, shapedHeightAt, encodeGrid, decodeGrid, registerGrid, gridFor, requestGrid, setGridFetcher, shapeReady, gridRetryIn, MAX_FEATURES, waterParams, wadeAllowed, WADE_DEPTH } =
   await import("../shared/terrainshape.js");
 const { terrainParams, makeHeightField } = await import("../shared/terrainmath.js");
-const { ingestHeightmap, exportHeightmap, exportHeightmapCached, heightRange, EXPORT_MAX } = await import("../server/heightmap.ts");
+const { ingestHeightmap, exportHeightmap, serveHeightmapExport, exportIsCached, resetExportBudget, heightRange, EXPORT_MAX, EXPORT_PER_ADDRESS, EXPORT_PER_MINUTE } = await import("../server/heightmap.ts");
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = "") => {
@@ -142,11 +142,32 @@ console.log("\nexport → edit → import (server/heightmap.ts)");
 }
 {
   const args = { seed: 3, size: 100, amplitude: 3 };
-  const a = exportHeightmapCached(args, 4097, "cap");
-  check(`an export's resolution is capped at ${EXPORT_MAX}`, PNG.sync.read(Buffer.from(a.png)).width === EXPORT_MAX && !a.cached);
-  check("...and the same export again is served from the cache", exportHeightmapCached(args, 4097, "cap").cached);
+  resetExportBudget();
+  const a = serveHeightmapExport(args, 4097, "cap", "1.1.1.1") as any;
+  check(`an export's resolution is capped at ${EXPORT_MAX}`, a.ok && PNG.sync.read(Buffer.from(a.png)).width === EXPORT_MAX && !a.cached);
+  check("...and the same export again is served from the cache", (serveHeightmapExport(args, 4097, "cap", "1.1.1.1") as any).cached);
   const r = heightRange(args);
   check("the json range answer agrees with the export's", Math.abs(r.min - a.meta.min) < 0.2 && Math.abs(r.max - a.meta.max) < 0.2, JSON.stringify([r, a.meta]));
+}
+
+console.log("\nthe export budget is checked before the work");
+{
+  resetExportBudget();
+  const args = { seed: 5, size: 60, amplitude: 2 }, ip = "2.2.2.2";
+  const answers = Array.from({ length: EXPORT_PER_ADDRESS }, (_, i) => serveHeightmapExport(args, 100 + i, "b", ip));
+  check(`${EXPORT_PER_ADDRESS} new exports a minute are granted`, answers.every((x) => x.ok && !x.cached));
+  const t0 = performance.now(), refused = serveHeightmapExport(args, 300, "b", ip);
+  check("the next is refused (429)…", !refused.ok && refused.status === 429 && refused.retryAfter > 0);
+  check("…having sampled nothing and cached nothing", !exportIsCached(args, 300, "b") && performance.now() - t0 < 5);
+  check("…so asking again is refused again, not served from a cache it filled", !serveHeightmapExport(args, 300, "b", ip).ok);
+  check("an export already made is still served to the same address", (serveHeightmapExport(args, 102, "b", ip) as any).cached === true);
+  check("another address has its own budget", serveHeightmapExport(args, 300, "b", "3.3.3.3").ok);
+  check("a minute later the address may export again", serveHeightmapExport(args, 301, "b", ip, Date.now() + 61_000).ok);
+  resetExportBudget();
+  let n = 0;
+  for (let i = 0; i < EXPORT_PER_MINUTE + 5; i++) if (serveHeightmapExport(args, 40 + i, "b", `10.0.0.${i}`).ok) n++;
+  check(`many addresses together get ${EXPORT_PER_MINUTE} a minute, not one budget each`, n === EXPORT_PER_MINUTE, `${n}`);
+  resetExportBudget();
 }
 
 console.log("\ngrid loading");
@@ -165,6 +186,14 @@ console.log("\ngrid loading");
   check("a grid that failed is not re-fetched at once", calls === 1);
   const S = shapeParams({ heightmap: { grid: ref(0x202), min: 0, max: 1 } });
   check("a shape whose grid is missing is not ready (the sim waits)", !shapeReady(S) && shapeReady(null) && shapeReady(shapeParams({ features: [{ type: "hill", x: 0, z: 0, radius: 3, height: 1 }] })));
+  check("a failed fetch backs off by seconds, not half a minute", gridRetryIn(ref(0x201)) > 0 && gridRetryIn(ref(0x201)) <= 1000, `${gridRetryIn(ref(0x201))}`);
+  // a built terrain holds its grid: the cache turning over does not turn its ground to noise
+  const tall = { w: 2, h: 2, data: new Uint16Array([65535, 65535, 65535, 65535]) };
+  registerGrid(ref(0x300), tall);
+  const h = shapeHeight(() => -99, shapeParams({ heightmap: { grid: ref(0x300), min: 0, max: 5 } })!, 10);
+  check("a shaped height reads its grid", near(h(1, 1), 5));
+  for (let i = 0; i < 20; i++) registerGrid(ref(0x400 + i), one);
+  check("...and keeps reading it after the cache has evicted it", gridFor(ref(0x300)) === null && near(h(1, 1), 5), `${h(1, 1)}`);
   setGridFetcher(null);
 }
 

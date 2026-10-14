@@ -1593,6 +1593,9 @@ export class WorldAgent {
   }
 
   private terrainRev = 0;
+  /** A heightmap terrain received but not yet buildable — its grid has not arrived. The last ground stands
+   *  (never noise in its place); tick() retries the grid, and the arrival builds THIS bag, once. */
+  private pendingTerrain: { args: any; rev: number; grid: string } | null = null;
   private async buildTerrain(args: any) {
     // Builds can overlap (a grid fetch is slow, a terrain edit is not): only the newest one may commit.
     const rev = ++this.terrainRev;
@@ -1602,14 +1605,22 @@ export class WorldAgent {
       (0, eval)(this.terrainSrc);
     }
     // Placed features and heightmaps (shared/terrainshape.js): the agent stands on the same shaped law the
-    // client's mesh and the sim use. A heightmap's grid is fetched first; failing that, the noise stands.
+    // client's mesh and the sim use. A heightmap's grid is fetched first; until it is here, the last ground
+    // stands (pendingTerrain) — never noise in the heightmap's place.
     const shape = shapeParams(args);
     if (shape?.heightmap) {
       const base = this.httpBase;
       setGridFetcher(async (ref: string) => { const g = await fetch(`${base}/library/${ref}`); if (!g.ok) throw new Error(`${g.status}`); return g.json(); });
-      await requestGrid(shape.heightmap.grid);   // null: the noise stands in until a rebuild
+      const g = await requestGrid(shape.heightmap.grid);
+      if (rev !== this.terrainRev) return;   // a newer terrain arrived while this one's grid was in flight
+      if (!g) {
+        // not here (yet): keep the ground we have rather than commit noise as this world's ground
+        this.pendingTerrain = { args, rev, grid: shape.heightmap.grid };
+        return;
+      }
     }
     if (rev !== this.terrainRev) return;   // a newer terrain arrived while this one's grid was in flight
+    this.pendingTerrain = null;
     const t = (globalThis as any).makeTerrain({ ...args, layers: [] });
     this.terrain = shape ? { heightAt: shapedHeightAt(t.heightAt, args) } : t;
     this.water = waterParams(args);
@@ -1817,6 +1828,14 @@ export class WorldAgent {
     // recomputed, bit-identical with every renderer). Support rebuilds
     // when a body rests; the punt side effect dropped it at launch.
     // a heightmap world's sim waits for its grid (as the browser's does): noise ground would diverge
+    // a heightmap terrain waiting on its grid: ask again (requestGrid backs off by itself), and build the
+    // waiting bag — only if it is still the newest — the moment the grid is here
+    const pend = this.pendingTerrain;
+    if (pend && pend.rev === this.terrainRev) {
+      void requestGrid(pend.grid).then((g) => {
+        if (g && this.pendingTerrain === pend && pend.rev === this.terrainRev) { this.pendingTerrain = null; void this.buildTerrain(pend.args); }
+      });
+    }
     const simShape = this.sim.terrain?.shape;
     if (!shapeReady(simShape)) void requestGrid(simShape.heightmap.grid);
     else if (this.sim.epoch && !this.sim.epoch.foreign) {
@@ -3295,6 +3314,7 @@ export class WorldAgent {
     } else {
       L.push(`You are "${this.name}" in world "${this.world}", position unknown (${selfEff && !selfEff.ok ? selfEff.why : "seat unresolved"}), facing ${this.bearing(Math.sin(this.yaw), Math.cos(this.yaw))}${seated}. Distances are withheld until your seat resolves — dismount {id: "${this.name}"} restores a stamped position.`);
     }
+    if (this.pendingTerrain) L.push(`The world's ground is a heightmap that has not loaded yet: heights here are the last ground you had${this.terrain ? "" : " (flat)"}, until it does.`);
     // WHERE YOU ARE, ARCHITECTURALLY. A conjured building can only ever be
     // "a mesh 4m away"; a griddled one knows its own rooms, so standing inside
     // one is a fact perception can state. Derived from folded state alone —

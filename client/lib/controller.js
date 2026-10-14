@@ -9,7 +9,9 @@
 import { THREE, camera, canvas } from './core.js';
 import { CONFIG, angleDelta, bus } from './base.js';
 import { heightAt } from './terrain.js';
-import { waterLevel } from './water.js';
+import { waterLevel, waterAt, waveTime } from './water.js';
+import { surfaceOffset } from '../../shared/waves.js';
+import { floatStep, footprintSurface } from '../../shared/buoyancy.js';
 import { waterStance, SWIM_SPEED, SWIM_RUN } from '../../shared/terrainshape.js';
 import { resolveColliders, lastBlockedTop, findSeat, raySegment } from './colliders.js';
 import { scaledSpeed, colliderFor, deskEyeY, canMantle, mantleStep } from './bodyscale.js';   // this body's chosen size: stride, capsule, eye
@@ -92,6 +94,7 @@ export function setMeHook(fn) { meRef = typeof fn === 'function' ? fn : (() => n
 // probing with the live body would shove the flier sideways and steal the
 // mantle probe the walk path reads on the same frame.
 const _gp = new THREE.Vector3();
+const _float = { on: false, y: 0, vy: 0 };   // the swimmer's buoyant column (shared/buoyancy.js)
 function groundUnder(pos) {
   _gp.set(pos.x, pos.y, pos.z);
   const g = resolveColliders(_gp, heightAt);
@@ -705,16 +708,24 @@ export function updateMe(dt, me) {
       } else { vy = 5.6; grounded = false; jumped = true; }   // a DELIBERATE jump: the clip may start this frame, no airborne grace
     }
     if (!mantle) {
-      if (!grounded || myState.pos.y > support + 0.02) {
+      if (swimming && (grounded || myState.pos.y <= support + 0.3)) {
+        // FLOATING (shared/buoyancy.js): the body is a buoyant column on the moving surface (shared/
+        // waves.js, the same swell the water draws, on the world's clock). A long swell lifts it; a short
+        // steep wave climbs the body before it bobs up. It takes over from wherever the body was, moving
+        // as it was — so a drop into deep water dunks you and bobs you back up. Ahead of the falling
+        // branch, so a crest lifting the swimmer above its resting depth is not mistaken for a fall.
+        if (!_float.on) { _float.on = true; _float.y = myState.pos.y; _float.vy = vy; }
+        const t = waveTime();
+        const surf = footprintSurface((x, z) => wl + surfaceOffset(waterAt(x, z), x, z, t), myState.pos.x, myState.pos.z);
+        floatStep(_float, surf, wadeH, dt, ground);
+        myState.pos.y = _float.y; vy = 0; grounded = true;
+      } else if (!grounded || myState.pos.y > support + 0.02) {
         grounded = false;
         vy -= 16 * dt;
         myState.pos.y += vy * dt;
         if (myState.pos.y <= support) { myState.pos.y = support; vy = 0; grounded = true; }
-      } else if (swimming) {
-        // ease onto the floating depth rather than snapping: wading out of your depth, the bed drops
-        // away and you rise to float; the reverse, your feet find the bed
-        myState.pos.y += (support - myState.pos.y) * Math.min(1, 6 * dt); vy = 0; grounded = true;
       } else { myState.pos.y = support; vy = 0; grounded = true; }
+      if (!swimming) _float.on = false;
     }
   }
   airborneFor = grounded || mantle ? 0 : airborneFor + dt;

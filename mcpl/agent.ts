@@ -9,6 +9,8 @@ import { mentionRegex } from "./mention.ts";
 import { mergePose } from "../shared/humanoid.js";
 import { shapeParams, shapedHeightAt, gridFor, registerGrid, decodeGrid, waterParams, waterStance, SWIM_SPEED, SWIM_RUN } from "../shared/terrainshape.js";
 import { bodyHeightFor } from "./rigbones.ts";
+import { surfaceOffset, waveClock } from "../shared/waves.js";
+import { floatStep, footprintSurface } from "../shared/buoyancy.js";
 import { analyzeWater, compass } from "../shared/waterkind.js";
 import * as THREE_W from "three/webgpu";
 import * as TSL from "three/tsl";
@@ -242,6 +244,8 @@ export class WorldAgent {
   walkRefusal: string | null = null;
   /** This body's standing height (rigbones.ts bodyHeightFor) — what water depth is measured against. */
   bodyH: number | null = null;
+  /** A swimming body's buoyant column (shared/buoyancy.js) — on the same swell everyone's water draws. */
+  private float = { on: false, y: 0, vy: 0 };
   /** Why the last walk stopped short, when something stopped it mid-way. */
   walkStopReason: string | null = null;
   /** The world's water (shared/terrainshape.js), from the terrain bag; null when it has none. */
@@ -1902,7 +1906,14 @@ export class WorldAgent {
         // feet on the bed, or floating with the chest at the surface; a body standing still out of its
         // depth treads water
         const st = waterStance(this.water.level, groundY, this.bodyH ?? 1.7);
-        this.pos.y = st.y;
+        if (st.swimming) {
+          // float on the moving surface, the browser's law and clock (controller.js does the same)
+          if (!this.float.on) { this.float = { on: true, y: this.pos.y, vy: 0 }; }
+          const t = waveClock(this.serverNow()), level = this.water.level, A = this.waterKinds;
+          const surf = footprintSurface((x, z) => level + surfaceOffset(A?.sample(x, z) ?? null, x, z, t), this.pos.x, this.pos.z);
+          floatStep(this.float, surf, this.bodyH ?? 1.7, dt, groundY);
+          this.pos.y = this.float.y;
+        } else { this.float.on = false; this.pos.y = st.y; }
         if (st.swimming && !this.target && (this.clip === "idle" || this.clip === "walk" || this.clip === "run")) this.clip = "tread";
         else if (!st.swimming && (this.clip === "tread" || this.clip === "swim")) this.clip = this.target ? "walk" : "idle";
       } else this.pos.y = groundY;

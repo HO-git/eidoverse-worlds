@@ -16,11 +16,22 @@
 //
 // Nothing here moves bodies — wading is the controller's (and the agents') rule, from the same level.
 import { THREE, scene } from './core.js';
-import { attribute, mix, smoothstep, vec3, float, positionGeometry, time, sin, cos, max, normalize, color, transformNormalToView } from 'three/tsl';
+import { attribute, mix, smoothstep, vec3, float, positionGeometry, uniform, sin, cos, max, normalize, color, transformNormalToView } from 'three/tsl';
+import { OCEAN, RIVER, STILL, waveClock } from '../../shared/waves.js';
 import { waterParams } from '../../shared/terrainshape.js';
 import { analyzeWater } from '../../shared/waterkind.js';
 
 let current = null;   // { mesh, level }
+
+// THE WAVE CLOCK (shared/waves.js): the surface runs on the world's synced time, wrapped to WAVE_PERIOD, so a
+// swell a swimmer rises on is the swell everyone sees. main.js hands in the synced clock; until it does,
+// the page's own (unsynced) time stands in.
+const waveT = uniform(0);
+let clock = () => Date.now();
+/** Give the water the world's synced milliseconds (remotes.js serverNow). */
+export function setWaveClock(fn) { clock = fn; }
+/** Wave time now, in seconds into the period — what the shader and the floating bodies both read. */
+export const waveTime = () => waveClock(clock());
 
 /** The world's water level, or null when it has none. */
 export const waterLevel = () => current?.level ?? null;
@@ -94,38 +105,39 @@ export function applyWater(args, heightAt) {
   const still = K.x, river = K.y, ocean = K.z;
   // the RAW vertex position (before the waves lift it), so the vertex and fragment stages compute the same
   // wave; the mesh sits at (0, level, 0) unrotated, so its x/z ARE world x/z — the same on every client
-  const px = positionGeometry.x, pz = positionGeometry.z, t = time;
+  const px = positionGeometry.x, pz = positionGeometry.z, t = waveT;
 
   // ---- the surface's height above the level, and how fast it is rising, for each kind --------------
   // STILL — a breath of wind, millimetres
-  const sPh = px.mul(0.9).add(pz.mul(0.4)).sub(t.mul(0.8));
-  const sAmp = float(0.012);
+  const sPh = px.mul(STILL.kx).add(pz.mul(STILL.kz)).sub(t.mul(STILL.w));
+  const sAmp = float(STILL.amp);
   // RIVER — standing chop carried down the channel: `a` runs along the flow, `c` across it
   const a = px.mul(F.x).add(pz.mul(F.y)), c = pz.mul(F.x).sub(px.mul(F.y));
-  const ph1 = a.sub(t.mul(F.z)).mul(1.4), ph2 = a.mul(0.6).add(c.mul(1.7)).sub(t.mul(F.z).mul(0.6));
-  const rAmp = float(0.025);
+  const ph1 = a.sub(t.mul(F.z)).mul(RIVER.k), ph2 = a.mul(0.6).add(c.mul(1.7)).sub(t.mul(F.z).mul(0.6));
+  const rAmp = float(RIVER.amp);
   // OCEAN — two swells rolling in along `o`, the way to shore. Deep-water dispersion, ω = √(g·k): the
   // long swell (31 m) runs at 7 m/s, the shorter (19 m) at 5.5. Height grows offshore and keeps a third of
   // itself right up the beach — that remainder is the swash that moves the waterline.
   const o = px.mul(S.x).add(pz.mul(S.y)), oc = pz.mul(S.x).sub(px.mul(S.y));
-  const k1 = 0.2, w1 = Math.sqrt(9.8 * k1), k2 = 0.33, w2 = Math.sqrt(9.8 * k2);
-  const ow1 = o.mul(k1).sub(t.mul(w1)).add(sin(oc.mul(0.045)).mul(1.4));
-  const ow2 = o.mul(k2).add(oc.mul(0.12)).sub(t.mul(w2));
-  const oAmp = smoothstep(-1.0, 5.0, d).mul(0.4).add(0.2).mul(ocean);   // 0.2 m at the swash, 0.6 m offshore
+  const { k1, w1, k2, w2 } = OCEAN;
+  const ow1 = o.mul(k1).sub(t.mul(w1)).add(sin(oc.mul(OCEAN.crestK)).mul(OCEAN.crestBend));
+  const ow2 = o.mul(k2).add(oc.mul(OCEAN.across2)).sub(t.mul(w2));
+  // 0.2 m of swash at the shore → 0.6 m offshore (the same law shared/waves.js surfaceOffset floats bodies on)
+  const oAmp = smoothstep(OCEAN.ampFrom, OCEAN.ampTo, d).mul(OCEAN.ampDeep - OCEAN.ampShore).add(OCEAN.ampShore).mul(ocean);
   // a peaked crest (a touch of second harmonic) — swell, not a sine
-  const crest = (ph) => sin(ph).add(sin(ph.mul(2)).mul(0.18));
-  const dCrest = (ph) => cos(ph).add(cos(ph.mul(2)).mul(0.36));
-  const disp = oAmp.mul(crest(ow1)).add(oAmp.mul(0.45).mul(crest(ow2)))
+  const crest = (ph) => sin(ph).add(sin(ph.mul(2)).mul(OCEAN.harmonic));
+  const dCrest = (ph) => cos(ph).add(cos(ph.mul(2)).mul(2 * OCEAN.harmonic));
+  const disp = oAmp.mul(crest(ow1)).add(oAmp.mul(OCEAN.share2).mul(crest(ow2)))
     .add(river.mul(rAmp).mul(sin(ph1)))
     .add(still.mul(sAmp).mul(sin(sPh)));
   // vertical speed of the surface (∂h/∂t) — how fast the waterline is driven up or down the beach
-  const rise = oAmp.mul(dCrest(ow1)).mul(-w1).add(oAmp.mul(0.45).mul(dCrest(ow2)).mul(-w2))
-    .add(river.mul(rAmp).mul(cos(ph1)).mul(F.z.mul(-1.4)))
-    .add(still.mul(sAmp).mul(cos(sPh)).mul(-0.8));
+  const rise = oAmp.mul(dCrest(ow1)).mul(-w1).add(oAmp.mul(OCEAN.share2).mul(dCrest(ow2)).mul(-w2))
+    .add(river.mul(rAmp).mul(cos(ph1)).mul(F.z.mul(-RIVER.k)))
+    .add(still.mul(sAmp).mul(cos(sPh)).mul(-STILL.w));
   mat.positionNode = positionGeometry.add(vec3(0, disp, 0));
 
   // ---- normals: the swell's slope, plus each kind's small ripples ---------------------------------
-  const oSlope = oAmp.mul(dCrest(ow1)).mul(k1).add(oAmp.mul(0.45).mul(dCrest(ow2)).mul(k2));
+  const oSlope = oAmp.mul(dCrest(ow1)).mul(k1).add(oAmp.mul(OCEAN.share2).mul(dCrest(ow2)).mul(k2));
   const sX = sin(px.mul(1.3).add(t.mul(0.5))).mul(0.018).add(sin(pz.mul(2.1).sub(t.mul(0.4))).mul(0.01));
   const sZ = cos(pz.mul(1.1).add(t.mul(0.45))).mul(0.018).add(cos(px.mul(1.9).add(t.mul(0.35))).mul(0.01));
   const along = cos(ph1).mul(0.085).add(cos(ph2).mul(0.04)), across = cos(ph2).mul(0.05);
@@ -167,6 +179,7 @@ export function applyWater(args, heightAt) {
   mesh.name = 'water';
   mesh.position.y = W.level;
   mesh.renderOrder = 2;   // after the ground and the opaque world: it is seen THROUGH
+  mesh.onBeforeRender = () => { waveT.value = waveTime(); };   // one synced wave time per frame
   mesh.userData.bodies = A.bodies.map((b) => ({ kind: b.kind, area: Math.round(b.area), width: +b.width.toFixed(1), length: +b.length.toFixed(1) }));
   scene.add(mesh);
   current = { mesh, level: W.level, analysis: A };

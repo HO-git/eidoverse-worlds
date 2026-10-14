@@ -105,26 +105,60 @@ export function ingestHeightmap(body: Uint8Array, hash: string):
   return { grid, png, w, h, bits: img.data instanceof Uint16Array ? 16 : img.depth, meta };
 }
 
-// Exports run on the thread that serves the worlds (review on #237), so their work is BOUNDED: at most
-// EXPORT_MAX samples a side, the last few results cached by (terrain, resolution) — a terrain that has not
-// changed is never re-sampled — and a per-address budget on the uncached ones (routes.ts).
+// Exports run on the thread that serves the worlds (review on #237), so their work is BOUNDED, and the
+// bound is checked BEFORE any work is done:
+//   · at most EXPORT_MAX samples a side;
+//   · the last EXPORT_CACHE results kept by (terrain, resolution) — a terrain that has not changed is
+//     never re-sampled, and a cached answer costs nothing and is never refused;
+//   · an uncached export must first be granted a slot: EXPORT_PER_ADDRESS a minute per address, and
+//     EXPORT_PER_MINUTE a minute for the whole process (so many addresses cannot add up to a busy thread),
+//     and only one at a time. A refused request does no sampling and caches nothing.
 export const EXPORT_MAX = 513;
+export const EXPORT_CACHE = 6;
+export const EXPORT_PER_ADDRESS = 6;
+export const EXPORT_PER_MINUTE = 30;
+const WINDOW_MS = 60_000;
 const exportCache = new Map<string, { png: Uint8Array; meta: HeightmapMeta }>();
-const EXPORT_CACHE = 6;
+const byAddress = new Map<string, number[]>();   // address -> start times of its granted exports, this window
+let granted: number[] = [];                       // every granted export's start time, this window
+let exporting = false;
 
-/** exportHeightmap, cached: the same terrain at the same resolution is sampled once. `cached` says whether
- *  this call did the work, so the caller can charge only real work to a rate budget. */
-export function exportHeightmapCached(terrainArgs: Record<string, unknown>, res: number, world?: string):
-    { png: Uint8Array; meta: HeightmapMeta; cached: boolean } {
-  const n = Math.max(2, Math.min(EXPORT_MAX, Math.round(res)));
-  const key = `${n}|${world ?? ""}|${JSON.stringify(terrainArgs)}`;
+const exportKey = (terrainArgs: Record<string, unknown>, n: number, world?: string) => `${n}|${world ?? ""}|${JSON.stringify(terrainArgs)}`;
+const clampRes = (res: number) => Math.max(2, Math.min(EXPORT_MAX, Math.round(Number.isFinite(res) ? res : 257)));
+
+export type ExportAnswer =
+  | { ok: true; png: Uint8Array; meta: HeightmapMeta; cached: boolean }
+  | { ok: false; status: 429 | 503; error: string; retryAfter: number };
+
+/** The public export door: a cached answer if there is one; else a granted slot, THEN the work. */
+export function serveHeightmapExport(terrainArgs: Record<string, unknown>, res: number, world: string | undefined,
+    address: string, now = Date.now()): ExportAnswer {
+  const n = clampRes(res), key = exportKey(terrainArgs, n, world);
   const hit = exportCache.get(key);
-  if (hit) { exportCache.delete(key); exportCache.set(key, hit); return { ...hit, cached: true }; }
-  const out = exportHeightmap(terrainArgs, n, world);
-  exportCache.set(key, out);
-  while (exportCache.size > EXPORT_CACHE) exportCache.delete(exportCache.keys().next().value!);
-  return { ...out, cached: false };
+  if (hit) { exportCache.delete(key); exportCache.set(key, hit); return { ok: true, ...hit, cached: true }; }
+  // ---- the gate: nothing below it runs unless a slot is granted
+  if (exporting) return { ok: false, status: 503, error: "another heightmap export is running — try again in a moment", retryAfter: 1 };
+  granted = granted.filter((t) => now - t < WINDOW_MS);
+  const mine = (byAddress.get(address) ?? []).filter((t) => now - t < WINDOW_MS);
+  if (mine.length >= EXPORT_PER_ADDRESS)
+    return { ok: false, status: 429, error: `heightmap export rate limit (${EXPORT_PER_ADDRESS} new exports a minute)`, retryAfter: Math.ceil((WINDOW_MS - (now - mine[0])) / 1000) };
+  if (granted.length >= EXPORT_PER_MINUTE)
+    return { ok: false, status: 429, error: `the server is busy exporting heightmaps (${EXPORT_PER_MINUTE} a minute in all)`, retryAfter: Math.ceil((WINDOW_MS - (now - granted[0])) / 1000) };
+  mine.push(now); granted.push(now); byAddress.set(address, mine);
+  if (byAddress.size > 1024) for (const [a, ts] of byAddress) if (!ts.some((t) => now - t < WINDOW_MS)) byAddress.delete(a);
+  // ---- the work, under the slot
+  exporting = true;
+  try {
+    const out = exportHeightmap(terrainArgs, n, world);
+    exportCache.set(key, out);
+    while (exportCache.size > EXPORT_CACHE) exportCache.delete(exportCache.keys().next().value!);
+    return { ok: true, ...out, cached: false };
+  } finally { exporting = false; }
 }
+
+/** Tests: whether an export is cached, without touching the cache's order; and a clean slate. */
+export const exportIsCached = (terrainArgs: Record<string, unknown>, res: number, world?: string) => exportCache.has(exportKey(terrainArgs, clampRes(res), world));
+export function resetExportBudget() { exportCache.clear(); byAddress.clear(); granted = []; exporting = false; }
 
 /** The ground's height range alone, from a coarse sampling — what the panel's black/white fields want,
  *  without building (or caching) a PNG. */

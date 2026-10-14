@@ -68,13 +68,17 @@ export function shapeParams(a) {
 // consumer reads integers, never an image decoder's opinion of one.
 
 // Grids are cached by ref, newest-used last, and only the last GRID_CACHE are kept: a world that has been
-// re-imaged many times does not hold every old image. A ref that failed to load is remembered for
-// MISS_RETRY_MS, so a missing file is not re-read on every height sample, and is retried after that.
+// re-imaged many times does not hold every old image. A ref the disk loader could not find is remembered
+// for MISS_RETRY_MS, so a missing file is not re-read on every height sample. A FETCH that failed backs
+// off — FETCH_RETRY_MS, doubling to MISS_RETRY_MS — so a passing network fault costs seconds, not half a
+// minute. Nothing commits ground for a heightmap until its grid is here (shapeReady): browser and agent
+// keep the last ground they had, and rebuild once the grid lands (client/lib/world.js, mcpl/agent.ts).
 const GRID_CACHE = 8;
 const MISS_RETRY_MS = 30_000;
+const FETCH_RETRY_MS = 1_000;
 const grids = new Map();
 const misses = new Map();     // ref -> when the loader last failed on it
-const fetchMisses = new Map();   // ref -> when the fetcher last failed on it
+const fetchMisses = new Map();   // ref -> { until, n }: no fetch before `until`; n failures in a row
 const inflight = new Map();   // ref -> the fetch in progress
 let loader = null, fetcher = null;
 
@@ -82,7 +86,7 @@ function keep(ref, g) {
   grids.delete(ref); grids.set(ref, g); misses.delete(ref); fetchMisses.delete(ref);
   while (grids.size > GRID_CACHE) grids.delete(grids.keys().next().value);
 }
-const missedLately = (ref, m = misses) => { const t = m.get(ref); return t != null && Date.now() - t < MISS_RETRY_MS; };
+const missedLately = (ref) => { const t = misses.get(ref); return t != null && Date.now() - t < MISS_RETRY_MS; };
 
 /** Make a grid available to every height function that names it. */
 export function registerGrid(ref, grid) { keep(ref, grid); }
@@ -104,18 +108,24 @@ export function gridFor(ref) {
 export function requestGrid(ref) {
   const have = gridFor(ref);
   if (have) return Promise.resolve(have);
-  if (!fetcher || missedLately(ref, fetchMisses)) return Promise.resolve(null);
+  if (!fetcher || gridRetryIn(ref) > 0) return Promise.resolve(null);
   let p = inflight.get(ref);
   if (!p) {
     p = (async () => {
       try { const g = decodeGrid(await fetcher(ref)); keep(ref, g); return g; }
-      catch { fetchMisses.set(ref, Date.now()); return null; }
+      catch {
+        const n = (fetchMisses.get(ref)?.n ?? 0) + 1;
+        fetchMisses.set(ref, { until: Date.now() + Math.min(MISS_RETRY_MS, FETCH_RETRY_MS * 2 ** (n - 1)), n });
+        return null;
+      }
       finally { inflight.delete(ref); }
     })();
     inflight.set(ref, p);
   }
   return p;
 }
+/** Milliseconds until a failed grid may be fetched again (0: now). */
+export function gridRetryIn(ref) { const m = fetchMisses.get(ref); return m ? Math.max(0, m.until - Date.now()) : 0; }
 /** Whether a terrain's shaping can be computed as written — false while its heightmap grid is still
  *  missing (the height law would fall back to noise, which nothing should commit to). */
 export function shapeReady(shape) { return !shape?.heightmap || !!gridFor(shape.heightmap.grid); }
@@ -165,10 +175,13 @@ export function shapeHeight(base, S, size) {
     const b = d[j1 * W + i] + (d[j1 * W + i1] - d[j1 * W + i]) * fu;
     return hm.min + (hm.max - hm.min) * ((a + (b - a) * fv) / 65535);
   };
+  // The grid is HELD from the moment it is first found: a built terrain keeps its own image however the
+  // cache turns over. Until then it is looked up per call (a sim's field made before the grid landed).
+  let held = hm ? gridFor(hm.grid) : null;
   return (x, z) => {
     let h;
     if (hm) {
-      const g = gridFor(hm.grid);   // looked up per call: a grid that lands later is used from then on
+      const g = held ?? (held = gridFor(hm.grid));
       h = g ? sample(g, x, z) : base(x, z);
     } else h = base(x, z);
     for (let n = 0; n < feats.length; n++) {

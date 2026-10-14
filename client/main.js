@@ -13,7 +13,7 @@ import { releaseBodyGate, armBodyGate } from './lib/bodygate.js';
 import { CONFIG, bus, report, tee, colorFor } from './lib/base.js';
 import { contributeThumbnail, makeAvatar, makeCapsuleAvatar, EMOTE_ORDER } from './lib/avatar.js';
 import { updateSky, updateAutoSystems, skyArgs, setCloudQuality } from './lib/sky.js';
-import { setSkyArgsSource, entities, buildsPending, avatarMounts, roleOf, worldHasOwner, currentTerrainArgs, terrainEditBase, noteTerrainSent } from './lib/world.js';
+import { setSkyArgsSource, entities, buildsPending, avatarMounts, roleOf, worldHasOwner, currentTerrainArgs, terrainEditBase, noteTerrainSent, terrainPending } from './lib/world.js';
 import { presence } from './lib/presence.js';
 import { initWorldQuad } from './lib/worldquad.js';
 import { foldParity } from './lib/parity.js';
@@ -82,7 +82,7 @@ import { initPhysObj, tickPhysObj, leaseApi } from './lib/physobj.js';
 import { initMods, tickMods, modsApi } from './lib/mods.js';
 import { initBoot, markPhase, finishBoot, bootDone, setBootAssets } from './lib/boot.js';
 import { protoStats, forgetBytes, loadingItems, bootBytes } from './lib/assets.js';
-import { grassTiles } from './lib/terrain.js';
+import { grassTiles, heightAt, hasTerrain } from './lib/terrain.js';
 import { grassDiag } from './lib/grassdiag.js';
 import { warmStats } from './lib/warmqueue.js';
 import { budgetStats } from './lib/framebudget.js';
@@ -863,6 +863,9 @@ const EW = globalThis.EW = {
     return next;
   },
   get terrainArgs() { return currentTerrainArgs(); },
+  // the ground as walking reads it, and whether a heightmap terrain is still waiting on its image
+  groundAt: (x, z) => heightAt(x, z), get hasTerrain() { return hasTerrain(); },
+  get terrainPending() { return terrainPending(); },
   animate: (data, { replace = data?.replace === true, target = null } = {}) => {   // replace may ride in the data too
     const a = { ...data, replace: !!replace };
     if (target) return sendPuppet(target, { anim: a });

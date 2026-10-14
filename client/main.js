@@ -39,6 +39,7 @@ import { remotes, updateRemotes, updateGaze } from './lib/remotes.js';
 // now (it must carry the protocol for lite.js, which has no bodies to register), and
 // this is the real, body-building implementation of that interface.
 import * as participants from './lib/remotes.js';
+import { setWaveClock } from './lib/water.js';
 import { snapshot } from './lib/net_snap.js';
 import { myReachBag } from './lib/reachnet.js';
 import {
@@ -829,6 +830,9 @@ globalThis.whyIsItSilent = () => {
     'font-size:14px;color:#6cf');
   return { ...s, detail: a };
 };
+
+// the water's waves run on the world's synced clock, so the swell a swimmer rises on is the one everyone sees
+setWaveClock(() => participants.serverNow());
 
 const EW = globalThis.EW = {
   me: () => getMe(), remotes, entities, myState, THREE, net, scene, camera, renderer, bus,

@@ -38,8 +38,9 @@ export function boxMesh(list: Box[]) {
   return { pos: new Float32Array(pos), idx: new Uint32Array(idx) };
 }
 
-/** A GLB whose one mesh sits under a translated parent node (so the world
- *  matrix matters), with an orphan mesh node outside the scene. */
+/** A GLB whose one mesh sits under a parent node lifted `lift` (and the mesh
+ *  itself shifted `shift` along x — both default 0), with an orphan mesh node
+ *  outside the scene. */
 export async function buildGlb(list: Box[], { draco = false, lift = 0 } = {}) {
   const doc = new Document();
   const buf = doc.createBuffer();
@@ -50,7 +51,7 @@ export async function buildGlb(list: Box[], { draco = false, lift = 0 } = {}) {
       .setIndices(doc.createAccessor().setType("SCALAR").setArray(idx).setBuffer(buf)));
   };
   const parent = doc.createNode("lift").setTranslation([0, lift, 0]);
-  parent.addChild(doc.createNode("building").setMesh(make(list)).setTranslation([0, -lift, 0]));
+  parent.addChild(doc.createNode("building").setMesh(make(list)).setTranslation([shift, 0, 0]));
   doc.createScene("s").addChild(parent);
   doc.createNode("orphan").setMesh(make([[50, 0, 50, 51, 1, 51]]));
   if (draco) doc.createExtension(KHRDracoMeshCompression).setRequired(true)

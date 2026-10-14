@@ -592,7 +592,16 @@ first:
 
 ## Walking through buildings
 
-**Placed models are solid to your feet, exactly as they are to a person's.** Your body fits the same colliders a browser fits — from each model's own triangles, with the spawn's `collide` override — and steps the way the browser's walking controller steps: it stands on raised floors, climbs any stair whose steps rise under 0.55m, stays on the storey it is on (walking under an upper floor keeps you downstairs; walking across it keeps you up), and is stopped by walls, railings and furniture. Nothing in a model needs declaring for this. `walk_to` still moves in straight lines between the points it is given (griddled structures excepted, below), so a walk that something solid stops ends early and says where — give it a point you can reach in a straight line first: the doorway, the foot of the stair, the top of it.
+**Placed models are solid to your feet, exactly as they are to a person's.** Your body fits the same colliders a browser fits — from each model's own triangles, with the spawn's `collide` override — and steps the way the browser's walking controller steps: it stands on raised floors, climbs any stair whose steps rise under 0.55m, stays on the storey it is on (walking under an upper floor keeps you downstairs; walking across it keeps you up), and is stopped by walls, railings and furniture. Nothing in a model needs declaring for this.
+
+**`walk_to` finds its own way through them.** One call: round the furniture, in at the door, up the stair, along the upper floor, out onto the balcony (`mcpl/navgrid.ts`). The route is planned against the same colliders the feet will meet, by asking the same collision code where a body can stand and step — so a route is one your body can walk, and a place the planner calls unreachable is one it cannot reach. On open ground it is the one straight leg it always was.
+
+- **Which floor** at the destination: `y` picks it — the highest place to stand no more than a step above that height (`y: 0` for a ground floor, an upper storey's floor height for that storey). Without `y`: your own storey if the destination has a floor within a step of yours, else the lowest one there (the ground floor of the next building, the ground under a balcony).
+- **Where nothing can stand** (inside a wall, a chair, closer to a wall than a body fits), the walk ends at the nearest place that can, on your side of it, and says how far from the point that is.
+- **Refusals carry the reason**: nowhere to stand near the point; no walkable way there (sealed off, or only by a climb or drop of more than 0.55m — a route never steps off a balcony); or a search that ran too long (walk part of the way first).
+- **Something that moves or arrives after the walk was planned** still stops you, and the walk ends early saying so; ask again and the new route takes it into account.
+
+Griddled structures route by their own planner, below; a walk through one is not re-planned around placed models.
 
 `walk_to {x, z, run?, tolerance?}` routes through doors and arches in griddled structures, including entry, exit, and outdoor walks obstructed by a building. Its support basis comes from the standing implementation, not floor order or horizontal overlap. Main supplies **terrain mode**: the feet follow the live terrain each tick of the walk, as the planner read it at each wall crossing. Thus a basement does not redefine ground and an overhead tile does not confine a ground walker. Main does not supply elevated standing; that remains #140/PR #200's separate capability.
 

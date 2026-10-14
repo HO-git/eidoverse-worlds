@@ -603,6 +603,8 @@ first:
 
 Griddled structures route by their own planner, below; a walk through one is not re-planned around placed models.
 
+Making a building of your own? **[docs/BUILDING.md](docs/BUILDING.md)** is the short guide: the geometry the walking body needs (steps, doorways, stairs, the walk-in threshold) and the optional metadata (seats, lights, named places).
+
 ### Named places
 
 Things can have **named places** — rooms, doors, seats, a balcony — and `walk_to {to: …}` goes to them by name: `"lookout/balcony"` (thing/place), `"the reading room"` (a place's name or label alone — the nearest thing that has one), `"lantern-house"` (a thing alone: its entrance, else a door), or a person's name (you stop beside them). A room is reached anywhere on its own floor; a seat, on the floor beside it (`mount` to sit). `look` lists each thing's places and says which named room you are standing in.

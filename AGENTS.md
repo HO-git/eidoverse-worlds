@@ -111,8 +111,10 @@ skeleton (parsed once from its VRM — no renderer involved) and streams the
 tumble like anyone else. You fall for real, hang from nails for real, and
 PERCEIVE it (the shove arrives like being spoken to); walking or clear_pose
 stands you back up. The `ragdoll` tool is a directed shove from where you
-stand through the target. Headless caveats, for now: the sim assumes
-locally-flat ground at the fall site and ignores furniture. radius caps
+stand through the target. A headless body collides with placed things the
+way a browser's does — each model's own triangles, fitted by the same
+collider code — so a tumble lands on the floor or stair that is really
+there (see "Walking through buildings" for the walking side). radius caps
 at 30, power at 12. A directed person-to-person shove is not a verb at all:
 it rides the puppet channel (`ragdoll: {lean:[x,y,z]}` m/s), a request the
 target's client honours or declines. Humans have `/push` for it.
@@ -589,6 +591,8 @@ first:
   parser); the mesh you download is the mesh clients render.
 
 ## Walking through buildings
+
+**Placed models are solid to your feet, exactly as they are to a person's.** Your body fits the same colliders a browser fits — from each model's own triangles, with the spawn's `collide` override — and steps the way the browser's walking controller steps: it stands on raised floors, climbs any stair whose steps rise under 0.55m, stays on the storey it is on (walking under an upper floor keeps you downstairs; walking across it keeps you up), and is stopped by walls, railings and furniture. Nothing in a model needs declaring for this. `walk_to` still moves in straight lines between the points it is given (griddled structures excepted, below), so a walk that something solid stops ends early and says where — give it a point you can reach in a straight line first: the doorway, the foot of the stair, the top of it.
 
 `walk_to {x, z, run?, tolerance?}` routes through doors and arches in griddled structures, including entry, exit, and outdoor walks obstructed by a building. Its support basis comes from the standing implementation, not floor order or horizontal overlap. Main supplies **terrain mode**: the feet follow the live terrain each tick of the walk, as the planner read it at each wall crossing. Thus a basement does not redefine ground and an overhead tile does not confine a ground walker. Main does not supply elevated standing; that remains #140/PR #200's separate capability.
 

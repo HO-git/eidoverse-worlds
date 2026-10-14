@@ -12,7 +12,8 @@ import * as TSL from "three/tsl";
 import { NoiseGate, SHORT_STINT_MS, APPROACH_REFRACT_MS, APPROACH_RADIUS, REARM_RADIUS,
   APPROACH_DWELL_MS, APPROACH_STILL_MPS, APPROACH_MAX_WAIT_MS,
   ACTIVITY_RADIUS_M, ACTIVITY_PULSE_MS, ACTIVITY_REFRESH_MS, MOVER_MIN_M } from "./denoise.ts";
-import { HeadlessBody, ReachBody, setHeightField, registerSupport, registerSupportGrid, removeSupport } from "./physics.ts";
+import { HeadlessBody, ReachBody, setHeightField, registerSupport, registerSupportGrid, registerMeshSupport, removeSupport, standOn, collidersReady } from "./physics.ts";
+import { collisionTriangles } from "../server/geometry.ts";
 // FLIGHT. The same deterministic integrator the browser bench and the capture
 // path run -- one function, every runtime, per the spec's Q2 ruling.
 import {
@@ -60,6 +61,15 @@ import { makeVerdictCache, seatGateCore, nameFromAvatarPath } from "../client/li
 (globalThis as any).THREE = Object.assign({}, THREE_W, TSL);
 
 const WALK = 1.55, RUN = 4.0, TICK_MS = 100, ARRIVE = 0.01;
+/** Longest horizontal move between two collision checks. A run covers 0.4m in
+ *  one 100ms tick; checked only at its end, that leaps a 0.2m wall the walking
+ *  capsule (r 0.32) never touched. Substeps keep each hop under a third of r. */
+const COLLIDE_SUBSTEP = 0.1;
+/** A walk that has made less than this fraction of its intended progress for
+ *  STALL_TICKS consecutive ticks is held by something solid: it ends, saying
+ *  so, instead of pressing against the wall until the 90s timeout. */
+const STALL_PROGRESS = 0.2, STALL_TICKS = 15;
+const GRAVITY = 16;   // client/lib/controller.js: vy -= 16 * dt
 /** Quiet window for world-change narration, per (entity, component). Tuning a
  *  live emitter is a burst of `comp` entries; this is how long they fold into
  *  one line. Long enough to swallow a slider drag, short enough that "puts the
@@ -67,8 +77,17 @@ const WALK = 1.55, RUN = 4.0, TICK_MS = 100, ARRIVE = 0.01;
 const EMITTER_COALESCE_MS = Number(process.env.EW_EMITTER_COALESCE_SEC ?? 4) * 1000;
 
 type Vec2 = { x: number; z: number };
+type CollisionMesh = { positions: Float32Array; indices: Uint32Array };
+/** Collision triangles per (sequencer, lib), for every agent in this process.
+ *  A lib's bytes are immutable for its lifetime here (store paths are content
+ *  hashes; library models change only on a redeploy, which restarts us), and
+ *  the decode is the expensive part — a world full of agents decodes each
+ *  model once. */
+const meshCache = new Map<string, Promise<CollisionMesh | null>>();
 type Pose = PublicPose;
 type Entity = { id: string; lib: string; pos: number[]; yaw: number; actor: string; scale?: number;
+  /** the spawn's collider override ("exact" | "box"); the browser's decide() reads it, and so does ours */
+  collide?: string;
   /** component bag (sockets, reactions, motion, …) — what a thing can DO;
    *  this is how affordances reach text-tier perception */
   comp?: Record<string, any> };
@@ -108,12 +127,13 @@ type InboxItem = { ts: number; kind: "say" | "arrive" | "leave" | "act"; who: st
  *  encoded as EXPLICIT flags rather than a hand-mirrored copy that "must
  *  stay in step" (the drift that crashed look() for every agent in the
  *  world is the incident that comment carried): roles/grants and behaviors
- *  have no local reader here, spawn `collide` is browser-only collider
- *  state, and body mounts read as "who sits where", attributed to the
- *  sitter. */
+ *  have no local reader here, and body mounts read as "who sits where",
+ *  attributed to the sitter. Spawn `collide` is KEPT: this body collides
+ *  against the same fitted colliders a browser does, and the override is
+ *  half of how those are chosen. */
 function stateToEntries(state: any, skipChatFromSeq = Infinity): any[] {
   return sharedStateToEntries(state, {
-    skipChatFromSeq, roles: false, behaviors: false, collide: false,
+    skipChatFromSeq, roles: false, behaviors: false, collide: true,
     bodyMountRel: "seat", bodyMountActor: "rider",
   });
 }
@@ -748,6 +768,9 @@ export class WorldAgent {
             // walked this process keeps its own truth on mid-life reconnects
             if (msg.restore && !this.restoredPose && !this.target && this.pos.x === 0 && this.pos.z === 0) {
               this.pos.x = msg.restore.p[0]; this.pos.z = msg.restore.p[2];
+              // and at the height you were: an upstairs floor is a place now,
+              // and the feet re-find it from here once the world's colliders land
+              if (Number.isFinite(msg.restore.p[1])) this.pos.y = msg.restore.p[1];
               this.yaw = msg.restore.yaw ?? 0;
               // an enacted pose is authored, not ephemeral — wake holding it.
               // A remembered ragdoll frame is not (pre-sanitizer entries) —
@@ -764,8 +787,13 @@ export class WorldAgent {
             // An agent that only read `entries` would arrive in an empty room.
             const oldestTail = msg.entries.length
               ? Math.min(...msg.entries.map((e: any) => e.seq ?? Infinity)) : Infinity;
+            // the feet hold their height until the floors this join is about
+            // to learn about have been fitted — before that, the only ground
+            // a body could find is the terrain under the building it is in
+            this.feetSettling = true;
             for (const e of stateToEntries(msg.state, oldestTail)) await this.applyEntry(e, false);
             for (const e of msg.entries) await this.applyEntry(e, false);
+            void this.supportReady(10_000).then(() => { this.feetSettling = false; });
             if (typeof msg.throughSeq === "number") this.lastSeq = Math.max(this.lastSeq, msg.throughSeq);
             for (const e of msg.entries) this.lastSeq = Math.max(this.lastSeq, e.seq ?? -1);
             this.joined = true;
@@ -1253,6 +1281,7 @@ export class WorldAgent {
         lib: (e as any).kind === "light" ? "(light)" : String((e as any).lib ?? ""),
         pos: (e as any).pos, yaw: (e as any).yaw ?? 0,
         ...((e as any).scale != null ? { scale: (e as any).scale } : {}),
+        ...((e as any).collide != null ? { collide: String((e as any).collide) } : {}),
         actor: (e as any).actor,
         ...((e as any).placer ? { placer: (e as any).placer } : {}),
         ...((e as any).comp ? { comp: (e as any).comp } : {}),
@@ -1621,12 +1650,14 @@ export class WorldAgent {
   // a body released above one settled through it to the dirt underneath.
   // The server already reads shape as data (GET /geom: bbox + up-facing flat
   // zones); each entity this agent knows about contributes support boxes to
-  // the sim's collider map. Small solid things contribute their whole box —
-  // the same thing a browser's box collider reads. Room-scale things (the
-  // browser gives those exact trimesh interiors) contribute their floor DECKS
-  // as thin slabs instead, so a body can rest on the pavilion floor without
-  // the pavilion sealing into a solid block. Walls stay a browser-side seam:
-  // a data box carries floors, not architecture.
+  // the sim's collider map — the browser's own collider, fitted from the
+  // model's triangles (meshFor → registerMeshSupport), whenever this process
+  // can fetch and decode them; then walls, furniture and stairs are as solid
+  // here as in a browser, for the ragdoll and the walking feet alike. The
+  // summary path is the fallback: small solid things contribute their whole
+  // box, room-scale things their floor DECKS as thin slabs (so a body can
+  // rest on the pavilion floor without it sealing into a block) — floors,
+  // not architecture.
 
   private geomCache = new Map<string, Promise<any | null>>();
   private supportIds = new Map<string, string[]>();   // entity id -> registered box ids
@@ -1691,6 +1722,21 @@ export class WorldAgent {
     return false;
   }
 
+  /** The model's collision triangles, decoded from the bytes /library serves
+   *  (shared by every agent in the process — see meshCache). */
+  private meshFor(lib: string): Promise<CollisionMesh | null> {
+    const key = `${this.httpBase}|${lib}`;
+    let p = meshCache.get(key);
+    if (!p) {
+      p = fetch(`${this.httpBase}/library/${lib}`)
+        .then((r) => (r.ok ? r.arrayBuffer() : null))
+        .then((b) => (b ? collisionTriangles(new Uint8Array(b)) : null))
+        .catch(() => null);                            // no mesh: the /geom summary path stands in
+      meshCache.set(key, p);
+    }
+    return p;
+  }
+
   private geomFor(lib: string): Promise<any | null> {
     let p = this.geomCache.get(lib);
     if (!p) {
@@ -1711,14 +1757,14 @@ export class WorldAgent {
     // Mounted cargo is the same story told by a different verb: it rides a
     // parent whose transform this code does not track.
     if (this.hasActiveMotion(before) || this.mounts.has(id)) { this.dropSupport(id); return; }
-    const g = await this.geomFor(before.lib);
+    const [g, mesh] = await Promise.all([this.geomFor(before.lib), this.meshFor(before.lib)]);
     // Re-read, and re-CHECK: an id can be removed and respawned as something
     // else while its geometry is in flight, and "the entity still exists" is
     // not the same question as "it is still the thing I fetched for". Without
     // the lib comparison a crate's decks could land under a lamp post that
     // merely inherited its id.
     const e = this.entities.get(id);
-    if (!g || !e || e.lib !== before.lib) return;
+    if ((!g && !mesh) || !e || e.lib !== before.lib) return;
     // started moving, or got mounted, while its geometry was in flight —
     // replay folds a mount right behind the spawn that triggered this fetch
     if (this.hasActiveMotion(e) || this.mounts.has(id)) { this.dropSupport(id); return; }
@@ -1739,6 +1785,21 @@ export class WorldAgent {
     }
     this.dropSupport(id);
     const xform = { position: e.pos, yaw: e.yaw ?? 0, scale: s };
+    // The real collider when the triangles are to hand: fitted from the same
+    // mesh, with the same override, by the same decide() a browser runs — so
+    // a room-scale interior holds this body up AND holds it back, walls and
+    // furniture included. Everything below is the summary fallback, for a
+    // model whose bytes could not be fetched or decoded here.
+    if (mesh) {
+      const bid = `${this.world}/${id}`;
+      // awaited, unlike the summary boxes below: the fit itself is what a
+      // joining body's feet wait on (supportReady), and it cannot throw
+      if (await registerMeshSupport(this.supportHolder, bid, mesh, { ...xform, collide: e.collide, lib: e.lib })) {
+        this.supportIds.set(id, [bid]);
+        return;
+      }
+    }
+    if (!g) return;
     const [w, h, d] = [g.bbox.size[0] * s, g.bbox.size[1] * s, g.bbox.size[2] * s];
     const ids: string[] = [];
     const roomScale = w * d >= 16 && h >= 2.2;         // decide()'s own gate, from the bbox alone
@@ -1826,6 +1887,7 @@ export class WorldAgent {
     // Capture before an arrival clears the target: the completion tick uses
     // the same support that admitted the route, not a newly selected floor.
     const admittedHeight = this.target ? this.walkHeightAt : null;
+    let moveX = 0, moveZ = 0, snap = false, distBefore = 0;
     if (!this.draggedBy && this.target) {
       const dx = this.target.x - this.pos.x, dz = this.target.z - this.pos.z;
       const dist = Math.hypot(dx, dz);
@@ -1846,20 +1908,33 @@ export class WorldAgent {
         this.speed = sp; this.clip = this.target.run ? "run" : "walk";
         this.yaw = Math.atan2(dx, dz);
         const step = Math.min(dist, sp * dt);
-        if (step === dist) {
-          // Land on the validated point exactly, rather than allowing a
-          // tolerance or floating residual to cut the next corner.
-          this.pos.x = this.target.x; this.pos.z = this.target.z;
-        } else {
-          this.pos.x += (dx / dist) * step;
-          this.pos.z += (dz / dist) * step;
-        }
+        moveX = (dx / dist) * step; moveZ = (dz / dist) * step;
+        snap = step === dist; distBefore = dist;
       }
     }
     // a tumbling, lying, dragged, nailed or FLYING body owns its own y — the
-    // terrain clamp is for FEET, and none of those states is standing on them
-    if (!this.draggedBy && this.pins.size === 0 && this.clip !== "ragdoll" && !this.flight) {
-      this.pos.y = admittedHeight ? admittedHeight(this.pos.x,this.pos.z) : this.heightAt(this.pos.x, this.pos.z);
+    // ground is for FEET, and none of those states is standing on them.
+    const feetFree = !this.draggedBy && this.pins.size === 0 && this.clip !== "ragdoll" && !this.flight;
+    const ground = admittedHeight ?? ((x: number, z: number) => this.heightAt(x, z));
+    const target = this.target;
+    if (feetFree && collidersReady() && (this.mounts.has(this.name) || this.feetSettling)) {
+      // seated: the seat holds the body, and the feet keep the floor they
+      // last stood on — standing up resolves from there (walkTo, setPosture).
+      // Just joined: the same hold, until this join's floors are fitted.
+      if (snap && target) { this.pos.x = target.x; this.pos.z = target.z; }
+      else { this.pos.x += moveX; this.pos.z += moveZ; }
+    } else if (feetFree && collidersReady()) {
+      this.stepFeet(moveX, moveZ, dt, ground);
+      // Land on the validated point exactly when nothing deflected the
+      // step, rather than letting a floating residual cut the next corner.
+      if (snap && target && Math.hypot(this.pos.x - target.x, this.pos.z - target.z) < 1e-6) {
+        this.pos.x = target.x; this.pos.z = target.z;
+      }
+      if (target && distBefore > 0) this.noteWalkProgress(distBefore, Math.hypot(moveX, moveZ));
+    } else {
+      if (snap && target) { this.pos.x = target.x; this.pos.z = target.z; }
+      else { this.pos.x += moveX; this.pos.z += moveZ; }
+      if (feetFree) this.pos.y = ground(this.pos.x, this.pos.z);
     }
     // FLIGHT: one fixed-step integration of shared/flight.js per tick, and the
     // body's position is whatever it says. The integrator is the same function
@@ -2705,8 +2780,12 @@ export class WorldAgent {
     // and deciding to walk IS getting off the seat — a folded mount otherwise
     // glues this body to its socket on every renderer, wherever the feet go
     if (this.joined && this.mounts.has(this.name)) this.verb("dismount", { id: this.name });
-    // and stand on the ground you got up onto
-    this.pos.y = support.height;
+    // and stand on the ground you got up onto: with colliders loaded, the
+    // floor under the feet found from where the body is (a body seated
+    // upstairs stands up upstairs); the planner's support answer otherwise
+    const supportAt = support.kind === "terrain" ? (wx: number, wz: number) => this.heightAt(wx, wz) : () => support.height;
+    this.pos.y = (collidersReady() ? standOn(this.pos, supportAt) : null) ?? support.height;
+    this.vy = 0; this.grounded = true; this.stallTicks = 0; this.walkStall = null;
     this.walkTolerance = tolerance;
     // A terrain walk reads the live terrain each tick, as the planner read it;
     // a floor walk keeps the floor that admitted the route through its last tick.
@@ -2718,6 +2797,61 @@ export class WorldAgent {
       this.walkDone = resolve;
       setTimeout(() => { if (this.walkDone === resolve) this.abandonWalk(); }, timeoutMs);
     });
+  }
+
+  // ---- feet ----------------------------------------------------------------
+  // The browser walking controller's vertical model (client/lib/controller.js),
+  // run against the same fitted colliders: move, resolveColliders (which pushes
+  // the capsule out of anything solid and answers the ground under it — a
+  // stair tread within a step, a floor below the feet, else terrain), then snap
+  // onto that ground or fall toward it under gravity.
+  private vy = 0;
+  private grounded = true;
+  /** Set from a join until its support registrations land (see the join). */
+  private feetSettling = false;
+  private stallTicks = 0;
+  /** Why the last walk stopped short, when something solid stopped it; read by
+   *  the walk_to tool once the walk's promise answers false. */
+  walkStall: string | null = null;
+
+  private stepFeet(mx: number, mz: number, dt: number, terrain: (x: number, z: number) => number) {
+    const n = Math.max(1, Math.ceil(Math.hypot(mx, mz) / COLLIDE_SUBSTEP));
+    const sdt = dt / n;
+    for (let i = 0; i < n; i++) {
+      this.pos.x += mx / n; this.pos.z += mz / n;
+      const ground = standOn(this.pos, terrain) ?? terrain(this.pos.x, this.pos.z);
+      if (!this.grounded || this.pos.y > ground + 0.02) {
+        this.grounded = false;
+        this.vy -= GRAVITY * sdt;
+        this.pos.y += this.vy * sdt;
+        if (this.pos.y <= ground) { this.pos.y = ground; this.vy = 0; this.grounded = true; }
+      } else { this.pos.y = ground; this.vy = 0; this.grounded = true; }
+    }
+  }
+
+  /** The ground under the feet as a standing body finds it: the fitted
+   *  colliders when loaded (an upstairs floor stays upstairs), else terrain. */
+  private feetGround(): number {
+    const terrain = (x: number, z: number) => this.heightAt(x, z);
+    return (collidersReady() ? standOn(this.pos, terrain) : null) ?? terrain(this.pos.x, this.pos.z);
+  }
+
+  /** A walk pressed against something solid ends, and says so. Progress is
+   *  distance closed on the current waypoint; a body sliding along a wall it
+   *  will never get past makes a little and is still stopped. */
+  private noteWalkProgress(distBefore: number, intended: number) {
+    const t = this.target;
+    if (!t) { this.stallTicks = 0; return; }
+    const closed = distBefore - Math.hypot(t.x - this.pos.x, t.z - this.pos.z);
+    this.stallTicks = closed < STALL_PROGRESS * intended ? this.stallTicks + 1 : 0;
+    if (this.stallTicks < STALL_TICKS) return;
+    const final = this.legs.length ? this.legs[this.legs.length - 1] : t;
+    const short = Math.hypot(final.x - this.pos.x, final.z - this.pos.z);
+    this.walkStall = `blocked at (${this.pos.x.toFixed(2)}, ${this.pos.z.toFixed(2)}), ${short.toFixed(2)}m short of ` +
+      `(${final.x.toFixed(2)}, ${final.z.toFixed(2)}): something solid is in the way. walk_to goes straight ` +
+      `through open ground and does not yet route around placed objects — give it a point you can walk to in a straight line first`;
+    this.stallTicks = 0;
+    this.abandonWalk();
   }
 
   /** The walk under way ends unarrived: its promise answers false, its legs
@@ -2851,7 +2985,7 @@ export class WorldAgent {
     if (bones == null && this.clip === "ragdoll") {
       this.body?.stop(); this.stopSim();
       this.clip = "idle";
-      this.pos.y = this.heightAt(this.pos.x, this.pos.z);
+      this.pos.y = this.feetGround();
     }
   }
 
@@ -3082,7 +3216,7 @@ export class WorldAgent {
     if (this.clip === "ragdoll" || (this.heldPose && !this.heldPoseAuthored)) {
       this.body?.stop(); this.stopSim();
       this.heldPose = null; this.heldPoseAuthored = false;
-      this.pos.y = this.heightAt(this.pos.x, this.pos.z);
+      this.pos.y = this.feetGround();
     }
     // and standing up IS getting off the seat
     if (clip === "idle" && this.joined && this.mounts.has(this.name)) this.verb("dismount", { id: this.name });

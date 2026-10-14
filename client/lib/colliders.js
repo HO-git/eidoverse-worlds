@@ -313,8 +313,10 @@ export function fitCollider(id, obj, { collide, scale = 1, lib = null, localFram
 }
 
 /** Register a support collider from DATA rather than a loaded mesh — the
- *  headless door (issue #17). An agent process has no geometry to fit, but the
- *  server's /geom summary gives it bboxes and floor decks; this turns one of
+ *  headless door (issue #17), for a model an agent process could not decode
+ *  (when it can, it fits the real triangles through fitCollider like any
+ *  browser — mcpl/physics.ts registerMeshSupport). The server's /geom summary
+ *  gives it bboxes and floor decks; this turns one of
  *  those into the same entry shape resolveColliders already walks, minus
  *  everything that needs triangles. Deliberately NOT decide(): the exact and
  *  uneven-top probes raycast real meshes. A data box is always pref 'box' —

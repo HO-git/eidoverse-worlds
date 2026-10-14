@@ -27,10 +27,12 @@
 // settled through it to the terrain underneath (issue #17). Now the caller
 // hands over its terrain height function (setHeightField — the same generator
 // the browsers run, replicated in agent.ts) and registers support boxes for
-// placed entities (registerSupport, fed from the server's /geom summaries);
-// Ragdoll's own _terrain()/_world() clamps then see exactly what a browser's
-// would. Walls of room-scale interiors remain a browser-side concern — data
-// boxes carry floors, not architecture (see colliders.fitSupportBox).
+// placed entities; Ragdoll's own _terrain()/_world() clamps then see exactly
+// what a browser's would. Those colliders are fitted from each model's own
+// triangles where the agent can decode them (registerMeshSupport — walls and
+// furniture included, and the walking feet use them too: standOn), and from
+// the server's /geom summaries otherwise (registerSupport/registerSupportGrid
+// — floors only; data boxes carry no architecture, see colliders.fitSupportBox).
 //
 // Declared seam: terrain and the collider map are MODULE state in the client
 // libs, so one process serves ONE world's geometry. Agents co-resident in a
@@ -48,6 +50,8 @@ import { CONTACT_POINTS, contactSeed } from "../shared/contact.js";
 // The aerodynamics of a limp fall -- forces, not a scripted path.
 import { leafForceFor, DEFAULT_LEAF_FORCE } from "../shared/leafforce.js";
 import { bodyFrame, fromBody } from "../shared/joints.js";
+// the walking capsule's dimensions — pure module, the browser controller's own numbers
+import { colliderFor } from "../client/lib/bodyscale.js";
 
 const HEADLESS_CORE = fileURLToPath(new URL("./headless-core.mjs", import.meta.url));
 
@@ -193,6 +197,80 @@ export async function registerSupportGrid(
   if (!m.colliders.fitSupportGrid(id, topGrid, xform)) return false;
   (holders.get(id) ?? holders.set(id, new Set()).get(id)!).add(holder);
   return true;
+}
+
+// One geometry per collision mesh, shared by every entity fitted from it —
+// the triangles are the lib's, the transform is the entity's (colliders.js
+// works root-local, so clones at any place/yaw/scale read the same arrays).
+const meshGeometries = new WeakMap<object, any>();
+
+/** Register a placed entity's REAL collider: fitted by colliders.js from its
+ *  triangles (server/geometry.ts collisionTriangles), with the same `collide`
+ *  override, scale and lib-sharing the browser's promote tail passes
+ *  (client/lib/realize/models.js). decide() then makes the browser's choice —
+ *  box, pillar or exact trimesh — so the walls of a room-scale interior hold
+ *  an agent back and its floors hold it up, not just a ragdoll's beads.
+ *  Same holder discipline and lifetime as registerSupport. */
+export async function registerMeshSupport(
+  holder: string, id: string, mesh: { positions: Float32Array; indices: Uint32Array },
+  xform: { position: number[]; yaw?: number; scale?: number; collide?: string; lib?: string },
+): Promise<boolean> {
+  if (!isFiniteVec3(xform?.position)
+      || !Number.isFinite(xform.yaw ?? 0) || !Number.isFinite(xform.scale ?? 1)) {
+    console.error(`[physics] mesh support ${id} abstained — non-finite transform`);
+    return false;
+  }
+  const m = await loadSim();
+  if (!m) return false;
+  const { THREE } = m;
+  let geom = meshGeometries.get(mesh);
+  if (!geom) {
+    geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(mesh.positions, 3));
+    geom.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
+    meshGeometries.set(mesh, geom);
+  }
+  const s = xform.scale ?? 1;
+  const root = new THREE.Group();
+  root.add(new THREE.Mesh(geom));
+  root.position.set(xform.position[0], xform.position[1], xform.position[2]);
+  root.rotation.y = xform.yaw ?? 0;
+  root.scale.setScalar(s);
+  root.updateMatrixWorld(true);
+  // Never throws (#88): a model the fit chokes on (degenerate triangles, a
+  // BVH build failure) abstains, and the caller falls back to its summary.
+  try {
+    m.colliders.fitCollider(id, root, { collide: xform.collide, scale: s, lib: xform.lib ?? null, localFrame: true });
+  } catch (err) {
+    console.error(`[physics] mesh support ${id} abstained — fit failed:`, String(err).split("\n")[0]);
+    return false;
+  }
+  (holders.get(id) ?? holders.set(id, new Set()).get(id)!).add(holder);
+  return true;
+}
+
+const WALKING = colliderFor(1);
+
+/** Are the collision modules loaded? Asking starts the load: a body's feet
+ *  use the terrain clamp until the answer is yes. */
+export function collidersReady(): boolean {
+  if (!simMods) void loadSim();
+  return simMods != null;
+}
+let standProbe: any = null;
+
+/** Where the feet stand at `pos`, by the browser walking controller's rule
+ *  (client/lib/controller.js): colliders.resolveColliders with the walking
+ *  capsule, which also PUSHES pos.x/z out of anything solid. Returns the
+ *  ground height, or null while the sim is not loaded — the caller keeps its
+ *  terrain clamp then. Synchronous: the walk tick calls it every substep. */
+export function standOn(pos: { x: number; y: number; z: number }, heightAt: (x: number, z: number) => number): number | null {
+  if (!simMods) { void loadSim(); return null; }
+  standProbe ??= new simMods.THREE.Vector3();
+  standProbe.set(pos.x, pos.y, pos.z);
+  const ground = simMods.colliders.resolveColliders(standProbe, heightAt, WALKING.r, WALKING.tall, true);
+  pos.x = standProbe.x; pos.z = standProbe.z;
+  return ground;
 }
 
 export async function removeSupport(holder: string, id: string) {

@@ -2231,7 +2231,9 @@ export class AmmoRagdoll extends BodyEngineBase {
 
   /** Apply the water's force to every core part in it (see step). True when any part is wet. */
   _water() {
-    const wf = waterField();
+    // a body's own water when it was given one (a headless agent: one process can host agents in several
+    // worlds, so the module's single field may be another world's); else the page's
+    const wf = this.waterSource ? this.waterSource() : waterField();
     if (!wf) return false;
     const t = wf.time();
     let wet = false;

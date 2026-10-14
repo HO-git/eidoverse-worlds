@@ -21,12 +21,17 @@
 // `water.kind` ('still' | 'river' | 'ocean') overrides the guess for every body; `water.flow: [x, z]`
 // gives rivers a direction instead.
 
+import { riverSpeed } from './waves.js';
+
 export const RIVER_ELONG = 3.5;
 export const RIVER_MAX_WIDTH = 30;      // metres
 export const OCEAN_EDGE = 25;           // metres of world edge it must touch
 export const OCEAN_REACH = 18;          // metres from the nearest shore somewhere inside it…
 export const OCEAN_AREA = 0.12;         // …or this share of the world square
 export const KINDS = ['still', 'river', 'ocean'];
+/** The analysis grid's segments a side for a terrain square — the water mesh's, about a metre a vertex
+ *  (2 m on the biggest worlds). Browser and agent both use it, so both read the same water. */
+export const waterGridSeg = (size) => Math.max(32, Math.min(512, Math.round(size)));
 
 /**
  * @param {(x: number, z: number) => number} heightAt  the shaped ground
@@ -130,7 +135,7 @@ export function analyzeWater(heightAt, size, water, seg) {
   for (const b of bodies) {
     if (b.kind !== 'river') continue;
     let src, mouth;
-    if (Array.isArray(water.flow) && water.flow.length === 2 && water.flow.every(Number.isFinite)) {
+    if (Array.isArray(water.flow) && water.flow.length === 2 && water.flow.every(Number.isFinite) && Math.hypot(...water.flow) > 0) {
       // a given direction: the source is the cell furthest UPstream along it
       const [fx, fz] = water.flow; let lo = Infinity, hi = -Infinity;
       for (const k of b.cells) {
@@ -144,7 +149,20 @@ export function analyzeWater(heightAt, size, water, seg) {
     }
     bfs(b, src);
     b.source = src; b.mouth = mouth;
-    const v = Math.min(2.2, Math.max(0.5, 18 / b.width));   // narrower runs faster
+    // Narrower runs faster: the current follows the channel's LOCAL width — twice the deepest shore
+    // distance nearby (a channel's centre line is half its width from either bank). The ripples it carries
+    // run at one speed for the whole river (its mean width's), rounded to wrap with the wave clock: a speed
+    // that varied across the water would shear the ripple trains apart as the clock ran.
+    b.waveSpeed = riverSpeed(Math.min(2.2, Math.max(0.5, 18 / b.width)));
+    const R = Math.ceil(Math.min(RIVER_MAX_WIDTH / 2, b.maxShore) / cell) + 1;
+    for (const k of b.cells) {
+      const i = k % n, j = (k - i) / n; let m = 0;
+      for (let jj = Math.max(0, j - R); jj <= Math.min(n - 1, j + R); jj++) for (let ii = Math.max(0, i - R); ii <= Math.min(n - 1, i + R); ii++) {
+        const q = at(ii, jj); if (comp[q] === b.id && shore[q] > m) m = shore[q];
+      }
+      speed[k] = Math.min(2.2, Math.max(0.5, 18 / Math.max(cell, 2 * m)));
+    }
+    smoothScalar(speed, b, comp, n, 3);
     for (const k of b.cells) {
       const i = k % n, j = (k - i) / n;
       const g = (ii, jj) => { const m = at(ii, jj); return comp[m] === b.id ? geo[m] : geo[k]; };
@@ -152,7 +170,6 @@ export function analyzeWater(heightAt, size, water, seg) {
       const gz = (j < n - 1 ? g(i, j + 1) : geo[k]) - (j > 0 ? g(i, j - 1) : geo[k]);
       const len = Math.hypot(gx, gz) || 1;
       flow[2 * k] = gx / len; flow[2 * k + 1] = gz / len;
-      speed[k] = v;
     }
     b.flowDir = [(mouth % n) - (src % n), Math.floor(mouth / n) - Math.floor(src / n)];
   }
@@ -172,18 +189,54 @@ export function analyzeWater(heightAt, size, water, seg) {
   const kind = new Uint8Array(N);
   for (let k = 0; k < N; k++) kind[k] = wet[k] ? KINDS.indexOf(bodies[comp[k]].kind) : 0;
 
-  /** The water at a point: null on dry ground. */
+  /** The water at a point: null on dry ground. Bilinear between the four grid points around it — the
+   *  same continuous surface the drawn sheet interpolates — so a body floating across a cell boundary
+   *  sees no jump in depth, current or wave direction. Its body (kind, width) is the wettest corner's,
+   *  and only that body's corners are blended. */
   const sample = (x, z) => {
-    const i = Math.round((x + half) / cell), j = Math.round((z + half) / cell);
-    if (i < 0 || j < 0 || i >= n || j >= n) return null;
-    const k = at(i, j);
-    if (!wet[k]) return null;
-    const b = bodies[comp[k]];
-    return { kind: b.kind, depth: depth[k], shore: shore[k], width: b.width,
-      flow: b.kind === 'river' ? [flow[2 * k], flow[2 * k + 1]] : null, speed: b.kind === 'river' ? speed[k] : 0,
-      toShore: b.kind === 'ocean' ? [toShore[2 * k], toShore[2 * k + 1]] : null };
+    const u = (x + half) / cell, v = (z + half) / cell;
+    if (u < 0 || v < 0 || u > n - 1 || v > n - 1) return null;
+    const i = Math.min(n - 2, Math.floor(u)), j = Math.min(n - 2, Math.floor(v)), fu = u - i, fv = v - j;
+    const ks = [at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1)];
+    const ws = [(1 - fu) * (1 - fv), fu * (1 - fv), (1 - fu) * fv, fu * fv];
+    const d = depth[ks[0]] * ws[0] + depth[ks[1]] * ws[1] + depth[ks[2]] * ws[2] + depth[ks[3]] * ws[3];
+    if (!(d > 0)) return null;
+    let top = -1;
+    for (let c = 0; c < 4; c++) if (wet[ks[c]] && (top < 0 || ws[c] > ws[top])) top = c;
+    if (top < 0) return null;
+    const b = bodies[comp[ks[top]]];
+    let W = 0, sh = 0, fx = 0, fz = 0, sp = 0, tx = 0, tz = 0;
+    for (let c = 0; c < 4; c++) {
+      const k = ks[c]; if (comp[k] !== b.id) continue;
+      const w = ws[c]; W += w; sh += shore[k] * w;
+      fx += flow[2 * k] * w; fz += flow[2 * k + 1] * w; sp += speed[k] * w;
+      tx += toShore[2 * k] * w; tz += toShore[2 * k + 1] * w;
+    }
+    const unit = (a, c) => { const L = Math.hypot(a, c); return L > 1e-9 ? [a / L, c / L] : null; };
+    const river = b.kind === 'river', ocean = b.kind === 'ocean';
+    return { kind: b.kind, depth: d, shore: sh / W, width: b.width,
+      flow: river ? unit(fx, fz) : null, speed: river ? sp / W : 0, waveSpeed: river ? b.waveSpeed : 0,
+      toShore: ocean ? unit(tx, tz) : null };
   };
   return { n, cell, depth, shore, kind, flow, speed, toShore, comp, bodies, sample };
+}
+
+/** Average a scalar over each cell's same-body neighbours, `passes` times. */
+function smoothScalar(v, b, comp, n, passes) {
+  const tmp = new Float32Array(b.cells.length);
+  for (let p = 0; p < passes; p++) {
+    b.cells.forEach((k, c) => {
+      const i = k % n, j = (k - i) / n; let s = 0, m = 0;
+      for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+        const ii = i + di, jj = j + dj;
+        if (ii < 0 || jj < 0 || ii >= n || jj >= n) continue;
+        const q = jj * n + ii; if (comp[q] !== b.id) continue;
+        s += v[q]; m++;
+      }
+      tmp[c] = s / m;
+    });
+    b.cells.forEach((k, c) => { v[k] = tmp[c]; });
+  }
 }
 
 /** Average each wet vector with its same-body neighbours, `passes` times, and renormalize — the grid's

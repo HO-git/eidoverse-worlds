@@ -39,6 +39,7 @@ import { Fn, userData, positionView, cameraNear, cameraFar, min, viewZToPerspect
 import { SEAT_CLIP_FILE } from './seatcore.js';
 import { planReaches } from '../../shared/reachorder.js';
 import { poseChannels } from '../../shared/humanoid.js';
+import { swimTargets, SWIM_CLIPS } from '../../shared/swimpose.js';
 
 // The clip library is ~1.9MB PER SLOT. Waiting for all seven before a body
 // could exist put 13MB between a person and their own legs — the single
@@ -1157,30 +1158,12 @@ export class Avatar {
    *  Every client draws it from the clip name alone — nothing new on the wire. */
   _swimLayer(dt, now) {
     const slot = this.postureSlot;
-    const want = !this._limp && (slot === 'swim' || slot === 'tread') ? 1 : 0;
+    const want = !this._limp && SWIM_CLIPS.includes(slot) ? 1 : 0;
     this._swimW = (this._swimW ?? 0) + (want - (this._swimW ?? 0)) * Math.min(1, 4 * dt);
     if (this._swimW < 0.005) { this._swimW = 0; return; }
     this._swimMove = (this._swimMove ?? 0) + ((slot === 'swim' ? 1 : 0) - (this._swimMove ?? 0)) * Math.min(1, 3 * dt);
     const h = this.vrm.humanoid, taken = this._reachOwned();
-    const m = this._swimMove, w = this._swimW, t = now / 1000;
-    const ph = t * 2 * Math.PI * (0.6 + 0.25 * m);          // the stroke's beat: a little brisker when moving
-    const S = 0.5 + 0.5 * Math.sin(ph), K = 0.5 + 0.5 * Math.sin(ph + Math.PI);
-    const L = (a, b) => a + (b - a) * m;                    // tread → swim
-    const mixv = (a, b, k) => a + (b - a) * k;
-    // [bone, x, y, z] — Euler radians, each a blend of the tread value and the swim value
-    const tg = [
-      ['hips', L(0.08, 0.55), 0, 0],
-      ['spine', L(0, 0.1), 0, 0],
-      ['neck', L(0, -0.45), 0, 0],
-      ['leftUpperArm', 0, L(0.35 * Math.sin(ph), mixv(-0.2, -1.45, S)), L(-0.55, mixv(-0.6, -0.15, S))],
-      ['rightUpperArm', 0, L(-0.35 * Math.sin(ph), mixv(0.2, 1.45, S)), L(0.55, mixv(0.6, 0.15, S))],
-      ['leftLowerArm', 0, L(-0.5, mixv(-1.2, -0.1, S)), 0],
-      ['rightLowerArm', 0, L(0.5, mixv(1.2, 0.1, S)), 0],
-      ['leftUpperLeg', L(-0.45 - 0.25 * Math.sin(ph), -0.5 * K), 0, L(0, 0.25 * K)],
-      ['rightUpperLeg', L(-0.45 + 0.25 * Math.sin(ph), -0.5 * K), 0, L(0, -0.25 * K)],
-      ['leftLowerLeg', L(0.9 + 0.3 * Math.sin(ph), 1.4 * K), 0, 0],
-      ['rightLowerLeg', L(0.9 - 0.3 * Math.sin(ph), 1.4 * K), 0, 0],
-    ];
+    const tg = swimTargets(this._swimMove, now / 1000), w = this._swimW;
     for (const [name, x, y, z] of tg) {
       const node = h?.getNormalizedBoneNode?.(name);
       if (!node || taken?.has(node)) continue;

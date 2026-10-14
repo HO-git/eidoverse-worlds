@@ -17,10 +17,10 @@
 // Nothing here moves bodies — wading is the controller's (and the agents') rule, from the same level.
 import { THREE, scene } from './core.js';
 import { attribute, mix, smoothstep, vec3, float, positionGeometry, uniform, sin, cos, max, normalize, color, transformNormalToView } from 'three/tsl';
-import { OCEAN, RIVER, STILL, waveClock } from '../../shared/waves.js';
+import { OCEAN, RIVER, STILL, waveClock, cyc } from '../../shared/waves.js';
 import { setWaterField } from './terrain.js';
 import { waterParams } from '../../shared/terrainshape.js';
-import { analyzeWater } from '../../shared/waterkind.js';
+import { analyzeWater, waterGridSeg } from '../../shared/waterkind.js';
 
 let current = null;   // { mesh, level }
 
@@ -52,7 +52,7 @@ export function applyWater(args, heightAt) {
   if (!W) return;
   const size = typeof args?.size === 'number' ? args.size : 80;
   // about a metre a vertex (2 m on the biggest worlds), so a small pond is not stepped over
-  const seg = Math.max(32, Math.min(512, Math.round(size)));
+  const seg = waterGridSeg(size);
   // the analysis grid IS the mesh's vertex grid: PlaneGeometry rotated flat lists vertex (i, j) at
   // x = -size/2 + i·cell, z = -size/2 + j·cell, row by row — the same order waterkind indexes
   const A = analyzeWater(heightAt, size, { level: W.level, kind: args.water?.kind, flow: args.water?.flow }, seg);
@@ -95,7 +95,8 @@ export function applyWater(args, heightAt) {
   for (let k = 0; k < N; k++) {
     const m = src[k] >= 0 ? src[k] : k;
     kindw[3 * k + A.kind[m]] = 1;
-    flow[3 * k] = A.flow[2 * m]; flow[3 * k + 1] = A.flow[2 * m + 1]; flow[3 * k + 2] = A.speed[m];
+    // the ripples' speed: one per river (its waveSpeed, rounded to wrap with the clock — waterkind.js)
+    flow[3 * k] = A.flow[2 * m]; flow[3 * k + 1] = A.flow[2 * m + 1]; flow[3 * k + 2] = A.comp[m] >= 0 ? A.bodies[A.comp[m]].waveSpeed ?? 0 : 0;
     shore[3 * k] = A.toShore[2 * m]; shore[3 * k + 1] = A.toShore[2 * m + 1];
     // the ground's slope here (rise per metre): a wave lifting the water by h moves the waterline h/slope
     // across the beach — which is what foam follows
@@ -122,7 +123,9 @@ export function applyWater(args, heightAt) {
   const sAmp = float(STILL.amp);
   // RIVER — standing chop carried down the channel: `a` runs along the flow, `c` across it
   const a = px.mul(F.x).add(pz.mul(F.y)), c = pz.mul(F.x).sub(px.mul(F.y));
-  const ph1 = a.sub(t.mul(F.z)).mul(RIVER.k), ph2 = a.mul(0.6).add(c.mul(1.7)).sub(t.mul(F.z).mul(0.6));
+  // the cross train is the main one at 0.6 of its wavenumber (same speed downstream), angled by `c`: both
+  // run whole cycles a wave period for a riverSpeed-rounded F.z (waves.js RIVER_SPEED_STEP)
+  const ph1 = a.sub(t.mul(F.z)).mul(RIVER.k), ph2 = ph1.mul(0.6).add(c.mul(1.7));
   const rAmp = float(RIVER.amp);
   // OCEAN — two swells rolling in along `o`, the way to shore. Deep-water dispersion, ω = √(g·k): the
   // long swell (31 m) runs at 7 m/s, the shorter (19 m) at 5.5. Height grows offshore and keeps a third of
@@ -147,8 +150,9 @@ export function applyWater(args, heightAt) {
 
   // ---- normals: the swell's slope, plus each kind's small ripples ---------------------------------
   const oSlope = oAmp.mul(dCrest(ow1)).mul(k1).add(oAmp.mul(OCEAN.share2).mul(dCrest(ow2)).mul(k2));
-  const sX = sin(px.mul(1.3).add(t.mul(0.5))).mul(0.018).add(sin(pz.mul(2.1).sub(t.mul(0.4))).mul(0.01));
-  const sZ = cos(pz.mul(1.1).add(t.mul(0.45))).mul(0.018).add(cos(px.mul(1.9).add(t.mul(0.35))).mul(0.01));
+  // (every time-driven term runs a whole number of cycles per wave period — cyc — so nothing jumps at the wrap)
+  const sX = sin(px.mul(1.3).add(t.mul(cyc(0.5)))).mul(0.018).add(sin(pz.mul(2.1).sub(t.mul(cyc(0.4)))).mul(0.01));
+  const sZ = cos(pz.mul(1.1).add(t.mul(cyc(0.45)))).mul(0.018).add(cos(px.mul(1.9).add(t.mul(cyc(0.35)))).mul(0.01));
   const along = cos(ph1).mul(0.085).add(cos(ph2).mul(0.04)), across = cos(ph2).mul(0.05);
   const rX = F.x.mul(along).sub(F.y.mul(across)), rZ = F.y.mul(along).add(F.x.mul(across));
   const nx = still.mul(sX).add(river.mul(rX.add(sX.mul(0.5)))).add(ocean.mul(S.x.mul(oSlope).negate().add(sX)));
@@ -168,7 +172,7 @@ export function applyWater(args, heightAt) {
   const waveSize = smoothstep(0.02, 0.25, oAmp.add(river.mul(rAmp)).add(still.mul(sAmp)));
   const uprush = smoothstep(0.15, 2.0, lineSpeed).mul(waveSize);
   const streak = smoothstep(0.86, 1.0, sin(c.mul(2.2).add(sin(a.mul(0.35)).mul(1.6))).mul(0.5).add(0.5))
-    .mul(smoothstep(0.55, 1.0, sin(ph1.mul(0.45)).mul(0.5).add(0.5)));
+    .mul(smoothstep(0.55, 1.0, sin(ph1.mul(0.4)).mul(0.5).add(0.5)));   // 0.4: whole cycles a period (waves.js)
   const foam = band.mul(float(0.08).add(uprush.mul(0.9)))
     .add(streak.mul(river).mul(0.22).mul(float(1).sub(smoothstep(0.5, 2.5, d).mul(0.6))))
     .clamp(0, 1);

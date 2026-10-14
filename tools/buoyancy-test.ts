@@ -1,7 +1,7 @@
 // buoyancy + waves — a floating column on the water surface, and the clock the surface runs on.
 //   bun tools/buoyancy-test.ts
 import { floatStep, footprintSurface, partWaterForce, waterCurrent, swellRise, PART_FLOAT } from "../shared/buoyancy.js";
-import { surfaceOffset, waveClock, WAVE_PERIOD, OCEAN } from "../shared/waves.js";
+import { surfaceOffset, waveClock, WAVE_PERIOD, OCEAN, STILL, riverSpeed, cyc } from "../shared/waves.js";
 import { SWIM_AT } from "../shared/terrainshape.js";
 
 let failures = 0;
@@ -51,6 +51,14 @@ console.log("\nthe surface and its clock");
   const ampS = Math.max(...Array.from({ length: 200 }, (_, i) => Math.abs(surfaceOffset(shallow, i * 0.4, 0, 0))));
   check(`at the shore its swash is smaller (${ampS.toFixed(2)})`, ampS < amp * 0.5);
   check("dry ground has no surface offset", surfaceOffset(null, 1, 2, 3) === 0);
+  const wraps = (w: any) => Math.abs(surfaceOffset(w, 7, -3, WAVE_PERIOD - 1e-6) - surfaceOffset(w, 7, -3, 0)) < 1e-5;
+  check("…nor a river's (at any speed it is given)", [0.5, 0.93, 1.37, 2.2].every((v) => wraps({ kind: "river", flow: [0.6, 0.8], waveSpeed: riverSpeed(v) })));
+  check("…nor still water's", wraps({ kind: "still" }) && wraps({ kind: "ocean", depth: 6, toShore: [0, 1] }));
+  // the shader's own terms: the river's 0.6 and 0.4 trains, and the fixed ripple rates
+  const whole = (w: number) => Math.abs((w * WAVE_PERIOD) / (2 * Math.PI) - Math.round((w * WAVE_PERIOD) / (2 * Math.PI))) < 1e-6;
+  const rk = 1.4 * riverSpeed(1.1);
+  check("the drawn river's every train runs whole cycles a period", whole(rk) && whole(0.6 * rk) && whole(0.4 * rk));
+  check("…and so do the sheet's ripples", [0.5, 0.4, 0.45, 0.35].every((w) => whole(cyc(w))) && whole(STILL.w));
   const flat = footprintSurface(() => 0.4, 0, 0);
   check("the footprint mean of a flat surface is the surface", Math.abs(flat - 0.4) < 1e-12);
 }

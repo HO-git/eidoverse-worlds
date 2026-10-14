@@ -1,6 +1,7 @@
 // waterkind — reading still water, rivers and the sea from the shape of what a water level fills.
 //   bun tools/waterkind-test.ts
 import { analyzeWater, compass } from "../shared/waterkind.js";
+import { RIVER_SPEED_STEP } from "../shared/waves.js";
 
 let failures = 0;
 const check = (label: string, ok: boolean, detail = "") => {
@@ -41,6 +42,29 @@ console.log("\na river across the world");
   check("rivers move", mid.speed > 0.4);
   const forced = analyzeWater(ground, SIZE, { level: -0.5, flow: [-1, 0] }, SEG).sample(0, 0)!;
   check("water.flow overrides the direction", forced.flow![0] < -0.8, JSON.stringify(forced.flow));
+  const zero = analyzeWater(ground, SIZE, { level: -0.5, flow: [0, 0] }, SEG);
+  const zr = zero.bodies.find((b) => b.kind === "river")!;
+  check("a zero water.flow is ignored (the channel's own guess stands)", zr.source !== zr.mouth && zero.sample(0, 0)!.flow![0] > 0.8, JSON.stringify(zero.sample(0, 0)?.flow));
+  // floating across grid cells: depth and current change smoothly, as the drawn sheet does
+  let jump = 0, turn = 0;
+  for (let x = -20; x < 20; x += 0.05) {
+    const a = A.sample(x, 10 * Math.sin(x / 20))!, b = A.sample(x + 0.05, 10 * Math.sin((x + 0.05) / 20))!;
+    jump = Math.max(jump, Math.abs(a.depth - b.depth));
+    turn = Math.max(turn, 1 - (a.flow![0] * b.flow![0] + a.flow![1] * b.flow![1]));
+  }
+  check(`5 cm steps along the river never jump (depth ≤ ${(jump * 100).toFixed(1)} cm, flow turn ${turn.toExponential(1)})`, jump < 0.03 && turn < 1e-3);
+  check("the ripples' speed is one whole step of the wave clock's", Math.abs(mid.waveSpeed / RIVER_SPEED_STEP - Math.round(mid.waveSpeed / RIVER_SPEED_STEP)) < 1e-9 && mid.waveSpeed > 0);
+}
+
+console.log("\na river that narrows");
+{
+  // its wetted width ~16 m to the west, ~5 m to the east
+  const half = (x: number) => 14 - 10 * Math.min(1, Math.max(0, (x + 20) / 40));
+  const ground = (x: number, z: number) => 1 - 3.5 * bell(Math.abs(z), half(x)) + (x + 80) / 160 * -0.3;
+  const A = analyzeWater(ground, SIZE, { level: -0.5 }, SEG);
+  const wide = A.sample(-55, 0)!, narrow = A.sample(55, 0)!;
+  check("it is one river", A.bodies.filter((b) => b.kind === "river").length === 1, A.bodies.map((b) => b.kind).join());
+  check(`the narrows run faster (${wide.speed.toFixed(2)} → ${narrow.speed.toFixed(2)} m/s)`, narrow.speed > wide.speed * 1.6, `${wide.speed} ${narrow.speed}`);
 }
 
 console.log("\na shore and the sea");

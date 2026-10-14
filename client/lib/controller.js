@@ -94,7 +94,7 @@ export function setMeHook(fn) { meRef = typeof fn === 'function' ? fn : (() => n
 // probing with the live body would shove the flier sideways and steal the
 // mantle probe the walk path reads on the same frame.
 const _gp = new THREE.Vector3();
-const _float = { on: false, y: 0, vy: 0 };   // the swimmer's buoyant column (shared/buoyancy.js)
+const _float = { on: false, y: 0, vy: 0, at: 0 };   // the swimmer's buoyant column (shared/buoyancy.js)
 function groundUnder(pos, cap = null) {
   _gp.set(pos.x, pos.y, pos.z);
   // with a capsule: probe as the move itself will (a small body steps up less than the default one)
@@ -559,7 +559,9 @@ export function updateMe(dt, me) {
   const wadeH = wl == null ? 0 : me.bodyHeight?.() ?? 1.7 * (me.userScale ?? 1);
   if (wl != null && moving) {
     const st = waterStance(wl, groundUnder(myState.pos, colliderFor(me.userScale)), wadeH);
-    target = st.swimming ? scaledSpeed((running ? SWIM_RUN : SWIM_SPEED) * mag, me.userScale) : target * st.speedFactor;
+    // the faster stroke where the walk would run: Shift, or (VR) the stick past half deflection
+    const fast = xrIntent.active ? mag > 0.5 : running;
+    target = st.swimming ? scaledSpeed((fast ? SWIM_RUN : SWIM_SPEED) * mag, me.userScale) : target * st.speedFactor;
   }
   myState.speed = THREE.MathUtils.lerp(myState.speed, target, 1 - Math.exp(-10 * dt));
   if (myState.speed < 0.02) myState.speed = 0;
@@ -708,13 +710,20 @@ export function updateMe(dt, me) {
       } else { vy = 5.6; grounded = false; jumped = true; }   // a DELIBERATE jump: the clip may start this frame, no airborne grace
     }
     if (!mantle) {
-      if (swimming && (grounded || myState.pos.y <= support + 0.3)) {
+      // reaching the water, not last frame's footing, starts the float: a body walking off a high bank
+      // falls through the air first (and lands in the water moving, so it dunks)
+      // A float picks up from the body as it is now: a frame this code did not run (a ragdoll, a mantle, a
+      // flight, a drained world) means something else moved the body, and the old float is stale.
+      const nowMs = performance.now();
+      const afloat = _float.on && nowMs - _float.at <= 250;
+      if (swimming && (afloat || myState.pos.y <= support + 0.3)) {
         // FLOATING (shared/buoyancy.js): the body is a buoyant column on the moving surface (shared/
         // waves.js, the same swell the water draws, on the world's clock). A long swell lifts it; a short
         // steep wave climbs the body before it bobs up. It takes over from wherever the body was, moving
         // as it was — so a drop into deep water dunks you and bobs you back up. Ahead of the falling
         // branch, so a crest lifting the swimmer above its resting depth is not mistaken for a fall.
-        if (!_float.on) { _float.on = true; _float.y = myState.pos.y; _float.vy = vy; }
+        if (!afloat) { _float.on = true; _float.y = myState.pos.y; _float.vy = vy; }
+        _float.at = nowMs;
         const t = waveTime();
         const surf = footprintSurface((x, z) => wl + surfaceOffset(waterAt(x, z), x, z, t), myState.pos.x, myState.pos.z);
         floatStep(_float, surf, wadeH, dt, ground);
@@ -723,7 +732,10 @@ export function updateMe(dt, me) {
         grounded = false;
         vy -= 16 * dt;
         myState.pos.y += vy * dt;
-        if (myState.pos.y <= support) { myState.pos.y = support; vy = 0; grounded = true; }
+        // into deep water the fall goes on below the floating depth (the float takes it next frame, still
+        // moving down); the bed is the only floor there
+        const floor = swimming ? ground : support;
+        if (myState.pos.y <= floor) { myState.pos.y = floor; vy = 0; grounded = true; }
       } else { myState.pos.y = support; vy = 0; grounded = true; }
       if (!swimming) _float.on = false;
     }

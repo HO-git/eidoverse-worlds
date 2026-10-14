@@ -15,7 +15,7 @@
 export const WAVE_PERIOD = 600;   // seconds
 const TAU = 2 * Math.PI;
 /** a frequency rounded to a whole number of cycles per WAVE_PERIOD */
-const cyc = (w) => (TAU * Math.max(1, Math.round((w * WAVE_PERIOD) / TAU))) / WAVE_PERIOD;
+export const cyc = (w) => (TAU * Math.max(1, Math.round((w * WAVE_PERIOD) / TAU))) / WAVE_PERIOD;
 
 export const OCEAN = {
   k1: 0.2, w1: cyc(Math.sqrt(9.8 * 0.2)),     // the long swell: 31 m, ~7 m/s
@@ -27,6 +27,12 @@ export const OCEAN = {
   ampShore: 0.2, ampDeep: 0.6, ampFrom: -1.0, ampTo: 5.0,   // metres, by depth
 };
 export const RIVER = { amp: 0.025, k: 1.4 };
+// A river's chop runs at speed·k, and the shader adds two more trains at 0.6 and 0.4 of that (shared with
+// its streaks). Rounding the speed to a multiple of this step makes all three a whole number of cycles per
+// WAVE_PERIOD: 5 base cycles (0.6·5 and 0.4·5 are whole) → 0.037 m/s, finer than anyone can see.
+export const RIVER_SPEED_STEP = (5 * TAU) / (WAVE_PERIOD * RIVER.k);
+/** A river speed (m/s) rounded so its ripples wrap with the clock. */
+export const riverSpeed = (v) => RIVER_SPEED_STEP * Math.max(1, Math.round(v / RIVER_SPEED_STEP));
 export const STILL = { amp: 0.012, kx: 0.9, kz: 0.4, w: cyc(0.8) };
 
 /** The wave clock for the world's synced milliseconds — seconds into the current WAVE_PERIOD. */
@@ -49,7 +55,7 @@ export function surfaceOffset(w, x, z, t) {
   }
   if (w.kind === 'river' && w.flow) {
     const a = x * w.flow[0] + z * w.flow[1];
-    return RIVER.amp * Math.sin((a - t * w.speed) * RIVER.k);
+    return RIVER.amp * Math.sin((a - t * w.waveSpeed) * RIVER.k);
   }
   return STILL.amp * Math.sin(x * STILL.kx + z * STILL.kz - t * STILL.w);
 }

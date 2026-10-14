@@ -74,14 +74,15 @@ console.log("\nthe float follows the water");
   a.float = { on: true, y: -1, vy: 2 };   // a float mid-bob
   await a.buildTerrain({ size: 40 });     // drained
   check("draining ends the float", !a.float.on && a.water === null);
-  a.float = { on: true, y: -1, vy: 2 };   // (and even one left set by anything else)
+  a.float = { on: true, y: 0.5, vy: 2 };   // (and even one left set by anything else — a bob far from any real one)
   tickN(1);
   check("a dry tick leaves no float", !a.float.on, JSON.stringify(a.float));
   tickN(30);   // (a body the water held up comes down to the ground — at once, or by falling)
   check("...and the body comes to stand on the ground", Math.abs(a.pos.y + 1.6) < 1e-3, `${a.pos.y}`);
   a.pos.y = -1.2;   // wherever it happens to be when the water comes back
   await a.buildTerrain(WET); tickN(1);
-  check("refilled, the float starts from where the body is, not the old bob", a.float.on && Math.abs(a.float.vy) < 0.5 && Math.abs(a.float.y + 1.2) < 0.1, JSON.stringify(a.float));
+  // (from the body as it stands then — its own y, or the resting depth if the feet set that first)
+  check("refilled, the float starts from the body, not the old bob", a.float.on && Math.abs(a.float.vy) < 0.5 && a.float.y > -1.3 && a.float.y < -0.7, JSON.stringify(a.float));
   tickN(30);
   a.float.vy = 3;
   await a.buildTerrain({ size: 40, water: { level: 0.5 } });

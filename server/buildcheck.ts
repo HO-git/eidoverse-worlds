@@ -40,6 +40,8 @@ export type CheckReport = {
     places: Record<string, unknown>;
   };
   warnings: Warning[];
+  /** the scale it was checked at (1: the file's own size) */
+  scale: number;
   ms: number;
 };
 
@@ -59,11 +61,15 @@ const r2 = (v: number) => Math.round(v * 100) / 100;
 
 /** Check the GLB at `file`. `C` is client/lib/colliders.js, `THREE` its three
  *  (the caller loads them behind the core.js stub — see buildcheck-run.ts). */
-export async function checkModel(file: string, C: any, THREE: any): Promise<CheckReport> {
+export async function checkModel(file: string, C: any, THREE: any, { scale = 1 } = {}): Promise<CheckReport> {
   const t0 = performance.now();
   const warnings: Warning[] = [];
   const mesh = await collisionTriangles(new Uint8Array(await Bun.file(file).arrayBuffer()));
   if (!mesh) throw new Error("not a readable GLB with triangles");
+  // at a placed thing's scale: the model is scaled, the body is not — every
+  // measure below (doors, rises, floors, rooms) is in world metres. Suggested
+  // places go back to the model's own frame, where a places component lives.
+  if (scale !== 1) for (let k = 0; k < mesh.positions.length; k++) mesh.positions[k] *= scale;
 
   // ---- size: is it walk-in, as the world will fit it?
   const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
@@ -85,7 +91,7 @@ export async function checkModel(file: string, C: any, THREE: any): Promise<Chec
   if (!(columns <= MAX_COLUMNS) || !(h <= MAX_HEIGHT)) {
     warnings.push({ kind: "too-large", message: `${w.toFixed(0)}×${d.toFixed(0)}m and ${h.toFixed(0)}m tall is more than the check walks through `
       + `(${Math.round(MAX_SIDE)}m square, ${MAX_HEIGHT}m tall): floors, rooms and reachability were not checked — the upload is fine either way` });
-    return { ok: false, walkIn, perf, levels: [], suggested: { rooms: [], doors: [], stairs: [], places: {} }, warnings, ms: Math.round(performance.now() - t0) };
+    return { ok: false, walkIn, perf, levels: [], suggested: { rooms: [], doors: [], stairs: [], places: {} }, warnings, scale, ms: Math.round(performance.now() - t0) };
   }
   if (!roomScale) warnings.push({ kind: "solid", message:
     `${w.toFixed(1)}×${d.toFixed(1)}m and ${h.toFixed(1)}m tall is under the walk-in size (a 16m² footprint and 2.2m height): `
@@ -430,15 +436,16 @@ export async function checkModel(file: string, C: any, THREE: any): Promise<Chec
     const any = [...reach.keys()].some((k) => {
       const n = nodes.get(k); if (!n) return false;
       const x = body.at(n.i), z = body.at(n.j);
-      return x >= p.min![0] && x <= p.max![0] && z >= p.min![2] && z <= p.max![2] && Math.abs(n.y - p.min![1]) < 0.15;
+      return x >= p.min![0] * scale && x <= p.max![0] * scale && z >= p.min![2] * scale && z <= p.max![2] * scale && Math.abs(n.y - p.min![1] * scale) < 0.15;
     });
-    if (!any) warnings.push({ kind: "declared", message: `the model declares a room "${p.name}" at ${p.min![1]}m, but nowhere in it at that height can a body reach from outside` });
+    if (!any) warnings.push({ kind: "declared", message: `the model declares a room "${p.name}" at ${r2(p.min![1] * scale)}m, but nowhere in it at that height can a body reach from outside${scale !== 1 ? ` (at scale ${scale})` : ""}` });
   }
 
   const places: Record<string, unknown> = {};
-  for (const r of rooms) places[r.id] = { min: r.min, max: r.max };
-  for (const dd of doors) places[dd.id] = { at: dd.at, kind: "door" };
-  for (const s of stairs) places[s.id] = { at: s.at };
+  const local = (v: number[]) => v.map((x) => Math.round(x / scale * 1000) / 1000);
+  for (const r of rooms) places[r.id] = { min: local(r.min), max: local(r.max) };
+  for (const dd of doors) places[dd.id] = { at: local(dd.at), kind: "door" };
+  for (const s of stairs) places[s.id] = { at: local(s.at) };
   C.clearColliders();
   return {
     ok: warnings.length === 0,
@@ -447,6 +454,7 @@ export async function checkModel(file: string, C: any, THREE: any): Promise<Chec
     levels: floors.map((f) => ({ y: f.y, area: r2(f.nodes.length * AREA), reachable: r2(f.nodes.filter((n) => reach.has(key(n.i, n.j, n.y))).length * AREA) })),
     suggested: { rooms, doors, stairs, places },
     warnings,
+    scale,
     ms: Math.round(performance.now() - t0),
   };
 }

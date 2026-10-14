@@ -23,7 +23,7 @@ import { hnSessions, hnJti, sessionFromCookie, saveSessions, SESSION_TTL_MS, HN_
 import { verifyToken } from "./aid1.ts";
 import { resolveLibFile, libraryPath, onLadder } from "./lint.ts";
 import { summarizeGlb } from "./geometry.ts";
-import { checkFile } from "./buildcheck-queue.ts";
+import { checkFile, checkScale } from "./buildcheck-queue.ts";
 import { worlds, getWorld, type World } from "./world.ts";
 import { handleUpload, optStatus, rebuildAsset } from "./upload.ts";
 import { defsPayload, avatarDefs, animationDefs } from "./defs.ts";
@@ -546,7 +546,9 @@ const ROUTES: Route[] = [
       const lib = url.searchParams.get("lib") ?? "";
       const file = resolveLibFile(lib);
       if (!file) return j({ error: `no such asset: ${lib}` }, 404);
-      try { return j({ lib, ...(await checkFile(file) as object) }); }
+      // ?scale= checks it as a thing placed at that scale (0.05–20, to 2 places)
+      const scale = checkScale(url.searchParams.get("scale") ?? 1);
+      try { return j({ lib, ...(await checkFile(file, scale) as object) }); }
       catch (err) { return j({ lib, error: String((err as Error)?.message ?? err) }, 500); }
     },
   },

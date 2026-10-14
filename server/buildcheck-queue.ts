@@ -1,61 +1,149 @@
 // buildcheck-queue — the sequencer's side of the build check: one check at a
-// time, each in its own process (server/buildcheck-run.ts), cached by file.
+// time, each in its own process (server/buildcheck-run.ts), cached by what
+// was checked.
 //
 // A check loads the collider module and can take seconds; the sequencer only
 // ever spawns it and reads the JSON back. Reports are cached in memory and on
-// disk (OPT_DIR/checks/), keyed by the model's path and invalidated by its
-// mtime — store uploads are content-addressed, so theirs never change, and a
-// re-exported library model is checked again. CHECK_VERSION retires every
-// stored report when the check itself changes. Concurrent asks for one file
-// share the run.
+// disk (OPT_DIR/checks/), keyed by the model's BYTES (a digest), the scale it
+// was checked at and CHECK_VERSION — so a library file replaced in place is
+// checked again however its timestamps read, and a store upload (content-
+// addressed) is checked once. The digest itself is remembered per path
+// against size, mtime, ctime and inode, so an unchanged file isn't re-read on
+// every ask; restoring an mtime moves the ctime, so it can't fake that.
+// Concurrent asks for one check share the run.
+//
+// The worker is owned to the end: its output is drained (stdout up to a cap,
+// stderr's tail kept), it is asked to stop at the timeout and killed after a
+// grace, and the queue moves on even if it is never seen to exit.
 
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { OPT_DIR, ROOT } from "./config.ts";
 import { atomicWrite } from "./fsutil.ts";
 
-const CHECK_TIMEOUT_MS = 90_000;
 /** Bump when what a check finds changes (server/buildcheck.ts, the navgrid
  *  moves it walks, the collider rules): stored reports from before are stale. */
-export const CHECK_VERSION = 2;
-const memo = new Map<string, { mtime: number; report: unknown }>();
+export const CHECK_VERSION = 3;
+/** The worker and its limits; tests swap the runner for a misbehaving one. */
+export const checkConfig = {
+  runner: join(ROOT, "server", "buildcheck-run.ts"),
+  timeoutMs: 90_000,
+  /** after the soft stop, how long before SIGKILL */
+  graceMs: 3_000,
+  /** a report is a few KB; more than this is not a report */
+  maxOut: 4 << 20,
+};
+/** The scales a check can be asked at (a placed thing's), to 2 places. */
+export const CHECK_SCALE = { min: 0.05, max: 20 };
+
+const memo = new Map<string, unknown>();
 const running = new Map<string, Promise<unknown>>();
+const digests = new Map<string, { id: string; digest: string }>();
 let queue: Promise<unknown> = Promise.resolve();
 
-const diskPath = (file: string) => join(OPT_DIR, "checks", `${Bun.hash(file).toString(16)}.json`);
+const diskPath = (key: string) => join(OPT_DIR, "checks", `${Bun.hash(key).toString(16)}.json`);
 
-/** The build check for the model at `file` — cached, else run (queued behind
- *  any check already running). Rejects when the model can't be checked. */
-export function checkFile(file: string): Promise<unknown> {
-  let mtime = 0;
-  try { mtime = statSync(file).mtimeMs; } catch { return Promise.reject(new Error("no such file")); }
-  const hit = memo.get(file);
-  if (hit && hit.mtime === mtime) return Promise.resolve(hit.report);
+/** A scale as checks are keyed: finite, clamped, two places. */
+export function checkScale(s: unknown): number {
+  const n = typeof s === "string" ? Number(s) : typeof s === "number" ? s : 1;
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.round(Math.min(CHECK_SCALE.max, Math.max(CHECK_SCALE.min, n)) * 100) / 100;
+}
+
+function digestOf(file: string): string {
+  const st = statSync(file);
+  const id = `${st.size}|${st.mtimeMs}|${st.ctimeMs}|${st.ino}`;
+  const known = digests.get(file);
+  if (known?.id === id) return known.digest;
+  const digest = new Bun.CryptoHasher("sha256").update(readFileSync(file)).digest("hex");
+  digests.set(file, { id, digest });
+  return digest;
+}
+
+/** The build check for the model at `file`, at `scale` — cached, else run
+ *  (queued behind any check already running). Rejects when the model can't
+ *  be checked. */
+export function checkFile(file: string, scale = 1): Promise<unknown> {
+  let digest: string;
+  try { digest = digestOf(file); } catch { return Promise.reject(new Error("no such file")); }
+  const s = checkScale(scale);
+  const key = `${CHECK_VERSION}|${digest}|${s}`;
+  if (memo.has(key)) return Promise.resolve(memo.get(key));
   try {
-    const d = JSON.parse(readFileSync(diskPath(file), "utf8"));
-    if (d?.file === file && d.mtime === mtime && d.version === CHECK_VERSION) { memo.set(file, { mtime, report: d.report }); return Promise.resolve(d.report); }
+    const d = JSON.parse(readFileSync(diskPath(key), "utf8"));
+    if (d?.key === key) { memo.set(key, d.report); return Promise.resolve(d.report); }
   } catch { /* not checked yet */ }
-  const inflight = running.get(file);
+  const inflight = running.get(key);
   if (inflight) return inflight;
   const run = queue.then(async () => {
-    const proc = Bun.spawn([process.execPath, join(ROOT, "server", "buildcheck-run.ts"), file], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
-    const timer = setTimeout(() => proc.kill(), CHECK_TIMEOUT_MS);
-    const out = await new Response(proc.stdout).text();
-    await proc.exited;
-    clearTimeout(timer);
-    const last = out.trim().split("\n").pop() ?? "";
-    let report: any;
-    try { report = JSON.parse(last); } catch { throw new Error(proc.exitCode === null || proc.signalCode ? "the check timed out" : "the check failed"); }
-    if (report?.error) throw new Error(report.error);
-    memo.set(file, { mtime, report });
+    const report: any = await runWorker(file, s);
+    memo.set(key, report);
     try {
       if (!existsSync(join(OPT_DIR, "checks"))) mkdirSync(join(OPT_DIR, "checks"), { recursive: true });
-      atomicWrite(diskPath(file), JSON.stringify({ version: CHECK_VERSION, file, mtime, report }));
+      atomicWrite(diskPath(key), JSON.stringify({ key, version: CHECK_VERSION, digest, scale: s, file, report }));
     } catch { /* memory still has it */ }
     return report;
   });
-  running.set(file, run);
+  running.set(key, run);
   queue = run.catch(() => {});
-  void run.finally(() => running.delete(file)).catch(() => {});
+  void run.finally(() => running.delete(key)).catch(() => {});
   return run;
+}
+
+/** Read a stream to its end, keeping at most `cap` bytes (the head, or with
+ *  `tail` the last ones) — always draining, so the writer never blocks on a
+ *  full pipe. */
+async function drain(stream: ReadableStream<Uint8Array>, cap: number, tail = false): Promise<{ text: string; over: boolean }> {
+  const parts: Uint8Array[] = [];
+  let kept = 0, over = false;
+  const reader = stream.getReader();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      if (tail) {
+        parts.push(value); kept += value.length;
+        while (parts.length > 1 && kept - parts[0].length >= cap) kept -= parts.shift()!.length;
+      } else if (kept < cap) {
+        const take = value.subarray(0, cap - kept);
+        parts.push(take); kept += take.length;
+        if (take.length < value.length) over = true;
+      } else over = true;
+    }
+  } catch { /* the stream died with the process */ }
+  return { text: Buffer.concat(parts).toString("utf8"), over };
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+async function runWorker(file: string, scale: number): Promise<unknown> {
+  const { runner, timeoutMs, graceMs, maxOut } = checkConfig;
+  const proc = Bun.spawn([process.execPath, runner, file, String(scale)], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
+  const out = drain(proc.stdout as ReadableStream<Uint8Array>, maxOut);
+  const err = drain(proc.stderr as ReadableStream<Uint8Array>, 8 << 10, true);
+  let stopped = false;
+  const term = setTimeout(() => { stopped = true; try { proc.kill("SIGTERM"); } catch { /* gone */ } }, timeoutMs);
+  const kill = setTimeout(() => { try { proc.kill("SIGKILL"); } catch { /* gone */ } }, timeoutMs + graceMs);
+  // the queue is never held past the hard kill plus a grace, whatever the process does
+  const exited = await Promise.race([proc.exited.then(() => true), sleep(timeoutMs + 2 * graceMs).then(() => false)]);
+  clearTimeout(term); clearTimeout(kill);
+  if (!exited) {
+    console.warn(`[check] worker ${proc.pid} for ${file} did not exit after SIGKILL — abandoned`);
+    throw new Error("the check timed out");
+  }
+  if (stopped) throw new Error("the check timed out");
+  // its pipes close with it; a grandchild holding them open doesn't hold the queue
+  const [o, e] = await Promise.all([
+    Promise.race([out, sleep(graceMs).then(() => ({ text: "", over: true }))]),
+    Promise.race([err, sleep(graceMs).then(() => ({ text: "", over: false }))])]);
+  if (o.over) throw new Error("the check's output was not a report");
+  let report: any;
+  try { report = JSON.parse(o.text.trim().split("\n").pop() ?? ""); }
+  catch {
+    if (e.text.trim()) console.warn(`[check] ${file}: ${e.text.trim().split("\n").slice(-3).join(" | ")}`);
+    throw new Error("the check failed");
+  }
+  if (report?.error) throw new Error(report.error);
+  return report;
 }

@@ -75,7 +75,7 @@ export const TOOLS = [
   { name: "snapshot", description: "A rendered image from the world (spectator browser on a GPU host). Slower than look — use when spatial/visual detail matters. view: 'first' (default) is your avatar's eyes — you are not in frame; 'third' is an over-the-shoulder chase view — your body and what's ahead of it; 'selfie' faces you from in front — your avatar, framed.", inputSchema: { type: "object", properties: { view: { type: "string", enum: ["first", "third", "selfie"] } } } },
   { name: "walk_to", description: "Walk (or run) to a named place, a thing, a person, or world coordinates. Griddled structures route through walkable openings; sealed, oversized, or conflicting local routes return a reason without walking through walls. This is horizontal centerline routing with a 0.5m feet-to-step obstruction band, not full-body clearance or general mesh navigation. Placed models are solid, as they are to people: you stand on their floors, climb their stairs and are stopped by their walls and furniture — and walk_to routes through them: round furniture, through doorways, up and down stairs, onto other storeys (pick one with y). A destination with nowhere to stand, or no way there, is refused with the reason; a walk something unexpected stops ends early and says where. Main follows terrain support; identified-floor support requires the separate standing implementation. Default arrival tolerance is 0.01m, so short positioning moves are honored. Optional tolerance (0–0.4 metres) changes how close to the requested point counts as arrived. This is destination accuracy, not distance from another body.", inputSchema: { type: "object", properties: { to: { type: "string", description: "a named destination instead of coordinates: \"thing/place\" (e.g. \"lookout/balcony\"), a place's name or label alone (\"reading room\" — the nearest one), a thing alone (its entrance), or a person. look lists each thing's places." }, x: { type: "number" }, z: { type: "number" }, y: { type: "number", description: "which floor at the destination: the walkable surface nearest this height, no more than a step (0.55m) above it — 0 for a ground floor, an upper storey's floor height for that storey. Omit for your own storey if the destination has one, else its lowest floor (the ground floor of another building, the ground under a balcony)." }, run: { type: "boolean" }, tolerance: { type: "number", minimum: 0, maximum: 0.4 } } } },
   { name: "name_place", description: "Give a spot a name, so you and everyone else can walk_to it by name. Names where you stand (or x/z, with y optional: the floor there nearest your height), on the thing you are in or the nearest placed thing (or `on`), in that thing's own frame — it moves with it. Written to the thing's `places` component (builder rights; answers once the world accepts or refuses it): a name can be added, re-pointed or retired any time, and covers places the model itself declares. remove: true retires a name.", inputSchema: { type: "object", properties: { name: { type: "string" }, label: { type: "string", description: "how it reads, e.g. \"the window seat\"" }, on: { type: "string", description: "the thing's id; default: the thing you are in, else the nearest within 15m" }, x: { type: "number" }, y: { type: "number" }, z: { type: "number" }, remove: { type: "boolean" } }, required: ["name"] } },
-  { name: "check_model", description: "What a model is like to walk into, measured with the walking body's own rules before or after it is placed: whether it is walk-in at all, its floors and how much of each can be reached from outside, why any part can't (a passage narrower than a body, a rise too high to step, a climb an overhanging floor blocks, no way in), the render budget — and suggested rooms, doors and stairs, ready to name as places. Advisory: nothing is refused. Pass the id of a placed thing, or a library/store path (what an upload returns). The first check of a model takes a few seconds.", inputSchema: { type: "object", properties: { id: { type: "string" }, lib: { type: "string" } } } },
+  { name: "check_model", description: "What a model is like to walk into, measured with the walking body's own rules before or after it is placed: whether it is walk-in at all, its floors and how much of each can be reached from outside, why any part can't (a passage narrower than a body, a rise too high to step, a climb an overhanging floor blocks, no way in), the render budget — and suggested rooms, doors and stairs, ready to name as places. Advisory: nothing is refused. Pass the id of a placed thing (checked as placed: at its scale, with its collide), or a library/store path (what an upload returns; checked at its own size, or at scale). The first check of a model at a scale takes a few seconds.", inputSchema: { type: "object", properties: { id: { type: "string" }, lib: { type: "string" }, scale: { type: "number", description: "with lib: check it as if placed at this scale (0.05–20)" } } } },
   // ---- FLIGHT (upstream's flight arc, merged 2026-09-02; behind the `fly`
   // grant — the agent refuses on the ground it stands on). Deliberately no
   // file_plan: a sortie is these tools called in sequence from the pilot's own
@@ -353,11 +353,12 @@ export const HANDLERS: Record<string, ToolHandler> = {
       const lib = String(e?.lib ?? a.lib ?? "");
       if (!lib || lib === "(light)") return text("check_model needs the id of a placed model, or a library path");
       let r: any;
-      try { r = await (await fetch(`${ag.httpBase}/check?lib=${encodeURIComponent(lib)}`)).json(); }
+      // a placed thing is checked as placed: at its scale (the body is not scaled)
+      const scale = e ? (e.scale && e.scale > 0 ? e.scale : 1) : (typeof a.scale === "number" && a.scale > 0 ? a.scale : 1);
+      try { r = await (await fetch(`${ag.httpBase}/check?lib=${encodeURIComponent(lib)}${scale !== 1 ? `&scale=${scale}` : ""}`)).json(); }
       catch (err) { return text(`the check could not be reached: ${String((err as Error)?.message ?? err)}`); }
       if (r.error) return text(`couldn't check ${lib}: ${r.error}`);
-      return text(describeCheck(e ? `[${e.id}] ${lib}` : lib, r, e ? ag.placesOn(e).length : 0, e?.id,
-        e ? { scale: e.scale && e.scale > 0 ? e.scale : 1, collide: e.collide } : undefined));
+      return text(describeCheck(`${e ? `[${e.id}] ` : ""}${lib}${r.scale && r.scale !== 1 ? ` at scale ${r.scale}` : ""}`, r, e ? ag.placesOn(e).length : 0, e?.id, e?.collide));
   },
   name_place: async (ag, a) => {
       // coordinates: x and z together (y optional: the floor there nearest
@@ -820,22 +821,15 @@ export const HANDLERS: Record<string, ToolHandler> = {
 }
 
 /** A build check (server/buildcheck.ts) as text a reader can act on. */
-function describeCheck(what: string, r: any, named: number, id?: string, placed?: { scale: number; collide?: string }): string {
+function describeCheck(what: string, r: any, named: number, id?: string, collide?: string): string {
   const L: string[] = [];
-  let note = "";
-  // a placed thing: walk-in or solid as IT is placed — its scale and any
-  // collide it was spawned with; the rest is measured on the file at its own size
-  if (placed && (placed.scale !== 1 || placed.collide)) {
-    const s = placed.scale, fp = (r.walkIn?.footprint ?? 0) * s * s, ht = (r.walkIn?.height ?? 0) * s;
-    const walkIn = placed.collide === "exact" ? true : placed.collide === "box" ? false : fp >= 16 && ht >= 2.2;
-    r = { ...r, walkIn: { ...r.walkIn, roomScale: walkIn } };
-    const why = placed.collide ? `spawned with collide: "${placed.collide}"` : `${fp.toFixed(1)}m² and ${ht.toFixed(1)}m tall at scale ${s}`;
-    r.warnings = (r.warnings ?? []).filter((w: any) => w.kind !== "solid");
-    if (!walkIn) r.warnings.unshift({ kind: "solid", message: `as placed (${why}) it is one solid box: nobody can go inside — spawn it with collide: "exact" to change that` });
-    if (s !== 1) note = `Note: measured on the model file at its own size; [${id}] is placed at scale ${s}, so its floors, passages and rises are ${s}× what follows (a body is not scaled) — re-export at the size you place it to check that size.`;
+  // spawned with collide: the world fits it that way whatever its size
+  if (collide === "exact" || collide === "box") {
+    r = { ...r, walkIn: { ...r.walkIn, roomScale: collide === "exact" }, warnings: (r.warnings ?? []).filter((w: any) => w.kind !== "solid") };
+    if (collide === "box") r.warnings.unshift({ kind: "solid", message: `it was spawned with collide: "box", so it is one solid box: nobody can go inside — what follows is what it would be with collide: "exact"` });
   }
   const floors = (r.levels ?? []).map((l: any) => `${l.y}m (${l.reachable}m² of ${l.area}m² reachable)`).join(", ");
-  L.push(`${what}: ${r.walkIn?.roomScale ? "walk-in" : placed?.collide === "box" ? "SOLID — spawned as a box" : "SOLID — under the walk-in size"}; ${(r.levels ?? []).length} floor${(r.levels ?? []).length === 1 ? "" : "s"}${floors ? `: ${floors}` : ""}`
+  L.push(`${what}: ${r.walkIn?.roomScale ? "walk-in" : collide === "box" ? "SOLID — spawned as a box" : "SOLID — under the walk-in size"}; ${(r.levels ?? []).length} floor${(r.levels ?? []).length === 1 ? "" : "s"}${floors ? `: ${floors}` : ""}`
     + `${r.perf ? `; rendering ${r.perf.rank} (${r.perf.tris} triangles, ${r.perf.draws} draw calls)` : ""}.`);
   if (r.warnings?.length) { L.push("Problems:"); for (const w of r.warnings) L.push(`  - ${w.message}`); }
   else L.push("No problems found: every floor under its roof can be reached from outside.");
@@ -850,7 +844,6 @@ function describeCheck(what: string, r: any, named: number, id?: string, placed?
     L.push(`To name them, rename the keys and send: comp {id: "${id ?? "<thing>"}", type: "places", data: ${JSON.stringify(s.places)}}`
       + ` — merged with any places it already has, since a comp replaces the whole bag — or stand in each and use name_place.`);
   }
-  if (note) L.push(note);
   return L.join("\n");
 }
 

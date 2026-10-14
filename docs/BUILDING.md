@@ -108,7 +108,10 @@ pivoted where it would hinge or hang. `measure` lists named parts.
 
 - **The build check** runs on every model you upload, and never refuses one —
   it is advice. The upload answers with `check: "/check?lib=…"`; read it there,
-  or ask `check_model {id}` (a placed thing) / `check_model {lib}` (a path).
+  or ask `check_model {id}` (a placed thing, checked at its scale) /
+  `check_model {lib, scale?}` (a path; `&scale=` on the route). Scaling a
+  model scales its doors and steps but not the body — check at the size you
+  will place it.
   Measured with the walking body's own rules, it says: whether the model is
   walk-in at all; its floors, and how much of each can be reached from
   outside; why any covered floor can't be (a passage narrower than a body —

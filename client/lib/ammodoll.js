@@ -132,6 +132,30 @@ const INTERIOR_REACH = 8;
  *  world space, flat [x,y,z, x,y,z, x,y,z, ...]. The collider's geometry is
  *  root-local (colliders.js buildExact); the entity's scale, rotation and
  *  position put it in the world, the same law colliders.js queries by. */
+/** Does a triangle's footprint (xz) overlap the square `reach` either side
+ *  of `at`? Separating axes: the square's two, then the triangle's three
+ *  edge normals. Not its corners being near — a big floor is two triangles
+ *  whose corners can all be far from a body lying in the middle of it. */
+function overlapsSquare(v, at, reach) {
+  const x0 = at.x - reach, x1 = at.x + reach, z0 = at.z - reach, z1 = at.z + reach;
+  if (Math.max(v[0].x, v[1].x, v[2].x) < x0 || Math.min(v[0].x, v[1].x, v[2].x) > x1) return false;
+  if (Math.max(v[0].z, v[1].z, v[2].z) < z0 || Math.min(v[0].z, v[1].z, v[2].z) > z1) return false;
+  for (let k = 0; k < 3; k++) {
+    const a = v[k], b = v[(k + 1) % 3], c = v[(k + 2) % 3];
+    const nx = -(b.z - a.z), nz = b.x - a.x;          // the edge's normal in xz
+    if (nx === 0 && nz === 0) continue;
+    const side = Math.sign(nx * (c.x - a.x) + nz * (c.z - a.z));
+    if (side === 0) continue;                          // seen edge-on: no axis
+    // the square lies wholly on the far side of this edge from the triangle?
+    let far = true;
+    for (const [x, z] of [[x0, z0], [x1, z0], [x0, z1], [x1, z1]]) {
+      if (Math.sign(nx * (x - a.x) + nz * (z - a.z)) !== -side) { far = false; break; }
+    }
+    if (far) return false;
+  }
+  return true;
+}
+
 export function interiorTriangles(c, at, reach) {
   const g = c.exact.bvh.geometry, pos = g.getAttribute('position'), index = g.index;
   const o = c.obj, s = o.scale?.x || 1, q = o.quaternion, p = o.position;
@@ -139,15 +163,13 @@ export function interiorTriangles(c, at, reach) {
   const out = [];
   const v = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
   for (let t = 0; t + 2 < n; t += 3) {
-    let near = false;
     for (let k = 0; k < 3; k++) {
       const vi = index ? index.getX(t + k) : t + k;
       v[k].fromBufferAttribute(pos, vi).multiplyScalar(s);
       if (q) v[k].applyQuaternion(q);
       v[k].add(p);
-      if (Math.abs(v[k].x - at.x) <= reach && Math.abs(v[k].z - at.z) <= reach) near = true;
     }
-    if (near) out.push(v[0].x, v[0].y, v[0].z, v[1].x, v[1].y, v[1].z, v[2].x, v[2].y, v[2].z);
+    if (overlapsSquare(v, at, reach)) out.push(v[0].x, v[0].y, v[0].z, v[1].x, v[1].y, v[1].z, v[2].x, v[2].y, v[2].z);
   }
   return out;
 }

@@ -88,5 +88,30 @@ console.log('\noutside:');
   check('outside, it rests on the terrain as before', out.rest > -0.05 && out.rest < 0.5, `rests ${out.rest.toFixed(2)}`);
 }
 
+console.log('\na wide hall:');
+{
+  // 24×24m, its floor 1m up: the floor's top is two triangles whose corners
+  // are all 12m and more from a body in the middle
+  const H = 1.0, X = 100;
+  const hall = [[-12, 0, -12, 12, H, 12],
+    [-12, H, -12, -11.8, 5, 12], [11.8, H, -12, 12, 5, 12], [-12, H, -12, 12, 5, -11.8], [-12, H, 11.8, 12, 5, 12]]
+    .map(([x0, y0, z0, x1, y1, z1]) => [x0 + X, y0, z0, x1 + X, y1, z1]);
+  const g = mergeGeometries(hall.map(([x0, y0, z0, x1, y1, z1]) => {
+    const b = new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0);
+    b.translate((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+    return b.index ? b.toNonIndexed() : b;
+  }), false);
+  const m = new THREE.Mesh(g, undefined); m.updateMatrixWorld(true);
+  C.fitCollider('hall', m, { collide: 'exact' });
+  const e = [...C.nearColliders(X, 0, 1)].find(([id]: any) => id === 'hall')?.[1];
+  const tri = interiorTriangles(e, { x: X, z: 0 }, 8);
+  let top = false;
+  for (let k = 0; k < tri.length; k += 9) if ([1, 4, 7].every((o) => Math.abs(tri[k + o] - H) < 1e-6)) top = true;
+  check('interiorTriangles hands over a floor triangle whose corners are all out of reach', top, `${tri.length / 9} triangles`);
+  const mid = drop(X, H, 0);
+  check('in the middle of a wide hall, the body rests on its floor', mid.rest > H - 0.05 && mid.low > H - 0.2,
+    `lowest ${mid.low.toFixed(2)}, rests ${mid.rest.toFixed(2)} (floor ${H})`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -40,19 +40,26 @@ export const waterLevel = () => current?.level ?? null;
 /** Build (or replace, or remove) the water for terrain-verb args over the ground `heightAt`. */
 export function applyWater(args, heightAt) {
   if (current) {
-    scene.remove(current.mesh);
-    current.mesh.geometry.dispose();
-    current.mesh.material.dispose();
+    if (current.mesh) {
+      scene.remove(current.mesh);
+      current.mesh.geometry.dispose();
+      current.mesh.material.dispose();
+    }
     current = null;
   }
   setWaterField(null);
   const W = waterParams(args);
   if (!W) return;
   const size = typeof args?.size === 'number' ? args.size : 80;
-  const seg = Math.max(32, Math.min(256, Math.round(size)));
+  // about a metre a vertex (2 m on the biggest worlds), so a small pond is not stepped over
+  const seg = Math.max(32, Math.min(512, Math.round(size)));
   // the analysis grid IS the mesh's vertex grid: PlaneGeometry rotated flat lists vertex (i, j) at
   // x = -size/2 + i·cell, z = -size/2 + j·cell, row by row — the same order waterkind indexes
   const A = analyzeWater(heightAt, size, { level: W.level, kind: args.water?.kind, flow: args.water?.flow }, seg);
+  // The level is the world's whether or not the sheet shows: wading, depth and floating read it, not the mesh.
+  current = { mesh: null, level: W.level, analysis: A };
+  // what floats reads the same water (ammodoll.js, through terrain.js's seam)
+  setWaterField({ level: W.level, sample: (x, z) => A.sample(x, z), time: waveTime });
   const geo = new THREE.PlaneGeometry(size, size, seg, seg);
   geo.rotateX(-Math.PI / 2);
   const n = A.n, N = n * n, depth = A.depth;
@@ -82,7 +89,7 @@ export function applyWater(args, heightAt) {
     const a = idx[t], b = idx[t + 1], c = idx[t + 2];
     if (depth[a] > -runupAt(a) || depth[b] > -runupAt(b) || depth[c] > -runupAt(c)) keep.push(a, b, c);
   }
-  if (!keep.length) return;   // a level below every bit of ground: nothing is under water
+  if (!keep.length) return;   // no vertex is under water: nothing to draw (the level still stands)
   geo.setIndex(keep);
   const kindw = new Float32Array(N * 3), flow = new Float32Array(N * 3), shore = new Float32Array(N * 3);
   for (let k = 0; k < N; k++) {
@@ -184,9 +191,7 @@ export function applyWater(args, heightAt) {
   mesh.onBeforeRender = () => { waveT.value = waveTime(); };   // one synced wave time per frame
   mesh.userData.bodies = A.bodies.map((b) => ({ kind: b.kind, area: Math.round(b.area), width: +b.width.toFixed(1), length: +b.length.toFixed(1) }));
   scene.add(mesh);
-  current = { mesh, level: W.level, analysis: A };
-  // what floats reads the same water (ammodoll.js, through terrain.js's seam)
-  setWaterField({ level: W.level, sample: (x, z) => A.sample(x, z), time: waveTime });
+  current.mesh = mesh;
 }
 
 /** What kind of water is at a point, for the HUD and probes (shared/waterkind.js sample). */

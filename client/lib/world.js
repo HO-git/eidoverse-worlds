@@ -21,7 +21,8 @@ import { prepareObject } from './materials.js';
 import { beginWork } from './loadwork.js';
 import { reindexCollider } from './colliders.js';
 import { setTerrain, setGrass, clearGrass, heightAt } from './terrain.js';
-import { shapeParams, shapedHeightAt, gridFor, registerGrid, decodeGrid } from '../../shared/terrainshape.js';
+import { shapeParams, shapedHeightAt, requestGrid, setGridFetcher } from '../../shared/terrainshape.js';
+setGridFetcher(async (ref) => { const r = await fetch(`/library/${ref}`); if (!r.ok) throw new Error(`${r.status}`); return r.json(); });
 import { applyWater } from './water.js';
 import { buildFloraField, warmField, loadFloraModule } from './flora.js';
 import { applySky, whenSkyWarm } from './sky.js';
@@ -114,6 +115,7 @@ let lastGrassArgs = null;
 export function applyTerrainState(args) {
   if (!args) return;
   const key = JSON.stringify(args);
+  if (pendingTerrain && JSON.stringify(pendingTerrain.args) === key) pendingTerrain = null;   // our edit, echoed
   if (lastTerrainArgs === key) return;
   lastTerrainArgs = key;
   enqueueWorldBuild('terrain', async () => {
@@ -121,13 +123,8 @@ export function applyTerrainState(args) {
     // A heightmap's grid is fetched BEFORE the build, so the ground arrives shaped rather than snapping from
     // noise to image a moment later (and the walking heightAt never disagrees with the mesh in between).
     const shape = shapeParams(args);
-    if (shape?.heightmap && !gridFor(shape.heightmap.grid)) {
-      try {
-        const r = await fetch(`/library/${shape.heightmap.grid}`);
-        if (!r.ok) throw new Error(`${r.status}`);
-        registerGrid(shape.heightmap.grid, decodeGrid(await r.json()));
-      } catch (e) { report(`heightmap ${shape.heightmap.grid} — building from the noise instead`, e); }
-    }
+    if (shape?.heightmap && !(await requestGrid(shape.heightmap.grid)))
+      report(`heightmap ${shape.heightmap.grid} — building from the noise instead`, new Error('grid unavailable'));
     if (lastTerrainArgs !== key) return;   // a newer terrain arrived while the grid was in flight
     const layers = (args.layers ?? []).map((l) => ({
       map: noiseTexture(l.color ?? '#4a5d33'), repeat: l.repeat ?? 16,
@@ -175,6 +172,19 @@ export function applyTerrainState(args) {
 
 /** The authored terrain bag this client last built from — what EW.terrain(patch) edits. */
 export function currentTerrainArgs() { return lastTerrainArgs ? JSON.parse(lastTerrainArgs) : null; }
+
+// Edits sent but not yet echoed: two quick patches must compose (the second builds on the first), not both
+// build on the last echo and the second erase the first. A sent bag stands as the base until the world
+// echoes something, or PENDING_MS passes with no echo (the edit was refused).
+let pendingTerrain = null;   // { args, at }
+const PENDING_MS = 5000;
+/** The bag a new terrain edit should build on: the newest sent-but-unechoed edit, else the built one. */
+export function terrainEditBase() {
+  if (pendingTerrain && Date.now() - pendingTerrain.at < PENDING_MS) return structuredClone(pendingTerrain.args);
+  return currentTerrainArgs();
+}
+/** Record a terrain bag as sent, so the next edit composes with it. Returns the bag. */
+export function noteTerrainSent(args) { pendingTerrain = { args, at: Date.now() }; return args; }
 
 /** Placed features and heightmaps (shared/terrainshape.js) over the toolkit's noise mesh: the same law the
  *  agents and the sim ground bodies on. Every vertex re-heighted, normals redone, and the walking heightAt

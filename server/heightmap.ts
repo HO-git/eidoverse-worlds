@@ -68,6 +68,15 @@ function readTextChunk(png: Uint8Array, key: string): string | null {
 /** Decode an uploaded PNG into a grid, and store both. */
 export function ingestHeightmap(body: Uint8Array, hash: string):
     { grid: string; png: string; w: number; h: number; bits: number; meta: HeightmapMeta | null } | { error: string; status: number } {
+  // Dimensions from the IHDR BEFORE decoding (review on #237): a few KB of PNG can claim a 60000² image,
+  // and decoding first would make the serving process unpack and allocate all of it just to refuse it.
+  // IHDR is always the first chunk: width and height are big-endian u32s at bytes 16 and 20.
+  if (body.length < 24 || String.fromCharCode(...body.subarray(12, 16)) !== "IHDR")
+    return { error: "not a PNG with an image header", status: 415 };
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  const hw = dv.getUint32(16), hh = dv.getUint32(20);
+  if (hw < 2 || hh < 2 || hw > MAX_GRID || hh > MAX_GRID)
+    return { error: `heightmap is ${hw}×${hh} — want 2 to ${MAX_GRID} pixels a side (257, 513 or 1025 map evenly)`, status: 413 };
   let img: any;
   try { img = PNG.sync.read(Buffer.from(body), { skipRescale: true }); } catch (e) {
     return { error: `could not read the PNG: ${(e as Error).message}`, status: 415 };
@@ -94,6 +103,39 @@ export function ingestHeightmap(body: Uint8Array, hash: string):
   if (!existsSync(join(OPT_DIR, png))) writeFileSync(join(OPT_DIR, png), body);
   if (!existsSync(join(OPT_DIR, grid))) writeFileSync(join(OPT_DIR, grid), JSON.stringify(encodeGrid({ w, h, data })));
   return { grid, png, w, h, bits: img.data instanceof Uint16Array ? 16 : img.depth, meta };
+}
+
+// Exports run on the thread that serves the worlds (review on #237), so their work is BOUNDED: at most
+// EXPORT_MAX samples a side, the last few results cached by (terrain, resolution) — a terrain that has not
+// changed is never re-sampled — and a per-address budget on the uncached ones (routes.ts).
+export const EXPORT_MAX = 513;
+const exportCache = new Map<string, { png: Uint8Array; meta: HeightmapMeta }>();
+const EXPORT_CACHE = 6;
+
+/** exportHeightmap, cached: the same terrain at the same resolution is sampled once. `cached` says whether
+ *  this call did the work, so the caller can charge only real work to a rate budget. */
+export function exportHeightmapCached(terrainArgs: Record<string, unknown>, res: number, world?: string):
+    { png: Uint8Array; meta: HeightmapMeta; cached: boolean } {
+  const n = Math.max(2, Math.min(EXPORT_MAX, Math.round(res)));
+  const key = `${n}|${world ?? ""}|${JSON.stringify(terrainArgs)}`;
+  const hit = exportCache.get(key);
+  if (hit) { exportCache.delete(key); exportCache.set(key, hit); return { ...hit, cached: true }; }
+  const out = exportHeightmap(terrainArgs, n, world);
+  exportCache.set(key, out);
+  while (exportCache.size > EXPORT_CACHE) exportCache.delete(exportCache.keys().next().value!);
+  return { ...out, cached: false };
+}
+
+/** The ground's height range alone, from a coarse sampling — what the panel's black/white fields want,
+ *  without building (or caching) a PNG. */
+export function heightRange(terrainArgs: Record<string, unknown>): HeightmapMeta {
+  const P = terrainParams(terrainArgs), hf = makeHeightField(P), n = 129;
+  let lo = Infinity, hi = -Infinity;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    const y = hf((i / (n - 1) - 0.5) * P.size, (j / (n - 1) - 0.5) * P.size);
+    if (y < lo) lo = y; if (y > hi) hi = y;
+  }
+  return { min: lo, max: hi > lo ? hi : lo + 1, size: P.size };
 }
 
 /** A world's current ground, sampled into a 16-bit PNG. `res` samples a side, spanning the terrain's `size`

@@ -95,10 +95,10 @@ export function setMeHook(fn) { meRef = typeof fn === 'function' ? fn : (() => n
 // mantle probe the walk path reads on the same frame.
 const _gp = new THREE.Vector3();
 const _float = { on: false, y: 0, vy: 0 };   // the swimmer's buoyant column (shared/buoyancy.js)
-function groundUnder(pos) {
+function groundUnder(pos, cap = null) {
   _gp.set(pos.x, pos.y, pos.z);
-  const g = resolveColliders(_gp, heightAt);
-  return g;
+  // with a capsule: probe as the move itself will (a small body steps up less than the default one)
+  return cap ? resolveColliders(_gp, heightAt, cap.r, cap.tall, true) : resolveColliders(_gp, heightAt);
 }
 /** groundY(x, z) for the integrator: it has no y to offer, so probe from the
  *  flier's own altitude -- which is what decides whether a box is floor or
@@ -558,7 +558,7 @@ export function updateMe(dt, me) {
   const wl = flight ? null : waterLevel();
   const wadeH = wl == null ? 0 : me.bodyHeight?.() ?? 1.7 * (me.userScale ?? 1);
   if (wl != null && moving) {
-    const st = waterStance(wl, groundUnder(myState.pos), wadeH);
+    const st = waterStance(wl, groundUnder(myState.pos, colliderFor(me.userScale)), wadeH);
     target = st.swimming ? scaledSpeed((running ? SWIM_RUN : SWIM_SPEED) * mag, me.userScale) : target * st.speedFactor;
   }
   myState.speed = THREE.MathUtils.lerp(myState.speed, target, 1 - Math.exp(-10 * dt));

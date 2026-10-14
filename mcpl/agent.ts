@@ -7,7 +7,7 @@
 import { BodyStateReader, type BodyObservation, type PublicPose } from "./body-state.ts";
 import { mentionRegex } from "./mention.ts";
 import { mergePose } from "../shared/humanoid.js";
-import { shapeParams, shapedHeightAt, gridFor, registerGrid, decodeGrid, waterParams, waterStance, SWIM_SPEED, SWIM_RUN } from "../shared/terrainshape.js";
+import { shapeParams, shapedHeightAt, requestGrid, setGridFetcher, shapeReady, waterParams, waterStance, SWIM_SPEED, SWIM_RUN } from "../shared/terrainshape.js";
 import { bodyHeightFor } from "./rigbones.ts";
 import { surfaceOffset, waveClock } from "../shared/waves.js";
 import { floatStep, footprintSurface } from "../shared/buoyancy.js";
@@ -1602,7 +1602,10 @@ export class WorldAgent {
     return out;
   }
 
+  private terrainRev = 0;
   private async buildTerrain(args: any) {
+    // Builds can overlap (a grid fetch is slow, a terrain edit is not): only the newest one may commit.
+    const rev = ++this.terrainRev;
     if (!this.terrainSrc) {
       const r = await fetch(`${this.httpBase}/library/eidoverse/terrain.js`);
       this.terrainSrc = await r.text();
@@ -1611,12 +1614,12 @@ export class WorldAgent {
     // Placed features and heightmaps (shared/terrainshape.js): the agent stands on the same shaped law the
     // client's mesh and the sim use. A heightmap's grid is fetched first; failing that, the noise stands.
     const shape = shapeParams(args);
-    if (shape?.heightmap && !gridFor(shape.heightmap.grid)) {
-      try {
-        const g = await fetch(`${this.httpBase}/library/${shape.heightmap.grid}`);
-        if (g.ok) registerGrid(shape.heightmap.grid, decodeGrid(await g.json()));
-      } catch { /* the noise stands in until a rebuild */ }
+    if (shape?.heightmap) {
+      const base = this.httpBase;
+      setGridFetcher(async (ref: string) => { const g = await fetch(`${base}/library/${ref}`); if (!g.ok) throw new Error(`${g.status}`); return g.json(); });
+      await requestGrid(shape.heightmap.grid);   // null: the noise stands in until a rebuild
     }
+    if (rev !== this.terrainRev) return;   // a newer terrain arrived while this one's grid was in flight
     const t = (globalThis as any).makeTerrain({ ...args, layers: [] });
     this.terrain = shape ? { heightAt: shapedHeightAt(t.heightAt, args) } : t;
     this.water = waterParams(args);
@@ -1838,7 +1841,10 @@ export class WorldAgent {
     // punted crate WHERE IT IS (and, at rest, where it CAME TO REST —
     // recomputed, bit-identical with every renderer). Support rebuilds
     // when a body rests; the punt side effect dropped it at launch.
-    if (this.sim.epoch && !this.sim.epoch.foreign) {
+    // a heightmap world's sim waits for its grid (as the browser's does): noise ground would diverge
+    const simShape = this.sim.terrain?.shape;
+    if (!shapeReady(simShape)) void requestGrid(simShape.heightmap.grid);
+    else if (this.sim.epoch && !this.sim.epoch.foreign) {
       advanceSim(this.sim, tickOf(this.sim, this.serverNow()));
       for (const id in this.sim.bodies) {
         const b = this.sim.bodies[id];

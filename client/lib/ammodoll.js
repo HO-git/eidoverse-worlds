@@ -124,6 +124,34 @@ function boxesInertia(boxes, mass) {
   return { x: xx, y: yy, z: zz };
 }
 
+/** How far from a fall an interior's triangles are handed to Bullet: a
+ *  tumble covers a few metres at most; a large building's far wings stay out. */
+const INTERIOR_REACH = 8;
+
+/** An interior collider's triangles within `reach` of `at` (horizontally), in
+ *  world space, flat [x,y,z, x,y,z, x,y,z, ...]. The collider's geometry is
+ *  root-local (colliders.js buildExact); the entity's scale, rotation and
+ *  position put it in the world, the same law colliders.js queries by. */
+export function interiorTriangles(c, at, reach) {
+  const g = c.exact.bvh.geometry, pos = g.getAttribute('position'), index = g.index;
+  const o = c.obj, s = o.scale?.x || 1, q = o.quaternion, p = o.position;
+  const n = index ? index.count : pos.count;
+  const out = [];
+  const v = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+  for (let t = 0; t + 2 < n; t += 3) {
+    let near = false;
+    for (let k = 0; k < 3; k++) {
+      const vi = index ? index.getX(t + k) : t + k;
+      v[k].fromBufferAttribute(pos, vi).multiplyScalar(s);
+      if (q) v[k].applyQuaternion(q);
+      v[k].add(p);
+      if (Math.abs(v[k].x - at.x) <= reach && Math.abs(v[k].z - at.z) <= reach) near = true;
+    }
+    if (near) out.push(v[0].x, v[0].y, v[0].z, v[1].x, v[1].y, v[1].z, v[2].x, v[2].y, v[2].z);
+  }
+  return out;
+}
+
 export async function ensureAmmo() {
   if (AMMO) return true;
   if (ammoLoading) return ammoLoading;
@@ -745,8 +773,9 @@ export class AmmoRagdoll extends BodyEngineBase {
     info.set_m_splitImpulsePenetrationThreshold(-0.02);
 
     this._statics = [];
-    const addStatic = (halfX, halfY, halfZ, pos, quat, friction) => {
-      const shape = keep(new AMMO.btBoxShape(new AMMO.btVector3(halfX, halfY, halfZ)));
+    const addStatic = (halfX, halfY, halfZ, pos, quat, friction) =>
+      addStaticShape(keep(new AMMO.btBoxShape(new AMMO.btVector3(halfX, halfY, halfZ))), pos, quat, friction);
+    const addStaticShape = (shape, pos, quat, friction) => {
       _bt1.setIdentity();
       _bv1.setValue(pos.x, pos.y, pos.z); _bt1.setOrigin(_bv1);
       if (quat) { _bq1.setValue(quat.x, quat.y, quat.z, quat.w); _bt1.setRotation(_bq1); }
@@ -816,6 +845,28 @@ export class AmmoRagdoll extends BodyEngineBase {
         Math.max(size.x / 2, 0.02), Math.max(size.y / 2, 0.02), Math.max(size.z / 2, 0.02),
         centre, obj.quaternion ?? null, 0.8,
       );
+    }
+    // ROOM-SCALE INTERIORS: their real triangles. An interior is skipped
+    // above because its box would seal the room into a solid block — and
+    // nothing stood in its place, so a body that went limp inside a house had
+    // no floor under it at all and dropped through to the terrain beneath,
+    // from the ground floor and from every storey above it. colliders.js
+    // already holds the merged root-local triangles the walking body uses
+    // (entry.exact); the ones near the fall go to Bullet, in world space, as
+    // one static triangle mesh per thing.
+    for (const [, c] of nearColliders(hips.x, hips.z, 8)) {
+      if (!c.obj || !c.interior || !c.exact?.bvh) continue;
+      const tri = interiorTriangles(c, hips, INTERIOR_REACH);
+      if (!tri.length) continue;
+      const mesh = keep(new AMMO.btTriangleMesh());
+      const a = keep(new AMMO.btVector3(0, 0, 0)), b = keep(new AMMO.btVector3(0, 0, 0)), d = keep(new AMMO.btVector3(0, 0, 0));
+      for (let k = 0; k < tri.length; k += 9) {
+        a.setValue(tri[k], tri[k + 1], tri[k + 2]);
+        b.setValue(tri[k + 3], tri[k + 4], tri[k + 5]);
+        d.setValue(tri[k + 6], tri[k + 7], tri[k + 8]);
+        mesh.addTriangle(a, b, d, false);
+      }
+      addStaticShape(keep(new AMMO.btBvhTriangleMeshShape(mesh, true, true)), { x: 0, y: 0, z: 0 }, null, 0.8);
     }
 
     // ---- torso: one rigid body, rest-aligned -------------------------------

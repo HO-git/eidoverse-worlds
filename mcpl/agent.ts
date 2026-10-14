@@ -8,6 +8,7 @@ import { BodyStateReader, type BodyObservation, type PublicPose } from "./body-s
 import { mentionRegex } from "./mention.ts";
 import { mergePose } from "../shared/humanoid.js";
 import { shapeParams, shapedHeightAt, gridFor, registerGrid, decodeGrid, waterParams, wadeAllowed, WADE_DEPTH } from "../shared/terrainshape.js";
+import { analyzeWater, compass } from "../shared/waterkind.js";
 import * as THREE_W from "three/webgpu";
 import * as TSL from "three/tsl";
 import { NoiseGate, SHORT_STINT_MS, APPROACH_REFRACT_MS, APPROACH_RADIUS, REARM_RADIUS,
@@ -242,6 +243,8 @@ export class WorldAgent {
   walkStopReason: string | null = null;
   /** The world's water (shared/terrainshape.js), from the terrain bag; null when it has none. */
   water: { level: number } | null = null;
+  /** What kind of water lies where (shared/waterkind.js) — the same reading the renderers draw from. */
+  private waterKinds: ReturnType<typeof analyzeWater> | null = null;
   /** A held custom pose — sparse humanoid-bone quaternions. Presence only:
    *  it rides the pose packet and is never a log verb, because it is a moment,
    *  not a change to the world. `null` clears. */
@@ -1610,6 +1613,11 @@ export class WorldAgent {
     const t = (globalThis as any).makeTerrain({ ...args, layers: [] });
     this.terrain = shape ? { heightAt: shapedHeightAt(t.heightAt, args) } : t;
     this.water = waterParams(args);
+    const size = typeof args?.size === "number" ? args.size : 80;
+    this.waterKinds = this.water
+      ? analyzeWater((x, z) => this.heightAt(x, z), size, { level: this.water.level, kind: args.water?.kind, flow: args.water?.flow },
+        Math.max(32, Math.min(256, Math.round(size))))
+      : null;
     // the settle sim clamps against the SAME ground the walking clamp reads —
     // not one height sampled at the fall site (#17)
     void setHeightField((x, z) => this.heightAt(x, z));
@@ -1871,7 +1879,7 @@ export class WorldAgent {
           const to = ground(nx, nz);
           if (!wadeAllowed(this.water.level, ground(this.pos.x, this.pos.z), to)) {
             this.walkStopReason = `stopped at the water's edge at (${this.pos.x.toFixed(1)}, ${this.pos.z.toFixed(1)}): `
-              + `the water ahead is ${(this.water.level - to).toFixed(1)}m deep, and a body wades only to ${WADE_DEPTH}m — there is no swimming yet. Walk around it.`;
+              + `the water ahead is ${(this.water.level - to).toFixed(2)}m deep, and a body wades only to ${WADE_DEPTH}m — there is no swimming yet. Walk around it.`;
             this.target = null; this.legs = []; this.walkHeightAt = null; this.speed = 0; this.clip = "idle";
             this.walkDone?.(false); this.walkDone = null;
           }
@@ -3266,6 +3274,31 @@ export class WorldAgent {
   }
 
 
+  /** ", standing in a river 0.6m deep, flowing east" — or "" on dry ground. */
+  private waterHere(x: number, z: number, y: number): string {
+    if (!this.water || this.water.level <= y + 0.02) return "";
+    const d = (this.water.level - y).toFixed(1), w = this.waterKinds?.sample(x, z);
+    if (w?.kind === "river" && w.flow) return `, standing in a river ${d}m deep, flowing ${compass(w.flow[0], w.flow[1])}`;
+    if (w?.kind === "ocean" && w.toShore) return `, standing in the sea ${d}m deep, the waves coming in from the ${compass(-w.toShore[0], -w.toShore[1])}`;
+    if (w?.kind === "still") return `, standing in still water ${d}m deep`;
+    return `, standing in water ${d}m deep`;
+  }
+
+  /** One line on the world's water bodies, largest first, for `look`. */
+  private waterSummary(): string | null {
+    const A = this.waterKinds;
+    if (!A?.bodies.length) return null;
+    const big = [...A.bodies].filter((b) => b.area >= 20).sort((a, b) => b.area - a.area).slice(0, 4);
+    if (!big.length) return null;
+    const at = (k: number) => { const i = k % A.n, j = (k - i) / A.n, h = (A.n - 1) * A.cell / 2; return `(${(i * A.cell - h).toFixed(0)}, ${(j * A.cell - h).toFixed(0)})`; };
+    const say = (b: (typeof A.bodies)[number]) => {
+      if (b.kind === "river") return `a river ${b.width.toFixed(0)}m wide flowing ${compass(b.flowDir[0], b.flowDir[1])} from ${at(b.source)} to ${at(b.mouth)}`;
+      if (b.kind === "ocean") return `the sea, along the world's edge (${Math.round(b.area)}m²)`;
+      return `${b.area > 1500 ? "a lake" : "a pond"} (${Math.round(b.area)}m²) around ${at(b.cells[Math.floor(b.cells.length / 2)])}`;
+    };
+    return `Water: ${big.map(say).join("; ")}${A.bodies.length > big.length ? `; and ${A.bodies.length - big.length} smaller puddles` : ""}. Bodies wade to ${WADE_DEPTH}m; there is no swimming yet.`;
+  }
+
   look(nowMs = this.serverNow()): string {
     const L: string[] = [];
     // The agent's own seat rides its parent too: seated on a moving ferry,
@@ -3285,10 +3318,11 @@ export class WorldAgent {
     const selfSeatNote = selfEff?.ok && selfEff.seat?.state === "approximate" ? ` (seat approximate: ${selfEff.seat.reason})` : "";
     const seated = selfRide ? `, seated on ${selfRide.to}${selfEff?.ok && selfEff.moving ? ` (riding its ${selfEff.moving})` : ""}${selfSeatNote}` : "";
     if (meKnown) {
-      L.push(`You are "${this.name}" in world "${this.world}" at (${me.x.toFixed(1)}, ${me.z.toFixed(1)}), ground height ${me.y.toFixed(2)}m${this.water && this.water.level > me.y + 0.02 ? `, standing in water ${(this.water.level - me.y).toFixed(1)}m deep` : ""}, facing ${this.bearing(Math.sin(this.yaw), Math.cos(this.yaw))}${seated}.`);
+      L.push(`You are "${this.name}" in world "${this.world}" at (${me.x.toFixed(1)}, ${me.z.toFixed(1)}), ground height ${me.y.toFixed(2)}m${this.waterHere(me.x, me.z, me.y)}, facing ${this.bearing(Math.sin(this.yaw), Math.cos(this.yaw))}${seated}.`);
     } else {
       L.push(`You are "${this.name}" in world "${this.world}", position unknown (${selfEff && !selfEff.ok ? selfEff.why : "seat unresolved"}), facing ${this.bearing(Math.sin(this.yaw), Math.cos(this.yaw))}${seated}. Distances are withheld until your seat resolves — dismount {id: "${this.name}"} restores a stamped position.`);
     }
+    { const ws = this.waterSummary(); if (ws) L.push(ws); }
     // WHERE YOU ARE, ARCHITECTURALLY. A conjured building can only ever be
     // "a mesh 4m away"; a griddled one knows its own rooms, so standing inside
     // one is a fact perception can state. Derived from folded state alone —

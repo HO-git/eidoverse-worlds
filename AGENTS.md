@@ -586,6 +586,13 @@ flatHeight, layers}` rolls noise hills; two optional keys say WHERE
   `walk_to` stops at the edge and says why, and `look` says when you are
   standing in water and how deep. `water: null` drains it. The sim (thrown
   things) does not see water yet.
+  The water's KIND is read from the shape of what it fills (shared/waterkind.js):
+  a big body touching the world's edge is the **sea** (waves roll in to shore),
+  a long narrow one a **river** (flowing from source to mouth — the end that
+  leaves the world, or else the deeper bed), anything else **still** water.
+  `look` names it ("standing in a river 0.5m deep, flowing east") and lists the
+  world's water. Override the guess with `water.kind: "still"|"river"|"ocean"`,
+  a river's direction with `water.flow: [x, z]`.
 
 The verb replaces the whole terrain bag, so send every key you mean to keep.
 

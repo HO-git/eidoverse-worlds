@@ -123,20 +123,42 @@ const escapeRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // the page before it, so nothing said is actually out of reach; it is just not
 // paid for up front.
 
-let oldestShownSeq = null;
+// The arrival window is NOT a contiguous slice of history: trimRecentChat
+// (shared/fold.js) makes room by dropping the loudest speaker's oldest line,
+// so a quiet visitor's last words from yesterday can sit at the top of the
+// window above hours of conversation that was trimmed out from under it.
+// Paging from the oldest line SHOWN jumps straight over that gap — scrolling
+// up landed on older days and the trimmed talk was never reachable. So the
+// cursor comes only from what paging itself has walked: it starts at the
+// present, lines already on screen are skipped, and the missing ones are
+// slotted into place by seq.
+let pageCursor = null;              // next page is everything below this seq; null = from now
 let loadingOlder = false;
 let noMoreHistory = false;
+const MAX_SKIP_PAGES = 25;          // pages of already-shown lines walked per scroll
 
-export function noteSeq(seq) {
-  // synthetic entries from a folded snapshot carry negative seq — they are not
-  // positions in history and must not become the paging cursor
-  if (typeof seq === 'number' && seq >= 0
-      && (oldestShownSeq === null || seq < oldestShownSeq)) oldestShownSeq = seq;
-}
-
-function prependLine(who, text, ts, seq) {
-  noteSeq(seq);
-  logEl.prepend(buildLine(who, text, { ts, historical: true }));
+/** Put one paged-in line where it belongs in seq order. Lines older than
+ *  everything shown go on top, as before; lines that fill a gap go in front of
+ *  the first line newer than them. */
+function insertHistorical(who, text, ts, seq) {
+  renderedSeqs.add(seq);
+  const line = buildLine(who, text, { ts, historical: true });
+  line.dataset.seq = String(seq);
+  line.dataset.author = who;
+  line.dataset.tsn = String(ts ?? 0);
+  let first = null, next = null;
+  for (const c of logEl.children) {
+    if (c.dataset.seq === undefined) continue;
+    first ??= c;
+    if (+c.dataset.seq > seq) { next = c; break; }
+  }
+  if (!next || next === first) {
+    if (next) logEl.prepend(line); else logEl.appendChild(line);
+    return;
+  }
+  logEl.insertBefore(line, next);
+  // a grouped line now follows a different speaker: its name must reprint
+  if (next.dataset.author !== who) next.classList.remove('cont');
 }
 
 /** Tell an arrival that what they are looking at is a window, not the room's
@@ -168,26 +190,37 @@ async function loadOlder() {
   marker.textContent = '… loading earlier messages';
   logEl.prepend(marker);
   try {
-    const r = await requestHistory({
-      ...(oldestShownSeq !== null ? { before: oldestShownSeq } : {}),
-      limit: 40, verbs: ['say'],
-    });
+    let added = 0;
+    for (let page = 0; !added && !noMoreHistory && page < MAX_SKIP_PAGES; page++) {
+      const r = await requestHistory({
+        ...(pageCursor !== null ? { before: pageCursor } : {}),
+        limit: 40, verbs: ['say'],
+      });
+      if (!r.entries?.length) { noMoreHistory = true; break; }
+      pageCursor = typeof r.oldestSeq === 'number' ? r.oldestSeq : r.entries[0].seq;
+      if (!r.hasMore) noMoreHistory = true;
+      const fresh = r.entries.filter((e) => typeof e.seq === 'number' && !renderedSeqs.has(e.seq));
+      if (!fresh.length) continue;
+      marker.remove();
+      // keep what the reader is looking at still: a gap fills BELOW the top
+      // of the view as often as above it, so pin the first visible line
+      // rather than the distance from the bottom
+      let anchor = null;
+      for (const c of logEl.children) {
+        if (c.offsetTop + c.offsetHeight > logEl.scrollTop) { anchor = c; break; }
+      }
+      const offset = anchor ? anchor.offsetTop - logEl.scrollTop : 0;
+      for (const e of fresh) insertHistorical(e.actor, e.args?.text ?? '', e.ts, e.seq);
+      if (anchor) logEl.scrollTop = anchor.offsetTop - offset;
+      added = fresh.length;
+    }
     marker.remove();
-    if (!r.entries?.length) {
-      noMoreHistory = true;
+    if (noMoreHistory) {
       const end = document.createElement('div');
       end.className = 'line sys';
       end.textContent = '— the beginning of this world —';
       logEl.prepend(end);
-      return;
     }
-    // grow the top without moving what the reader is looking at
-    const anchorH = logEl.scrollHeight - logEl.scrollTop;
-    for (const e of [...r.entries].reverse()) {
-      prependLine(e.actor, e.args?.text ?? '', e.ts, e.seq);
-    }
-    logEl.scrollTop = logEl.scrollHeight - anchorH;
-    if (!r.hasMore) noMoreHistory = true;
   } catch {
     marker.remove();
   } finally { loadingOlder = false; }
@@ -209,7 +242,6 @@ export function logChat(who, text, kind = '', meta = {}) {
     if (renderedSeqs.has(meta.seq)) return;
     renderedSeqs.add(meta.seq);
   }
-  noteSeq(meta.seq);
   // the VR quad reads the tail of the log from here — every line, merged
   // continuations included, twelve deep
   recent.push({ who, text: String(text).slice(0, 140), kind });
@@ -236,6 +268,8 @@ export function logChat(who, text, kind = '', meta = {}) {
     }
   }
   const line = buildLine(who, text, { kind, ...meta });
+  // seq is where paged-in history slots in around this line (insertHistorical)
+  if (typeof meta.seq === 'number' && meta.seq >= 0) line.dataset.seq = String(meta.seq);
   line.dataset.author = who;
   line.dataset.tsn = String(meta.ts ?? Date.now());
   if (meta.spoken && meta.utt != null) line.dataset.utt = String(meta.utt);

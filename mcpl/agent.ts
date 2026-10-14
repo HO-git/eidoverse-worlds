@@ -13,8 +13,8 @@ import { NoiseGate, SHORT_STINT_MS, APPROACH_REFRACT_MS, APPROACH_RADIUS, REARM_
   APPROACH_DWELL_MS, APPROACH_STILL_MPS, APPROACH_MAX_WAIT_MS,
   ACTIVITY_RADIUS_M, ACTIVITY_PULSE_MS, ACTIVITY_REFRESH_MS, MOVER_MIN_M } from "./denoise.ts";
 import { HeadlessBody, ReachBody, setHeightField, registerSupport, registerSupportGrid, registerMeshSupport, removeSupport, standOn, collidersReady, navProbe, collidersGeneration, inWorld } from "./physics.ts";
-import { makeNavGrid, NAV_SUBSTEP, NAV_NUDGE } from "./navgrid.ts";
-import { placesOf, inRegion, names, destinationOf, toLocal, type Place, type Destination } from "./places.ts";
+import { makeNavGrid, NAV_SUBSTEP, NAV_NUDGE, type NavTarget } from "./navgrid.ts";
+import { placesOf, inRegion, names, destinationOf, toLocal, type Place, type Destination, type PlaceHolder } from "./places.ts";
 import { collisionTriangles } from "../server/geometry.ts";
 // FLIGHT. The same deterministic integrator the browser bench and the capture
 // path run -- one function, every runtime, per the spec's Q2 ruling.
@@ -2785,10 +2785,11 @@ export class WorldAgent {
    *  destination has a floor within a step of it, else the lowest there.
    *  `near.reach`: how far from (x, z) a place to stand may be (a room is
    *  reached anywhere in it; a point within a hand's width or so).
-   *  `near.above`: how far above y its floor may be (a step, unless the floor's
-   *  height is known exactly, as a named room's is). */
+   *  `near.above` / `near.below`: how far above / below y its floor may be (a
+   *  step above and anything below, unless the floor's height is known
+   *  exactly, as a named room's is). `near.inside`: only spots in a region. */
   walkTo(x: number, z: number, run = false, timeoutMs = 90_000, tolerance = ARRIVE, y?: number,
-    near: { reach?: number; above?: number } = {}): Promise<boolean> {
+    near: Pick<NavTarget, "reach" | "above" | "below" | "inside"> = {}): Promise<boolean> {
     if (![x, z, tolerance].every(Number.isFinite) || tolerance < 0 || tolerance > 0.4 || (y != null && !Number.isFinite(y))) {
       // Not a walk request at all: the walk under way, if any, goes on.
       this.walkRefusal = WALK_ARGS_REASON;
@@ -2817,7 +2818,7 @@ export class WorldAgent {
       const grid = this.navGrid.grid;
       const nav = inWorld(this.world, () => {
         const fy = standOn(feet, (wx, wz) => this.heightAt(wx, wz)) ?? this.pos.y;
-        return grid.route({ x: this.pos.x, y: fy, z: this.pos.z }, { x, z, y, reach: near.reach, above: near.above });
+        return grid.route({ x: this.pos.x, y: fy, z: this.pos.z }, { x, z, y, ...near });
       });
       if ("refusal" in nav) { this.walkRefusal = nav.refusal; return Promise.resolve(false); }
       // griddled structures keep their walls out of the headless colliders,
@@ -2892,15 +2893,27 @@ export class WorldAgent {
     return placesOf(modelMeta.get(`${this.httpBase}|${e.lib}`), e.comp?.places);
   }
 
+  /** Where a thing's places are right now: its effective transform (mount
+   *  chain, whole-entity motion) — its saved `pos` is where it was put, not
+   *  where a carried or moving thing is. Null when that cannot be resolved. */
+  private placeHolder(e: Entity, nowMs = Date.now()): PlaceHolder | null {
+    const f = this.eff(e.id, nowMs);
+    return f.ok ? { id: e.id, pos: f.pos, yaw: f.yaw, scale: f.scale } : null;
+  }
+
   /** The named regions a body standing at `w` is in, smallest first (a room
    *  before the building it is in). */
   placesAt(w: number[]): { entity: Entity; place: Place }[] {
-    const out: { entity: Entity; place: Place; vol: number }[] = [];
+    const out: { entity: Entity; place: Place; vol: number }[] = [], now = Date.now();
     for (const e of this.entities.values()) {
-      if (!isFiniteVec3(e.pos)) continue;
-      for (const p of this.placesOn(e)) {
-        if (!inRegion(e, p, w)) continue;
-        out.push({ entity: e, place: p, vol: (p.max![0] - p.min![0]) * (p.max![1] - p.min![1]) * (p.max![2] - p.min![2]) });
+      const ps = this.placesOn(e);
+      if (!ps.length) continue;
+      const h = this.placeHolder(e, now);
+      if (!h) continue;
+      const s3 = (h.scale ?? 1) ** 3;
+      for (const p of ps) {
+        if (!inRegion(h, p, w)) continue;
+        out.push({ entity: e, place: p, vol: s3 * (p.max![0] - p.min![0]) * (p.max![1] - p.min![1]) * (p.max![2] - p.min![2]) });
       }
     }
     return out.sort((a, b) => a.vol - b.vol);
@@ -2912,7 +2925,7 @@ export class WorldAgent {
   destination(to: string): Destination | { refusal: string } {
     const q = to.trim();
     if (!q) return { refusal: "walk_to's to names nothing" };
-    const me = this.pos;
+    const me = this.pos, now = Date.now();
     const ci = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
     // a person
     for (const p of this.people.values()) {
@@ -2924,59 +2937,101 @@ export class WorldAgent {
     }
     const slash = q.indexOf("/");
     const ents = [...this.entities.values()].filter((e) => isFiniteVec3(e.pos));
+    const at = (e: Entity, p: Place): Destination | { refusal: string } => {
+      const h = this.placeHolder(e, now);
+      return h ? destinationOf(h, p) : { refusal: `where [${e.id}] is right now cannot be worked out (${(this.eff(e.id, now) as { why: string }).why})` };
+    };
     if (slash > 0) {
       const e = ents.find((x) => ci(x.id, q.slice(0, slash)));
       if (!e) return { refusal: `no thing called "${q.slice(0, slash)}" here` };
       const name = q.slice(slash + 1), ps = this.placesOn(e), p = ps.find((x) => names(x, name));
       if (!p) return { refusal: `[${e.id}] has no place called "${name}"${ps.length ? ` — its places: ${ps.map((x) => x.name).join(", ")}` : " (it has no named places)"}` };
-      return destinationOf(e, p);
+      return at(e, p);
     }
     const e = ents.find((x) => ci(x.id, q));
     if (e) {
       const ps = this.placesOn(e);
       const p = ps.find((x) => x.name === "entrance") ?? ps.find((x) => x.kind === "door");
-      if (p) return destinationOf(e, p);
+      if (p) return at(e, p);
       return { refusal: `[${e.id}] has no entrance or door named — walk_to its places by name${ps.length ? ` (${ps.map((x) => x.name).join(", ")})` : ""}, or to its coordinates` };
     }
     const hits: Destination[] = [];
-    for (const x of ents) for (const p of this.placesOn(x)) if (names(p, q)) hits.push(destinationOf(x, p));
+    for (const x of ents) for (const p of this.placesOn(x)) {
+      if (!names(p, q)) continue;
+      const d = at(x, p);
+      if (!("refusal" in d)) hits.push(d);
+    }
     if (hits.length) return hits.sort((a, b) => Math.hypot(a.x - me.x, a.z - me.z) - Math.hypot(b.x - me.x, b.z - me.z))[0];
     const known = ents.flatMap((x) => this.placesOn(x).map((p) => `${x.id}/${p.name}`)).slice(0, 16);
     return { refusal: `nothing here is called "${q}"${known.length ? ` — named places: ${known.join(", ")}` : ""}` };
   }
 
+  /** name_place edits, one at a time: each starts from the state the last
+   *  one's echo confirmed, so two in a row don't overwrite each other. */
+  private placeEdits: Promise<unknown> = Promise.resolve();
+
   /** Name a spot (the body's own, by default) as a place on a thing: written
    *  into that thing's `places` component, in its frame, alongside what is
-   *  already there. `remove` retires a name — one the model itself declares
-   *  is hidden (null), one only the component held is dropped. */
-  namePlace(name: string, opts: { on?: string; label?: string; remove?: boolean; at?: number[] } = {}): string {
+   *  already there. `remove` retires a name (null: that also hides one the
+   *  model itself declares). `at` may leave out y: the floor there nearest
+   *  the body's own height. Answers once the world accepts or refuses it. */
+  namePlace(name: string, opts: { on?: string; label?: string; remove?: boolean; at?: { x: number; z: number; y?: number } } = {}): Promise<string> {
+    const run = this.placeEdits.then(() => this.namePlaceNow(name, opts));
+    this.placeEdits = run.catch(() => {});
+    return run;
+  }
+
+  private async namePlaceNow(name: string, opts: { on?: string; label?: string; remove?: boolean; at?: { x: number; z: number; y?: number } }): Promise<string> {
     if (!/^[A-Za-z0-9_][A-Za-z0-9_ .:'-]{0,47}$/.test(name)) return "a place name is 1-48 letters, digits, spaces, _ . : ' or -, starting with a letter, digit or _";
-    const w = opts.at && isFiniteVec3(opts.at) ? opts.at : [this.pos.x, this.pos.y, this.pos.z];
+    let w: number[];
+    if (opts.at) {
+      const { x, z } = opts.at;
+      const y = opts.at.y ?? inWorld(this.world, () => standOn({ x, y: this.pos.y, z }, (wx, wz) => this.heightAt(wx, wz))) ?? this.heightAt(x, z);
+      w = [x, y, z];
+    } else w = [this.pos.x, this.pos.y, this.pos.z];
+    const now = Date.now();
     let e: Entity | undefined;
-    if (opts.on) e = [...this.entities.values()].find((x) => x.id.toLowerCase() === opts.on!.toLowerCase());
-    else {
+    if (opts.on) {
+      e = [...this.entities.values()].find((x) => x.id.toLowerCase() === opts.on!.toLowerCase());
+      if (e && (!e.lib || e.lib === "(light)")) return `[${e.id}] is a light — places hang on placed things (a model), not lights`;
+    } else {
       e = this.placesAt(w)[0]?.entity;
       if (!e) {
         let best = Infinity;
         for (const x of this.entities.values()) {
-          if (!x.lib || x.lib === "(light)" || !isFiniteVec3(x.pos)) continue;
-          const d = Math.hypot(x.pos[0] - w[0], x.pos[2] - w[2]);
+          if (!x.lib || x.lib === "(light)") continue;
+          const h = this.placeHolder(x, now);
+          if (!h) continue;
+          const d = Math.hypot(h.pos[0] - w[0], h.pos[2] - w[2]);
           if (d < best && d <= 15) { best = d; e = x; }
         }
       }
     }
     if (!e) return opts.on ? `no thing called "${opts.on}" here` : "no placed thing within 15m to hang the name on — pass on: <thing id>";
+    const h = this.placeHolder(e, now);
+    if (!h) return `where [${e.id}] is right now cannot be worked out, so a spot on it cannot be named — try again when it rests`;
     const cur = (e.comp?.places && typeof e.comp.places === "object") ? { ...e.comp.places } : {};
     if (opts.remove) {
-      const fromModel = placesOf(modelMeta.get(`${this.httpBase}|${e.lib}`), null).some((p) => p.name === name);
-      if (fromModel) cur[name] = null; else delete cur[name];
+      // always a hiding entry: whether the model declares the name is not
+      // known until its file has loaded, and a deleted entry would let it back
+      cur[name] = null;
     } else {
-      const l = toLocal(e, w).map((v) => Math.round(v * 1000) / 1000);
+      const l = toLocal(h, w).map((v) => Math.round(v * 1000) / 1000);
       cur[name] = { at: l, ...(opts.label ? { label: opts.label.slice(0, 80) } : {}) };
     }
-    if (JSON.stringify(cur).length > 8000) return `[${e.id}]'s places would exceed the 8KB component limit — retire some first`;
-    this.verb("comp", { id: e.id, type: "places", data: cur });
-    return opts.remove ? `retired "${name}" on [${e.id}]` : `named this spot "${name}" on [${e.id}] — walk_to {to: "${e.id}/${name}"} reaches it`;
+    const data = JSON.stringify(cur);
+    if (data.length > 8000) return `[${e.id}]'s places would exceed the 8KB component limit — retire some first`;
+    const t0 = Date.now(), id = e.id;
+    this.verb("comp", { id, type: "places", data: cur });
+    // the world's answer: our component echoed back, or a refusal
+    for (const deadline = t0 + 3000; Date.now() < deadline;) {
+      if (this.lastRefusal && this.lastRefusal.ts >= t0) return `not named — the world refused: ${this.lastRefusal.text}`;
+      if (JSON.stringify(this.entities.get(id)?.comp?.places ?? null) === data) {
+        return opts.remove ? `retired "${name}" on [${id}]` : `named this spot "${name}" on [${id}] — walk_to {to: "${id}/${name}"} reaches it`;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return `sent "${name}" to [${id}], but the world has not confirmed it yet — look will show it once it lands`;
   }
 
   // ---- feet ----------------------------------------------------------------

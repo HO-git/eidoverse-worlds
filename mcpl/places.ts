@@ -128,21 +128,32 @@ export function names(p: Place, query: string): boolean {
  *  arrive on, and how far from the point a place to stand may be. */
 export type Destination = { x: number; y: number; z: number; reach: number; label: string;
   /** how far above y the floor may be: a room's floor height is exact */
-  above?: number };
+  above?: number;
+  /** how far below y it may be (unbounded when absent) */
+  below?: number;
+  /** a region: only places to stand inside it count, anywhere in it */
+  inside?: (x: number, z: number) => boolean };
 
-/** Where to walk to reach a place. A region: anywhere in it, aimed at its
- *  middle, on its floor. A seat: the floor beside it (not the seat's own
- *  surface — the body sits by mounting it). A door or point: there. */
+/** Where to walk to reach a place. A region: anywhere on its floor, the
+ *  middle preferred. A seat: the floor beside it (not the seat's own surface
+ *  — the body sits by mounting it), the nearest floor below the seat. A door
+ *  or point: there. */
 export function destinationOf(e: PlaceHolder, p: Place): Destination {
   const s = e.scale && e.scale > 0 ? e.scale : 1;
   const label = `${e.id}/${p.name}${p.label ? ` (${p.label})` : ""}`;
   if (p.kind === "region") {
     const mid = toWorld(e, [(p.min![0] + p.max![0]) / 2, p.min![1], (p.min![2] + p.max![2]) / 2]);
-    const half = Math.min(p.max![0] - p.min![0], p.max![2] - p.min![2]) * s / 2;
-    return { x: mid[0], y: mid[1], z: mid[2], reach: Math.max(0.6, Math.min(4, half - 0.35)), label, above: 0.1 * s };
+    // reach covers the whole room (its half-diagonal); `inside` keeps the
+    // search to the room itself — a long or furnished room is reached at
+    // whatever clear floor it has, not only round its middle
+    const half = Math.hypot(p.max![0] - p.min![0], p.max![2] - p.min![2]) * s / 2;
+    const room = { ...p, min: [p.min![0], -Infinity, p.min![2]] as Vec3, max: [p.max![0], Infinity, p.max![2]] as Vec3 };
+    return { x: mid[0], y: mid[1], z: mid[2], reach: Math.max(0.6, half), label, above: 0.1 * s, below: 0.1 * s,
+      inside: (x, z) => inRegion(e, room, [x, 0, z]) };
   }
   const w = toWorld(e, p.at!);
-  // a seat's point is where hips rest; the floor beside it is ~half a metre down
-  if (p.kind === "seat") return { x: w[0], y: w[1] - 0.6 * s, z: w[2], reach: 1.0, label };
+  // a seat's point is where hips rest, at or a little above the seat's
+  // surface: the floor beside it is the nearest one below — at any scale
+  if (p.kind === "seat") return { x: w[0], y: w[1] - 0.05 * s, z: w[2], reach: Math.max(1, s), label, above: 0 };
   return { x: w[0], y: w[1], z: w[2], reach: 0.6, label };
 }

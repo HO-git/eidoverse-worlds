@@ -47,10 +47,18 @@ export function paintGround(body) {
     if (pal.grassDensity[st.density] == null) st.density = pal.grassDensity.normal != null ? 'normal' : first(pal.grassDensity);
     if (!pal.plantings[st.plant]) st.plant = pal.plantings.meadow ? 'meadow' : first(pal.plantings);
 
-    const growTerrain = () => sendVerb('terrain', {
+    // Each control changes ITS key over the world's current terrain bag, never the whole bag: rebuilding it
+    // from the panel's dials dropped everything the panel doesn't own — placed features, a heightmap, a seed
+    // or size set from the console. (Changing the tint flattened a shaped world back to plain noise.) A world
+    // with no terrain yet gets the panel's full default bag, as before.
+    const fresh = () => ({
       seed: st.seed, size: 160, segments: 200, amplitude: pal.shapes[st.shape], flatRadius: 16,
       layers: [{ color: pal.tints[st.tint].layer, repeat: 16 }],
     });
+    const growTerrain = (patch) => {
+      const cur = currentTerrainArgs();
+      sendVerb('terrain', cur ? { ...cur, ...patch } : { ...fresh(), ...patch });
+    };
     // what "grow" plants — every option is one bag on the singleton grass
     // verb, straight from the def; blade plantings take the height dial and
     // the tint row's colour column
@@ -69,8 +77,8 @@ export function paintGround(body) {
 
     // terrain shape
     body.appendChild(btnRow(...Object.keys(pal.shapes).map((k) =>
-      btn(k, () => { st.shape = k; growTerrain(); flashHint(`terrain: ${k}`); }))));
-    body.appendChild(btnRow(btn('↻ reshuffle', () => { st.seed = Math.floor(Math.random() * 9999); growTerrain(); })));
+      btn(k, () => { st.shape = k; growTerrain({ amplitude: pal.shapes[k] }); flashHint(`terrain: ${k}`); }))));
+    body.appendChild(btnRow(btn('↻ reshuffle', () => { st.seed = Math.floor(Math.random() * 9999); growTerrain({ seed: st.seed }); })));
     body.appendChild(heightmapRow());
 
     // WHAT THE WORLD HAS NOW, and what you're seeing instead (only while those differ). The dials below are a
@@ -141,7 +149,7 @@ export function paintGround(body) {
     // tint drives both terrain layer and grass colour
     const tint = selectRow('tint', Object.keys(pal.tints), st.tint, (v) => {
       st.tint = v;
-      growTerrain();
+      growTerrain({ layers: [{ color: pal.tints[v].layer, repeat: 16 }] });
       if (st.grass) growGrass();
     });
     body.appendChild(tint.row);

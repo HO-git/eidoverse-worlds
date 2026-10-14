@@ -128,6 +128,27 @@ export function makeNavGrid(probe: NavProbe) {
     return ok;
   }
 
+  /** The moves a body can make from column (i0, j0) at height y0: to each of
+   *  the eight neighbours that offers a standing height within a step, never
+   *  cutting a corner diagonally (both sides it passes must stand too), and —
+   *  where the height changes — stepped the way the feet will step it.
+   *  Between two standing columns at one height nothing can push (a wall
+   *  between them would be within reach of both); a change of height can: a
+   *  floor edge in the hip band of a body on the tread below. The search and
+   *  the building check (server/buildcheck.ts) both move by exactly this. */
+  function moves(i0: number, j0: number, y0: number): { i: number; j: number; y: number }[] {
+    const out: { i: number; j: number; y: number }[] = [];
+    for (const [di, dj] of DIRS) {
+      const i = i0 + di, j = j0 + dj;
+      const y = match(i, j, y0);
+      if (y === null) continue;
+      if (di && dj && (match(i0 + di, j0, y0) === null || match(i0, j0 + dj, y0) === null)) continue;
+      if (Math.abs(y - y0) > 0.01 && !stepOK(i0, j0, y0, i, j, y)) continue;
+      out.push({ i, j, y });
+    }
+    return out;
+  }
+
   /** The cheap half: along the line, the nearest lattice column (already
    *  known, usually) offers a standing height within a step of the last.
    *  Rejects most hopeless shortcuts without stepping any physics. */
@@ -301,19 +322,9 @@ export function makeNavGrid(probe: NavProbe) {
       if (++expansions > NAV_MAX_EXPANSIONS) {
         return { refusal: `gave up looking for a way to (${to.x.toFixed(2)}, ${to.z.toFixed(2)}) after ${NAV_MAX_EXPANSIONS} steps of search — walk part of the way first` };
       }
-      for (const [di, dj] of DIRS) {
-        const i = n.i + di, j = n.j + dj;
+      for (const { i, j, y } of moves(n.i, n.j, n.y)) {
         if (i < lo.i || i > hi.i || j < lo.j || j > hi.j) continue;
-        const y = match(i, j, n.y);
-        if (y === null) continue;
-        // a diagonal may not cut a corner: both sides it passes must stand too
-        if (di && dj && (match(n.i + di, n.j, n.y) === null || match(n.i, n.j + dj, n.y) === null)) continue;
-        // between two standing columns at one height nothing can push (a wall
-        // between them would be within reach of both); a change of height can
-        // — a floor edge in the hip band of a body on the tread below — so
-        // those moves are stepped the way the feet will step them
-        if (Math.abs(y - n.y) > 0.01 && !stepOK(n.i, n.j, n.y, i, j, y)) continue;
-        const g = n.g + Math.hypot(di * NAV_CELL, dj * NAV_CELL, y - n.y);
+        const g = n.g + Math.hypot((i - n.i) * NAV_CELL, (j - n.j) * NAV_CELL, y - n.y);
         const kk = key(i, j, y);
         if (g >= (best.get(kk) ?? Infinity)) continue;
         best.set(kk, g);
@@ -343,7 +354,7 @@ export function makeNavGrid(probe: NavProbe) {
     return { points: out, snapped: !exactOf(reached.done!) };
   }
 
-  return { route, layers, clear };
+  return { route, layers, clear, moves, match, stepOK, at, cell };
 }
 
 type Spot = { i: number; j: number; y: number; d: number; score: number; lowest?: boolean };

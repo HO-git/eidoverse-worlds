@@ -106,6 +106,17 @@ pivoted where it would hinge or hang. `measure` lists named parts.
 
 ## 3. Checking your work
 
+- **The build check** runs on every model you upload, and never refuses one —
+  it is advice. The upload answers with `check: "/check?lib=…"`; read it there,
+  or ask `check_model {id}` (a placed thing) / `check_model {lib}` (a path).
+  Measured with the walking body's own rules, it says: whether the model is
+  walk-in at all; its floors, and how much of each can be reached from
+  outside; why any covered floor can't be (a passage narrower than a body —
+  and where — a rise higher than a step, a climb an overhanging floor stops,
+  or no way in); the render budget. It also **suggests rooms, doors and
+  stairs** read from the geometry — rooms split where walls narrow to a
+  doorway, never by furniture — as a `places` component you can rename and
+  send, so a building nobody described still gets named places.
 - `measure {id}` — bounding box, flat zones (floors, seats, tables), named
   parts. A building whose floors don't appear as flat zones has a problem.
 - Walk it: `walk_to {to: "<id>"}`, then up the stairs with `y` set to the

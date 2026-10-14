@@ -75,6 +75,7 @@ export const TOOLS = [
   { name: "snapshot", description: "A rendered image from the world (spectator browser on a GPU host). Slower than look — use when spatial/visual detail matters. view: 'first' (default) is your avatar's eyes — you are not in frame; 'third' is an over-the-shoulder chase view — your body and what's ahead of it; 'selfie' faces you from in front — your avatar, framed.", inputSchema: { type: "object", properties: { view: { type: "string", enum: ["first", "third", "selfie"] } } } },
   { name: "walk_to", description: "Walk (or run) to a named place, a thing, a person, or world coordinates. Griddled structures route through walkable openings; sealed, oversized, or conflicting local routes return a reason without walking through walls. This is horizontal centerline routing with a 0.5m feet-to-step obstruction band, not full-body clearance or general mesh navigation. Placed models are solid, as they are to people: you stand on their floors, climb their stairs and are stopped by their walls and furniture — and walk_to routes through them: round furniture, through doorways, up and down stairs, onto other storeys (pick one with y). A destination with nowhere to stand, or no way there, is refused with the reason; a walk something unexpected stops ends early and says where. Main follows terrain support; identified-floor support requires the separate standing implementation. Default arrival tolerance is 0.01m, so short positioning moves are honored. Optional tolerance (0–0.4 metres) changes how close to the requested point counts as arrived. This is destination accuracy, not distance from another body.", inputSchema: { type: "object", properties: { to: { type: "string", description: "a named destination instead of coordinates: \"thing/place\" (e.g. \"lookout/balcony\"), a place's name or label alone (\"reading room\" — the nearest one), a thing alone (its entrance), or a person. look lists each thing's places." }, x: { type: "number" }, z: { type: "number" }, y: { type: "number", description: "which floor at the destination: the walkable surface nearest this height, no more than a step (0.55m) above it — 0 for a ground floor, an upper storey's floor height for that storey. Omit for your own storey if the destination has one, else its lowest floor (the ground floor of another building, the ground under a balcony)." }, run: { type: "boolean" }, tolerance: { type: "number", minimum: 0, maximum: 0.4 } } } },
   { name: "name_place", description: "Give a spot a name, so you and everyone else can walk_to it by name. Names where you stand (or x/y/z), on the thing you are in or the nearest placed thing (or `on`), in that thing's own frame — it moves with it. Written to the thing's `places` component (builder rights): a name can be added, re-pointed or retired any time, and covers places the model itself declares. remove: true retires a name.", inputSchema: { type: "object", properties: { name: { type: "string" }, label: { type: "string", description: "how it reads, e.g. \"the window seat\"" }, on: { type: "string", description: "the thing's id; default: the thing you are in, else the nearest within 15m" }, x: { type: "number" }, y: { type: "number" }, z: { type: "number" }, remove: { type: "boolean" } }, required: ["name"] } },
+  { name: "check_model", description: "What a model is like to walk into, measured with the walking body's own rules before or after it is placed: whether it is walk-in at all, its floors and how much of each can be reached from outside, why any part can't (a passage narrower than a body, a rise too high to step, a climb an overhanging floor blocks, no way in), the render budget — and suggested rooms, doors and stairs, ready to name as places. Advisory: nothing is refused. Pass the id of a placed thing, or a library/store path (what an upload returns). The first check of a model takes a few seconds.", inputSchema: { type: "object", properties: { id: { type: "string" }, lib: { type: "string" } } } },
   // ---- FLIGHT (upstream's flight arc, merged 2026-09-02; behind the `fly`
   // grant — the agent refuses on the ground it stands on). Deliberately no
   // file_plan: a sortie is these tools called in sequence from the pilot's own
@@ -345,6 +346,17 @@ export const HANDLERS: Record<string, ToolHandler> = {
         ? `arrived at ${label}: (${ag.pos.x.toFixed(2)}, ${ag.pos.y.toFixed(2)}, ${ag.pos.z.toFixed(2)})${here ? `, in ${here.place.label ?? here.place.name}` : ""}`
         : `arrived at (${ag.pos.x.toFixed(3)}, ${ag.pos.z.toFixed(3)}); ${Math.hypot(ag.pos.x - x, ag.pos.z - z).toFixed(3)}m from requested destination${here ? `, in ${here.place.label ?? here.place.name} (${here.entity.id}/${here.place.name})` : ""}`);
 
+  },
+  check_model: async (ag, a) => {
+      const e = a.id ? ag.entities.get(String(a.id)) : null;
+      if (a.id && !e) return text(`no thing called "${a.id}" here`);
+      const lib = String(e?.lib ?? a.lib ?? "");
+      if (!lib || lib === "(light)") return text("check_model needs the id of a placed model, or a library path");
+      let r: any;
+      try { r = await (await fetch(`${ag.httpBase}/check?lib=${encodeURIComponent(lib)}`)).json(); }
+      catch (err) { return text(`the check could not be reached: ${String((err as Error)?.message ?? err)}`); }
+      if (r.error) return text(`couldn't check ${lib}: ${r.error}`);
+      return text(describeCheck(e ? `[${e.id}] ${lib}` : lib, r, e ? ag.placesOn(e).length : 0, e?.id));
   },
   name_place: async (ag, a) => {
       const at = [a.x, a.y, a.z].every((v: unknown) => v != null) ? [Number(a.x), Number(a.y), Number(a.z)] : undefined;
@@ -797,6 +809,28 @@ export const HANDLERS: Record<string, ToolHandler> = {
   const declared = new Set(TOOLS.map((t) => t.name));
   for (const n of declared) if (!HANDLERS[n]) throw new Error(`[tools] "${n}" is advertised but has no handler`);
   for (const n of Object.keys(HANDLERS)) if (!declared.has(n)) throw new Error(`[tools] "${n}" has a handler but no schema row`);
+}
+
+/** A build check (server/buildcheck.ts) as text a reader can act on. */
+function describeCheck(what: string, r: any, named: number, id?: string): string {
+  const L: string[] = [];
+  const floors = (r.levels ?? []).map((l: any) => `${l.y}m (${l.reachable}m² of ${l.area}m² reachable)`).join(", ");
+  L.push(`${what}: ${r.walkIn?.roomScale ? "walk-in" : "SOLID — under the walk-in size"}; ${(r.levels ?? []).length} floor${(r.levels ?? []).length === 1 ? "" : "s"}${floors ? `: ${floors}` : ""}`
+    + `${r.perf ? `; rendering ${r.perf.rank} (${r.perf.tris} triangles, ${r.perf.draws} draw calls)` : ""}.`);
+  if (r.warnings?.length) { L.push("Problems:"); for (const w of r.warnings) L.push(`  - ${w.message}`); }
+  else L.push("No problems found: every floor under its roof can be reached from outside.");
+  const s = r.suggested ?? {};
+  const parts = [
+    ...(s.rooms ?? []).map((x: any) => `${x.id} (a room, floor ${x.min[1]}m, ${x.area}m²)`),
+    ...(s.doors ?? []).map((x: any) => `${x.id} (${x.between.join(" ↔ ")}, ~${x.width}m wide, at ${x.at.join(", ")})`),
+    ...(s.stairs ?? []).map((x: any) => `${x.id} (a stair, ${x.between.join(" ↔ ")})`),
+  ];
+  if (parts.length) {
+    L.push(`Suggested places, read from the geometry${named ? ` (it already has ${named} named)` : ""}: ${parts.join("; ")}.`);
+    L.push(`To name them, rename the keys and send: comp {id: "${id ?? "<thing>"}", type: "places", data: ${JSON.stringify(s.places)}}`
+      + ` — merged with any places it already has, since a comp replaces the whole bag — or stand in each and use name_place.`);
+  }
+  return L.join("\n");
 }
 
 export async function handleTool(ctx: ToolCtx, name: string, a: Record<string, any>) {

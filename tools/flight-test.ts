@@ -766,7 +766,7 @@ console.log('\nT6 -- fold_down grounds the flier, and unfolding is deliberate');
   const refused = takeOff(cfg, s, { groundY: 0 });
   check('T6: take_off REFUSES while folded', refused.phase === 'GROUND');
   check('...for the stated reason',
-        refused.events.some((e: any) => e.kind === 'takeoff.refused' && e.reason === 'wings folded'));
+        refused.events.some((e: any) => e.kind === 'takeoff.refused' && e.reason === 'your wings are folded; unfold them first'));
   check('...and take_off does not quietly unfold for you', refused.wings === 'FOLDED');
 
   const open = unfold(cfg, s);
@@ -781,11 +781,29 @@ console.log('\nT6 -- fold_down grounds the flier, and unfolding is deliberate');
   // A limp body's wings belong to the ragdoll, not to a posture.
   const limp = foldDown(cfg, { ...ground(), wings: 'LIMP' });
   check('a limp body cannot strike a posture', limp.wings === 'LIMP');
+  // ...and a body down after a cut is told it is down, not airborne.
+  const downed = foldDown(cfg, { ...ground(), phase: 'RAGDOLL', wings: 'LIMP' });
+  check('folding while down says so, not that the body is in the air',
+        downed.events.some((e: any) => e.kind === 'fold.refused' && /not on your feet \(ragdoll\)/.test(e.reason)) &&
+        !downed.events.some((e: any) => /airborne/.test(e.reason ?? '')));
   // Idempotence, both ways, with an event that says nothing happened.
   check('folding twice is refused, not doubled',
         foldDown(cfg, s).events.some((e: any) => e.reason === 'already folded'));
   check('unfolding open wings is refused',
         unfold(cfg, ground()).events.some((e: any) => e.kind === 'unfold.refused'));
+  // Each refusal's reason, by the branch that gives it.
+  check('...as already open', unfold(cfg, ground()).events.some((e: any) => e.reason === 'already open'));
+  check('unfolding limp wings says they reopen on recovery, not that they are open',
+        unfold(cfg, { ...ground(), phase: 'RAGDOLL', wings: 'LIMP' }).events.some((e: any) =>
+          e.kind === 'unfold.refused' && /limp, not folded/.test(e.reason)));
+  check('folding in the air says to land first',
+        midair.events.some((e: any) => e.kind === 'fold.refused' && /^airborne \(pilot\).*land first/.test(e.reason)));
+  check('take_off with limp wings says they reopen on recovery',
+        takeOff(cfg, { ...ground(), phase: 'RAGDOLL', wings: 'LIMP' }, { groundY: 0 }).events.some((e: any) =>
+          e.kind === 'takeoff.refused' && /limp; they open again/.test(e.reason)));
+  check('take_off in the air says the body is already airborne',
+        takeOff(cfg, air, { groundY: 0 }).events.some((e: any) =>
+          e.kind === 'takeoff.refused' && e.reason === 'already airborne (pilot)'));
 
   // The pose the silhouette is made of: authored in Blender, read from the
   // action rather than typed, and checked here for the transposition that

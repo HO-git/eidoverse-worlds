@@ -757,7 +757,7 @@ export class WorldAgent {
             // nothing ever injected one, that fallback WAS the policy. A
             // server that never sends this leaves myRights null, which the
             // provider reads as no.
-            if (msg.yourRights) this.acceptEffectiveRights(msg.yourRights, "snapshot");
+            if (msg.yourRights) this.acceptEffectiveRights(msg.yourRights, "world");
             this.entities.clear(); this.people.clear(); this.mounts.clear();
             this.bodyReader?.forget();
             this.selfBodyGeneration = ++this.bodyGenerationCounter;
@@ -1469,7 +1469,7 @@ export class WorldAgent {
         // pilot should know why rather than discovering it as a failure.
         if (args.fly === false && this.flight) {
           this.inbox.push({ ts, kind: "act", who: actor,
-            text: "your flight capability was withdrawn — the next flight action will refuse" });
+            text: "withdrew your flight, so your next flight action will be refused until the world's owner grants it again" });
         }
       }
     } else if (verb === "ban" || verb === "unban" || verb === "kick") {
@@ -2201,7 +2201,7 @@ export class WorldAgent {
         this.flight.phase !== "RAGDOLL" && this.flight.phase !== "LEAF") {
       this.flight = flightDown(this.flight, { eventId: "capability-revoked" });
       this.inbox.push({ ts: Date.now(), kind: "act", who: actor,
-        text: "your flight capability was withdrawn — descending under the falling-leaf reflex" });
+        text: "withdrew your flight while you were aloft, so you're coming down under the falling-leaf reflex; you can fly again once the world's owner grants it" });
     }
   }
 
@@ -2388,7 +2388,7 @@ export class WorldAgent {
     // Wing posture is carried independently of an active flight state. A body
     // can fold without a propulsion grant, so the sky door checks the public
     // posture before it constructs a fresh integrator.
-    if (this.wingsFolded) return `still standing — wings folded`;
+    if (this.wingsFolded) return `still standing — wings folded; unfold_wings opens them`;
     // START FROM THE BODY, ALWAYS. A stale flight state -- LANDED after a
     // glide, or RAGDOLL after a cut -- carried the old position and phase into
     // the new launch, so take_off "worked" and the next verb found her back on
@@ -2449,11 +2449,13 @@ export class WorldAgent {
     // state in step; otherwise the semantic presence field is the whole act.
     if (this.flight) {
       this.flightCfg ??= flightConfig();
-      const before = this.flight.wings;
       this.flight = fold ? flightFold(this.flightCfg, this.flight)
                          : flightUnfold(this.flightCfg, this.flight);
       const ref = this.flight.events.find((e: any) => /refused$/.test(e.kind));
-      if (ref) return `wings stay ${before.toLowerCase()} — ${ref.reason}`;
+      // The reason says why the wings didn't change (shared/flight.js); many
+      // reasons name the wings' state too, and flight_status always gives it,
+      // so the sentence around the reason doesn't add the state.
+      if (ref) return `wings stay as they are — ${ref.reason}`;
     } else if (this.wingsFolded === fold) {
       return fold ? `wings are already folded` : `wings are already open`;
     }
@@ -2737,7 +2739,9 @@ export class WorldAgent {
       const length = points.slice(1).reduce((sum: number, p: Vec2, i: number) => sum + Math.hypot(p.x - points[i].x, p.z - points[i].z), 0);
       candidates.push({ points, length, owner: s });
     }
-    if (!candidates.length) return refusals.length ? { refusal: "no route: " + refusals.join("; ") } : { points: [from, to] };
+    // One structure's reason per line: a reason carries its remedy after a
+    // semicolon, so joining structures with one too would run them together.
+    if (!candidates.length) return refusals.length ? { refusal: "no route:\n" + refusals.join("\n") } : { points: [from, to] };
     candidates.sort((a, b) => a.length - b.length || (a.owner.id < b.owner.id ? -1 : a.owner.id > b.owner.id ? 1 : 0));
     const obstructed: string[] = [];
     for (const candidate of candidates) {
@@ -2754,7 +2758,7 @@ export class WorldAgent {
     return { refusal: [structures.some((s) => s.route.confined)
       ? "no local route preserves the supporting upper-floor path (multi-building floor composition is unavailable)"
       : "no local route is clear of all structures (multi-building route search is unavailable)",
-      ...obstructed, ...refusals].join("; ") };
+      ...obstructed, ...refusals].join("\n") };
   }
 
   /** The legs of a walk from where the body stands to `to`, or why there is
@@ -2788,7 +2792,7 @@ export class WorldAgent {
         refusals.add(route.refusal);
       }
       // Each side's own reason, so the refusal says why none of them served.
-      return { refusal: `the body stands in a wall, and from beside it: ${[...refusals].join("; from another side: ")}` };
+      return { refusal: `the body stands in a wall, and from beside it:\n${[...refusals].join("\nfrom another side: ")}` };
     }
     return { refusal: "the body stands in a wall, with no clear point within half a metre to step out to" };
   }
@@ -2861,8 +2865,17 @@ export class WorldAgent {
 
   face(x: number, z: number) { this.yaw = Math.atan2(x - this.pos.x, z - this.pos.z); }
 
+  /** Why a send can't go out: a body between connections redials on its own
+   *  (onclose), and one that is closed never will, so only the first is worth
+   *  calling again. */
+  private notJoined(): Error {
+    return new Error(this.closed
+      ? "this body's connection to the world has ended for good (the world removed or refused it, or the door closed it), so nothing was sent, and calling again won't change that"
+      : "this body is reconnecting to the world, so nothing was sent; it rejoins on its own once the world answers, so try again shortly");
+  }
+
   verb(verb: string, args: Record<string, unknown>) {
-    if (!this.joined) throw new Error("not joined");
+    if (!this.joined) throw this.notJoined();
     this.ws!.send(JSON.stringify({ type: "verb", verb, args }));
   }
 
@@ -2879,7 +2892,7 @@ export class WorldAgent {
    *  world's bans — anyone present), 'global-ban' / 'global-unban' /
    *  'global-bans' (server: WORLD_ADMIN only). Answers arrive as `mod`. */
   sendMod(type: "world-bans" | "global-ban" | "global-unban" | "global-bans", extra: Record<string, unknown> = {}) {
-    if (!this.joined || this.ws?.readyState !== 1) throw new Error("not joined");
+    if (!this.joined || this.ws?.readyState !== 1) throw this.notJoined();
     this.ws.send(JSON.stringify({ type, ...extra }));
   }
 
@@ -2887,7 +2900,7 @@ export class WorldAgent {
    *  Only the embodied primary may — which is this door. The answer arrives as
    *  a `relay-cred` frame on onMedia; a sidecar then publishes on it. */
   requestMediaCredential(scopes: { publish?: boolean; subscribe?: boolean } = {}) {
-    if (!this.joined || this.ws?.readyState !== 1) throw new Error("not joined");
+    if (!this.joined || this.ws?.readyState !== 1) throw this.notJoined();
     this.ws.send(JSON.stringify({ type: "relay-cred", ...scopes }));
   }
 

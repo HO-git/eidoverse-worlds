@@ -6,6 +6,7 @@ import { handleTool, snapshotTool, TOOLS } from "../mcpl/tools.ts";
 import { rawShapeError } from "../mcpl/shape.ts";
 import { shown } from "../shared/shown.js";
 import { VERB_NEEDS } from "../server/rights.ts";
+import { WorldAgent } from "../mcpl/agent.ts";
 
 const { check, tally } = mkCheck();
 const said = (r: any) => String(r?.content?.[0]?.text ?? "");
@@ -145,6 +146,134 @@ try {
   check("whispers turned off say so, and that calling again won't help",
     off.stdout.toString().trim() === "whispers are turned off on this door, so nothing was sent, and calling again won't change that", off.stdout.toString() + off.stderr.toString());
 
+  console.log("\nTHE BODY");
+  const bodies: any[] = [];
+  const ag: any = new WorldAgent({ name: "nj", world: "w" });
+  bodies.push(ag);
+  const thrown = (fn: () => unknown) => { try { fn(); return ""; } catch (e) { return (e as Error).message; } };
+  const between = thrown(() => ag.verb("say", { text: "hi" }));
+  check("a verb sent between connections says the body rejoins once the world answers",
+    between === "this body is reconnecting to the world, so nothing was sent; it rejoins on its own once the world answers, so try again shortly", between);
+  ag.close();
+  const ended = thrown(() => ag.verb("say", { text: "hi" }));
+  check("a verb sent after the body is closed says calling again won't help",
+    /has ended for good .* so nothing was sent, and calling again won't change that$/.test(ended), ended);
+  const endedMod = thrown(() => ag.sendMod("world-bans"));
+  check("...and so does a moderation message", /has ended for good/.test(endedMod), endedMod);
+
+  const pilot: any = new WorldAgent({ name: "pilot", world: "w" });
+  bodies.push(pilot);
+  const wingBones = ["Hip", "Spine02", "Head", "L_Wing_Upper", "L_Wing_Upper_1", "R_Wing_Upper", "R_Wing_Upper_1", "L_Wing_Lower", "R_Wing_Lower"];
+  const winged = (a: any) => { a.bodyBoneNames = wingBones; a.loadBodyBones = async () => wingBones; a.myRights = { role: "builder", fly: true }; return a; };
+  winged(pilot);
+  pilot.wingsFolded = true;
+  check("take-off with folded wings says how to open them",
+    await pilot.takeOff() === "still standing — wings folded; unfold_wings opens them");
+  pilot.wingsFolded = false;
+  const up = await pilot.takeOff();
+  const stay = await pilot.foldWings(true);
+  check("a refused fold doesn't repeat the wings' state before the reason",
+    /^took off/.test(up) && /^wings stay as they are — \S/.test(stay) && !/wings stay (open|limp|folded) —/.test(stay), `${up} / ${stay}`);
+  const status = pilot.flightStatus();
+  check("flight_status gives the wings' state the fold's sentence leaves out", /\bwings OPEN\b/.test(status), status);
+  pilot.applyEntry({ verb: "grant", args: { id: "pilot", fly: false }, actor: "owner", ts: Date.now() }, true);
+  const notice = pilot.inbox.at(-1);
+  check("a withdrawal reads as the granter's act, with what follows and who can undo it",
+    `* ${notice?.who} ${notice?.text}` === "* owner withdrew your flight, so your next flight action will be refused until the world's owner grants it again",
+    JSON.stringify(notice));
+  pilot.flight = { ...pilot.flight, phase: "GROUND", wings: "LIMP" };
+  const limp = await pilot.foldWings(true);
+  check("a fold refused for limp wings doesn't name the state twice",
+    /^wings stay as they are — /.test(limp) && !/^wings stay limp/.test(limp), limp);
+  const aloft: any = winged(new WorldAgent({ name: "aloft", world: "w" }));
+  bodies.push(aloft);
+  await aloft.takeOff();
+  aloft.acceptEffectiveRights({ role: "builder", fly: false }, "world");
+  const fall = aloft.inbox.at(-1);
+  check("a withdrawal while aloft says the body is coming down, and how to fly again",
+    `* ${fall?.who} ${fall?.text}` === "* world withdrew your flight while you were aloft, so you're coming down under the falling-leaf reflex; you can fly again once the world's owner grants it",
+    JSON.stringify(fall));
+
+  console.log("\nTHE CONNECTION");
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const until = async (ok: () => boolean, ms: number) => { const end = Date.now() + ms; while (!ok() && Date.now() < end) await sleep(100); return ok(); };
+
+  // A stand-in world on a WebSocket: each body's name picks how the join is answered.
+  const snapshot = (extra: Record<string, unknown> = {}) => JSON.stringify({ type: "snapshot", state: null, entries: [], present: [], ...extra });
+  const joins = new Map<string, number>();
+  const answers: Record<string, (ws: any, n: number) => void> = {
+    kicked: (ws) => { ws.send(snapshot()); setTimeout(() => ws.close(4006, "kicked"), 200); },
+    denied: (ws) => ws.close(4005, "refused"),
+    "refused-silently": (ws) => ws.send(JSON.stringify({ type: "error" })),
+    "refused-blank": (ws) => ws.send(JSON.stringify({ type: "error", error: "" })),
+    "refused-in-words": (ws) => ws.send(JSON.stringify({ type: "error", error: "you are banned from this world." })),
+    late: (ws) => setTimeout(() => ws.send(snapshot()), 9000),
+    dropped: (ws, n) => {
+      if (n > 1) { setTimeout(() => ws.send(snapshot()), 9000); return; }
+      ws.send(snapshot()); setTimeout(() => ws.close(1001, "restarting"), 300);
+    },
+    grounded: (ws) => ws.send(snapshot({ yourRights: { role: "builder", fly: false } })),
+  };
+  const wsWorld = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    fetch(req, server) { return server.upgrade(req) ? undefined : new Response("no", { status: 404 }); },
+    websocket: {
+      message(ws, data) {
+        const m = JSON.parse(String(data));
+        if (m.type !== "join") return;
+        const n = (joins.get(m.id) ?? 0) + 1;
+        joins.set(m.id, n);
+        answers[m.id]?.(ws, n);
+      },
+    },
+  });
+  const wsUrl = `ws://127.0.0.1:${wsWorld.port}/ws`;
+  const body = (name: string) => { const a: any = new WorldAgent({ name, world: "w", url: wsUrl }); bodies.push(a); return a; };
+  const outcome = (p: Promise<unknown>) => p.then(() => "joined", (e: Error) => e.message);
+  // The two slow ones start first and are checked last.
+  const late = body("late"), dropped = body("dropped");
+  const lateJoin = outcome(late.connect());
+  const droppedJoin = outcome(dropped.connect());
+  for (const [name, want] of [
+    ["refused-silently", "the world refused the join without giving a reason"],
+    ["refused-blank", "the world refused the join without giving a reason"],
+    ["refused-in-words", "the world refused the join: you are banned from this world"],
+  ]) {
+    const a = body(name);
+    const got = await outcome(a.connect());
+    check(`a join the world refuses says so, in its words if it gave any (${name})`, got === want && a.closed === true, got);
+  }
+  const kicked = body("kicked");
+  const kickedJoin = await outcome(kicked.connect());
+  await until(() => kicked.closed, 3000);
+  const afterKick = thrown(() => kicked.verb("say", { text: "hi" }));
+  check("a body the world removes (4006) has ended for good, and calling again won't help",
+    kickedJoin === "joined" && kicked.closed === true && /has ended for good .* calling again won't change that$/.test(afterKick), `${kickedJoin} / ${afterKick}`);
+  const denied = body("denied");
+  denied.connect().catch(() => {});
+  await until(() => denied.closed, 3000);
+  const afterDenial = thrown(() => denied.verb("say", { text: "hi" }));
+  check("a body whose join the world refuses (4005) has ended for good too",
+    denied.closed === true && /has ended for good .* calling again won't change that$/.test(afterDenial), afterDenial);
+  const grounded = winged(body("grounded"));
+  await grounded.takeOff();
+  const groundedJoin = await outcome(grounded.connect());
+  const groundedNotice = grounded.inbox.at(-1);
+  check("rights withdrawn in a snapshot read as the world's act",
+    groundedJoin === "joined" && `* ${groundedNotice?.who} ${groundedNotice?.text}`.startsWith("* world withdrew your flight while you were aloft"), `${groundedJoin} / ${JSON.stringify(groundedNotice)}`);
+  check("a join the world answers is a join", await droppedJoin === "joined");
+  await until(() => !dropped.joined, 3000);
+  const reconnecting = thrown(() => dropped.verb("say", { text: "hi" }));
+  check("a body whose connection dropped says it's reconnecting",
+    /^this body is reconnecting to the world, so nothing was sent; it rejoins on its own once the world answers/.test(reconnecting), reconnecting);
+  const lateOutcome = await lateJoin;
+  check("a join the world doesn't answer within 8 seconds says so", lateOutcome === "the world didn't answer the join within 8 seconds", lateOutcome);
+  check("...and the world's late answer still joins the body", await until(() => late.joined, 4000));
+  check("a reconnecting body rejoins on its own once the world answers, though its own join timed out first",
+    await until(() => dropped.joined, 6000) && joins.get("dropped") === 2 && thrown(() => dropped.verb("say", { text: "back" })) === "",
+    `joined ${dropped.joined}, joins ${joins.get("dropped")}`);
+  for (const a of bodies) a.close();
+  wsWorld.stop(true);
 } finally {
   world.stop(true);
 }

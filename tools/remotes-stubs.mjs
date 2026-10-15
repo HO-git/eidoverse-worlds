@@ -41,6 +41,7 @@ export const logChat = () => {};
 export const logWhisper = () => {};
 export const noteTyping = () => {};
 export const noteHistoryContext = () => {};
+export const resyncChatAfter = async () => {};
 export const composeFirstPerson = () => {};
 export const markPhase = () => {};
 export const toast = () => {};

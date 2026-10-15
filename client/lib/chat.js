@@ -137,28 +137,77 @@ let loadingOlder = false;
 let noMoreHistory = false;
 const MAX_SKIP_PAGES = 25;          // pages of already-shown lines walked per scroll
 
-/** Put one paged-in line where it belongs in seq order. Lines older than
- *  everything shown go on top, as before; lines that fill a gap go in front of
- *  the first line newer than them. */
+/** Put one paged-in line where it belongs: straight after the last row that
+ *  is older than it. NOT "before the first row that is newer" — a spoken row
+ *  is placed by when its speech began (logChat's t0), so it can sit above
+ *  rows with lower seqs, and anchoring on it would land later talk above
+ *  earlier talk. Spoken rows only ever move EARLIER, so the last older row is
+ *  always a sound left neighbour. Nothing older on screen: it goes on top. */
 function insertHistorical(who, text, ts, seq) {
   renderedSeqs.add(seq);
   const line = buildLine(who, text, { ts, historical: true });
   line.dataset.seq = String(seq);
   line.dataset.author = who;
   line.dataset.tsn = String(ts ?? 0);
-  let first = null, next = null;
+  let prev = null;
   for (const c of logEl.children) {
-    if (c.dataset.seq === undefined) continue;
-    first ??= c;
-    if (+c.dataset.seq > seq) { next = c; break; }
+    if (c.dataset.seq !== undefined && +c.dataset.seq < seq) prev = c;
   }
-  if (!next || next === first) {
-    if (next) logEl.prepend(line); else logEl.appendChild(line);
-    return;
+  if (prev) prev.after(line); else logEl.prepend(line);
+  // a grouped row that now sits under a different speaker must reprint its
+  // name (sys rows pass through a group, as in logChat)
+  let below = line.nextElementSibling;
+  while (below && below.dataset.kind === 'system') below = below.nextElementSibling;
+  if (below && below.dataset.author !== who) below.classList.remove('cont');
+}
+
+/** Hold what the reader is looking at still while rows land around it. A
+ *  fill lands below the top of the view as often as above it, so pin the
+ *  first visible row, not the distance from the bottom — and measure in
+ *  screen coordinates: offsetTop is relative to the offsetParent
+ *  (.chat-main), not to the log that scrolls. Returns the restore step. */
+function pinView() {
+  const top = logEl.getBoundingClientRect().top;
+  let anchor = null;
+  for (const c of logEl.children) {
+    const r = c.getBoundingClientRect();
+    if (r.height && r.bottom > top) { anchor = c; break; }
   }
-  logEl.insertBefore(line, next);
-  // a grouped line now follows a different speaker: its name must reprint
-  if (next.dataset.author !== who) next.classList.remove('cont');
+  if (!anchor) return () => {};
+  const was = anchor.getBoundingClientRect().top;
+  return () => {
+    if (anchor.isConnected) logEl.scrollTop += anchor.getBoundingClientRect().top - was;
+  };
+}
+
+/** Slot one page of history into the log; returns how many rows were new. */
+function insertPage(entries) {
+  const fresh = (entries ?? []).filter((e) => typeof e.seq === 'number' && !renderedSeqs.has(e.seq));
+  if (!fresh.length) return 0;
+  const restore = pinView();
+  for (const e of fresh) insertHistorical(e.actor, e.args?.text ?? '', e.ts, e.seq);
+  restore();
+  return fresh.length;
+}
+
+/** A reconnect hands over a NEW arrival window, trimmed the same fair way —
+ *  so what was said while the socket was down can be missing from it, and it
+ *  is newer than anything the backward walk will ever page. net.js calls this
+ *  as a re-join's snapshot lands, with the last seq the old socket delivered;
+ *  everything said after it is fetched and slotted in. A first join (nothing
+ *  on screen yet) has no hole to fill. */
+export async function resyncChatAfter(seq) {
+  if (!logEl || !renderedSeqs.size || typeof seq !== 'number' || seq < 0) return;
+  let before = null;
+  for (let page = 0; page < MAX_SKIP_PAGES; page++) {
+    const r = await requestHistory({
+      after: seq, ...(before !== null ? { before } : {}), limit: 40, verbs: ['say'],
+    });
+    if (!r.entries?.length) return;
+    insertPage(r.entries);
+    if (r.entries.length < 40) return;
+    before = typeof r.oldestSeq === 'number' ? r.oldestSeq : r.entries[0].seq;
+  }
 }
 
 /** Tell an arrival that what they are looking at is a window, not the room's
@@ -199,20 +248,9 @@ async function loadOlder() {
       if (!r.entries?.length) { noMoreHistory = true; break; }
       pageCursor = typeof r.oldestSeq === 'number' ? r.oldestSeq : r.entries[0].seq;
       if (!r.hasMore) noMoreHistory = true;
-      const fresh = r.entries.filter((e) => typeof e.seq === 'number' && !renderedSeqs.has(e.seq));
-      if (!fresh.length) continue;
-      marker.remove();
-      // keep what the reader is looking at still: a gap fills BELOW the top
-      // of the view as often as above it, so pin the first visible line
-      // rather than the distance from the bottom
-      let anchor = null;
-      for (const c of logEl.children) {
-        if (c.offsetTop + c.offsetHeight > logEl.scrollTop) { anchor = c; break; }
-      }
-      const offset = anchor ? anchor.offsetTop - logEl.scrollTop : 0;
-      for (const e of fresh) insertHistorical(e.actor, e.args?.text ?? '', e.ts, e.seq);
-      if (anchor) logEl.scrollTop = anchor.offsetTop - offset;
-      added = fresh.length;
+      marker.remove();               // out before pinView measures, or it could be the anchor
+      added = insertPage(r.entries);
+      if (!added && !noMoreHistory) logEl.prepend(marker);
     }
     marker.remove();
     if (noMoreHistory) {

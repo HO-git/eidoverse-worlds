@@ -648,7 +648,7 @@ export class WorldAgent {
       if (this.closed) return reject(new Error("agent closed"));
       const ws = new WebSocket(this.url);
       this.ws = ws;
-      const timeout = setTimeout(() => reject(new Error("join timeout")), 8000);
+      const timeout = setTimeout(() => reject(new Error("the world didn't answer the join within 8 seconds")), 8000);
       // `agent: true` is not a capability — it changes nothing about what this
       // body may do. It exists so the world can SAY who it is talking to.
       // Knowing whether the thing across the table thinks in tokens or neurons
@@ -692,7 +692,10 @@ export class WorldAgent {
             if (!this.joined) {
               this.closed = true;
               clearTimeout(timeout);
-              reject(new Error(String(msg.error ?? "join refused")));
+              // The world's own words, as the cause inside whatever sentence
+              // carries this (travel's, for one).
+              const said = String(msg.error ?? "").trim().replace(/\.+$/, "");
+              reject(new Error(said ? `the world refused the join: ${said}` : "the world refused the join without giving a reason"));
             } else {
               // A mid-life refusal (insufficient rank, a bad moderation
               // target, being kicked…). Verbs are fire-and-forget, so this is

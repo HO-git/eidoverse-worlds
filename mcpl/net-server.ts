@@ -37,6 +37,7 @@ import {
   CHAT, EIDO, CAP, tags, capabilityMatches, MCPL_ADVERTISEMENT, FEATURE_SETS,
 } from "./declaration.ts";
 import { WorldAgent } from "./agent.ts";
+import { shown } from "../shared/shown.js";
 import { toolList, handleTool, type ToolCtx } from "./tools.ts";
 import { pingDelivery, type WirePing } from "./ping-wire.ts";
 import { MANIFEST_WITH_REVISION, ManifestAnnouncer } from "./manifest.ts";
@@ -341,9 +342,11 @@ class Session {
    *  via isError text; it is kept because it is the right answer for any
    *  JSON-RPC lane and re-adding one should not have to re-derive it. */
   private classifyJoinFailure(e: unknown): { fatal: boolean; code: number; why: string } {
+    // The tool lane's sentence says which case it is, so the message is the
+    // cause alone (the code keeps the JSON-RPC name).
     if (e instanceof JoinDeclined)
-      return { fatal: false, code: -32017, why: `channel not permitted: ${(e as Error).message}` };
-    return { fatal: true, code: -32024, why: `channel open failed: ${(e as Error).message}` };
+      return { fatal: false, code: -32017, why: (e as Error).message };
+    return { fatal: true, code: -32024, why: (e as Error).message };
   }
 
   /** §3.2.5: never half-attached — the old body is gone, so the honest state
@@ -366,12 +369,12 @@ class Session {
     // founding, so removing the capability requirement for this lane narrows
     // nothing — it just stops demanding a token plain MCP cannot hold.
     if (this.mcplClient && !this.granted(CAP.channelsLifecycle))
-      return { ok: false, code: -32002, why: `capability denied: ${CAP.channelsLifecycle}` };
+      return { ok: false, code: -32002, why: `your host hasn't granted this door ${CAP.channelsLifecycle}, which travel needs, and calling again won't change that; if you need it, ask whoever runs your host` };
     if (!joinAllowed(this.auth, target))
-      return { ok: false, code: -32017, why: `channel not permitted: world "${target}" is not in this credential's join policy` };
+      return { ok: false, code: -32017, why: `world "${target}" is not in this credential's join policy; worlds marks the worlds you may travel to` };
     const founding = !(await worldExists(target));
     if (founding && !this.auth.create)
-      return { ok: false, code: -32023, why: `unknown channel: world "${target}" does not exist (founding requires create authority)` };
+      return { ok: false, code: -32023, why: `no world named "${target}" exists, and this credential can't found one; worlds lists the worlds that exist` };
     return { ok: true, founding };
   }
 
@@ -398,7 +401,11 @@ class Session {
         // prepare states the epoch this transition WOULD commit to.
         metadata: { epoch: this.epoch + 1, ...(founding ? { created: true } : {}) },
       } as ChannelDescriptor;
-      let accepted = false;
+      // Which refusal it was: a host that said no, one that answered with an
+      // error, or one that gave no answer in time, which a later try can get
+      // past. The timeout rejects with its own error, so the catch can tell.
+      let accepted = false, declined = "";
+      const noAnswer = new Error("no answer within 5 seconds");
       try {
         const res = await Promise.race([
           // 🔴 PREPARE ASKS; IT DOES NOT ANNOUNCE THE DEPARTURE (adversarial
@@ -417,17 +424,23 @@ class Session {
           this.conn.sendRequest(method.CHANNELS_CHANGED, {
             added: [proposed],
           }) as Promise<{ results?: { id: string; accepted?: boolean }[] }>,
-          new Promise<never>((_, rej) => setTimeout(() => rej(new Error("host did not answer channels/changed")), 5_000)),
+          new Promise<never>((_, rej) => setTimeout(() => rej(noAnswer), 5_000)),
         ]);
         // No itemized result = no objection expressible = accepted (§14.5 only
         // REQUIRES the itemized form of hosts whose policy can reject).
         const mine = res?.results?.find((r) => r.id === `world:${w}`);
         accepted = mine ? mine.accepted !== false : true;
+        declined = `your host declined the move to "${w}"`;
       } catch (e) {
         console.log(`[${ts()}] [mcpl:${this.auth.id}] join "${w}" declined at prepare: ${(e as Error).message}`);
         accepted = false;
+        // The log line above keeps the JSON-RPC code that mcpl-core's RpcError
+        // puts before the host's words; the agent gets the words alone.
+        declined = e === noAnswer
+          ? `your host didn't confirm the move to "${w}" within 5 seconds, so trying again may work`
+          : `your host didn't accept the move to "${w}" (${(e as Error).message.replace(/^RPC error -?\d+: /, "")})`;
       }
-      if (!accepted) throw new JoinDeclined(`host declined channel world:${w}`);
+      if (!accepted) throw new JoinDeclined(declined);
     }
     // ── COMMIT (§3.2.3d-g) ────────────────────────────────────────────────
     // The epoch increments only once the new attachment is LIVE: it names the
@@ -884,7 +897,7 @@ class Session {
               if (!this.toolsAllowed()) {
                 // -32601: the method is not available to THIS host, which is the
                 // honest shape — not an error about the tool's arguments.
-                this.conn.sendError(req.id, -32601, "tools are not granted to this host");
+                this.conn.sendError(req.id, -32601, "your host hasn't granted this door the tools capability, so the call didn't run, and calling it again won't change that; if you need it, ask whoever runs your host");
                 break;
               }
               this.conn.sendResponse(req.id, await handleTool(this.toolCtx(), String(params.name), (params.arguments ?? {}) as Record<string, any>));
@@ -919,7 +932,7 @@ class Session {
               // ungranted ⇒ as if never advertised), then a granted publish
               // keeps #125's failure path (-32023 on a publish that errored).
               if (!this.capAllowed(CAP.channelsPublish)) {
-                this.conn.sendError(req.id, -32003, "channels.publish not granted");
+                this.conn.sendError(req.id, -32003, "your host hasn't granted this door channels.publish, so nothing was posted, and posting again won't change that; if you need it, ask whoever runs your host");
                 break;
               }
               const pub = this.handlePublish(params as unknown as ChannelsPublishParams);
@@ -929,7 +942,7 @@ class Session {
             }
             case method.CHANNELS_OPEN: {
               if (!this.capAllowed(CAP.channelsLifecycle)) {
-                this.conn.sendError(req.id, -32003, "channels.lifecycle not granted");
+                this.conn.sendError(req.id, -32003, LIFECYCLE_NOT_GRANTED);
                 break;
               }
               // The host's channel_open tool performs the server-side open op
@@ -943,7 +956,7 @@ class Session {
                 const cid = p.channelId?.startsWith("world:") ? p.channelId.slice(6) : undefined;
                 const adr = p.type === "world" ? p.address?.world : undefined;
                 if (cid && adr && cid !== adr) {
-                  this.conn.sendError(req.id, -32602, `channelId "${p.channelId}" and address.world "${adr}" name different channels`);
+                  this.conn.sendError(req.id, -32602, `channelId ${shown(p.channelId)} and address.world ${shown(adr)} name different worlds, so nothing was opened; name one world, in either field or in both`);
                   break;
                 }
               }
@@ -1011,11 +1024,14 @@ class Session {
             }
             case method.CHANNELS_CLOSE: {
               if (!this.capAllowed(CAP.channelsLifecycle)) {
-                this.conn.sendError(req.id, -32003, "channels.lifecycle not granted");
+                this.conn.sendError(req.id, -32003, LIFECYCLE_NOT_GRANTED);
                 break;
               }
               const p = params as { channelId?: string };
-              if (p.channelId !== this.channelId) { this.conn.sendError(req.id, -32023, `unknown channel: ${p.channelId}`); break; }
+              if (p.channelId !== this.channelId) {
+                this.conn.sendError(req.id, -32023, `unknown channel: this connection's channel is "${this.channelId}", and the request named ${shown(p.channelId)}, so nothing was closed`);
+                break;
+              }
               // The agent shuts their door: ambient chatter stops; mentions
               // and walk-ups still get through (a knock is not chatter).
               this.channelOpen = false;
@@ -1111,7 +1127,9 @@ class Session {
     // is answered, not dropped — the host learns the boundary. (The verb
     // returns a result rather than throwing, so the honest signal rides here;
     // the caller maps it to -32023.)
-    if (params.channelId !== this.channelId) return { delivered: false, error: `unknown channel: ${params.channelId}` };
+    if (params.channelId !== this.channelId) {
+      return { delivered: false, error: `unknown channel: this connection's channel is "${this.channelId}", and the publish named ${shown(params.channelId)}, so nothing was posted` };
+    }
     const text = (params.content ?? [])
       .filter((b): b is { type: "text"; text: string } => b.type === "text")
       .map((b) => b.text).join("\n").trim();
@@ -1140,11 +1158,13 @@ class Session {
 
   private async travelTool(target: string) {
     const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
+    // Every refusal before the detach leaves the body where it was.
+    const stayed = `travel refused, so you're still in "${this.agent.world}": `;
     if (!WORLD_NAME_RE.test(target))
-      return { content: [{ type: "text", text: `travel refused: "${target}" is not a valid world name` }], isError: true };
+      return { content: [{ type: "text", text: `${stayed}${shown(target)} isn't a valid world name; a name is 1 to 64 lowercase letters, digits, _ or -` }], isError: true };
     if (target === this.agent.world) return text(`Already in "${target}".`);
     const gate = await this.travelGate(target);
-    if (!gate.ok) return { content: [{ type: "text", text: `travel refused: ${gate.why}` }], isError: true };
+    if (!gate.ok) return { content: [{ type: "text", text: `${stayed}${gate.why}` }], isError: true };
     try {
       await this.joinWorld(target, gate.founding);
     } catch (e) {
@@ -1158,8 +1178,8 @@ class Session {
       return { content: [{ type: "text", text: f.fatal
         // Say plainly that the seat is gone. An agent told only "travel
         // failed" would keep issuing verbs into a closed connection.
-        ? `travel failed past the point of no return: ${f.why}. Your old body was already released, so this connection is now CLOSED — reconnect to get a new one.`
-        : `travel refused: ${f.why}` }], isError: true };
+        ? `travel failed past the point of no return: ${f.why}. Your old body was already released, so this connection is now CLOSED; your host has to reconnect to the door for a new body.`
+        : `${stayed}${f.why}` }], isError: true };
     }
     // Who learns what, and it is ASYMMETRIC by host class — the old
     // "same as the channels/open lane" note described a lane that no
@@ -1233,6 +1253,9 @@ function refuseWithGuidance(ws: WebSocket, why: string) {
  *  from an attach failure: nothing has moved, so the caller answers -32017 and
  *  leaves the connection exactly where it was. */
 class JoinDeclined extends Error {}
+
+/** channels/open and channels/close, refused for a host without the grant. */
+const LIFECYCLE_NOT_GRANTED = "your host hasn't granted this door channels.lifecycle, so no channel was opened or closed, and calling again won't change that; if you need it, ask whoever runs your host";
 
 /** Does this world already exist? The MCPL door is a SEPARATE PROCESS from the
  *  sequencer, so this asks over the same HTTP surface every client uses: /geom

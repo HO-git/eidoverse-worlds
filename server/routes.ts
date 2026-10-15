@@ -21,10 +21,11 @@ import { wantsKtx2, KTX2_KEY } from "../shared/ktx2.js";
 import { LOD_RECIPE, lodVariantPath, lodVerdictKind, lodVerdictFinal } from "./store-variants.ts";
 import { hnSessions, hnJti, sessionFromCookie, saveSessions, SESSION_TTL_MS, HN_ISSUER_KEY, HN_ISS, HN_AUD, HN_LOGIN_URL, HN_REQUIRE_LOGIN } from "./auth.ts";
 import { verifyToken } from "./aid1.ts";
-import { resolveLibFile } from "./lint.ts";
+import { resolveLibFile, libraryPath, onLadder } from "./lint.ts";
 import { summarizeGlb } from "./geometry.ts";
 import { worlds, getWorld, type World } from "./world.ts";
 import { handleUpload, optStatus, rebuildAsset } from "./upload.ts";
+import { serveHeightmapExport, heightRange } from "./heightmap.ts";
 import { defsPayload, avatarDefs, animationDefs } from "./defs.ts";
 import { tickStats } from "./tick.ts";
 import { entryBusStats } from "./events.ts";
@@ -193,16 +194,11 @@ export function animationRoster(): { name: string; path: string; size: number }[
   // named clip; an unresolvable path is refused loudly and the discovered
   // roster stands. Non-path metadata (tags, doc) rides /defs, not here —
   // this roster stays the prefetcher's byte-budget shape. Resolution walks
-  // the clip ladder above (resolveLibFile is the glb/vrm resolver and
-  // deliberately doesn't know .vrma or PATCH_DIR).
+  // the clip ladder above: the same path parsing and ladder as the model
+  // resolver, for .vrma, so a clip is listed only where /library serves it.
   const resolveClip = (lib: string): string | null => {
-    const rel = normalize(lib).replace(/^\/+/, "");
-    if (rel.includes("..") || !/\.vrma$/i.test(rel)) return null;
-    for (const base of LADDER) {
-      const p = normalize(join(base, rel));
-      if (p.startsWith(base) && existsSync(p)) return p;
-    }
-    return null;
+    const rel = libraryPath(lib, /\.vrma$/i);
+    return rel === null ? null : onLadder(rel);
   };
   const defs = animationDefs();
   for (const [name, d] of Object.entries(defs)) {
@@ -656,6 +652,31 @@ const ROUTES: Route[] = [
     // world log: public reads. Presence names are the same ids every join
     // snapshot already hands out; spectators and renderers appear as nothing
     // here exactly as they do in-world.
+    // A world's ground as a 16-bit grayscale PNG (server/heightmap.ts) — the export half of heightmap terrain,
+    // to edit in an image editor or Blender and bring back with POST /upload?as=heightmap. Public like the
+    // world log it is read from; never creates a world. ?res= samples a side (default 257); ?format=json
+    // answers the height range alone.
+    match: (u) => u.pathname === "/heightmap",
+    handler: ({ req, url, srv }) => {
+      const name = url.searchParams.get("world") ?? "commons";
+      if (!/^[a-z0-9_-]{1,64}$/i.test(name)) return new Response("bad world name", { status: 400 });
+      if (!worlds.has(name) && !existsSync(join(WORLDS_DIR, name, "log.jsonl"))) return new Response("no such world", { status: 404 });
+      const t = getWorld(name).state.terrain;
+      if (!t) return new Response("this world has no terrain (it is flat)", { status: 404 });
+      if (url.searchParams.get("format") === "json") return Response.json({ ...heightRange(t as Record<string, unknown>), world: name });
+      // bounded work on the serving thread, gated BEFORE the work (server/heightmap.ts serveHeightmapExport)
+      const ip = req.headers.get("x-real-ip") ?? srv?.requestIP?.(req)?.address ?? "?";
+      const out = serveHeightmapExport(t as Record<string, unknown>, Number(url.searchParams.get("res") ?? 257), name, ip);
+      if (!out.ok) return new Response(out.error, { status: out.status, headers: { "retry-after": String(out.retryAfter) } });
+      const { png, meta } = out;
+      return new Response(png, { headers: {
+        "content-type": "image/png", "cache-control": "no-store",
+        "content-disposition": `attachment; filename="${name}-heightmap.png"`,
+        "x-terrain-min": String(meta.min), "x-terrain-max": String(meta.max), "x-terrain-size": String(meta.size),
+      } });
+    },
+  },
+  {
     match: (u) => u.pathname === "/worlds",
     handler: () => {
       const names = new Set<string>(worlds.keys());

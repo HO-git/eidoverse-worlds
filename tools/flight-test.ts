@@ -686,6 +686,28 @@ console.log('\nDEFAULT-DENY -- a compatible rig is evidence, never permission');
   const wingless = { boneNames: ['hips', 'spine', 'head'] };
   check('a grant does not make a wingless body fly',
         !resolveFlight(withRights({ role: 'owner', fly: true }), { identity: 'm', avatar: wingless }).enabled);
+  // Each denial's reason, by the branch that gives it: who acts, and what the
+  // body lacks, in the names a wearer knows.
+  const reasonOf = (r: any, avatar: any = av) =>
+    resolveFlight(withRights(r), { identity: 'm', ...(avatar ? { avatar } : {}) }).reason ?? '';
+  const granted = { role: 'owner', fly: true };
+  check('no rights says they have not arrived, and what to do if they never do',
+        /haven't arrived/.test(reasonOf(null)) && /ask whoever runs it/.test(reasonOf(null)), reasonOf(null));
+  check('no grant names the grant verb and that the owner sends it, to themselves too',
+        /its owner grants it, to themselves too/.test(reasonOf({ role: 'owner', fly: false })) &&
+        /grant \{id: <your id>, fly: true\}/.test(reasonOf({ role: 'owner', fly: false })), reasonOf({ role: 'owner', fly: false }));
+  check('a wingless body is told it has no wing bones', /no wing bones/.test(reasonOf(granted, wingless)), reasonOf(granted, wingless));
+  const oneChain = { boneNames: ['Hip', 'Spine02', 'Head', 'L_Wing_Upper', 'L_Wing_Upper_1', 'L_Wing_Upper_2', 'L_Wing_Upper_3'] };
+  check('four wing bones in one chain are counted as such, not called too few',
+        /wings have 4 bone\(s\) in 1 chain\(s\)/.test(reasonOf(granted, oneChain)) && !/too few/.test(reasonOf(granted, oneChain)),
+        reasonOf(granted, oneChain));
+  const coreless = { boneNames: ['Head', 'L_Wing_Upper', 'L_Wing_Upper_1', 'R_Wing_Upper', 'R_Wing_Upper_1'] };
+  check('missing core bones are named as a wearer knows them (hips, spine)',
+        /missing: hips, spine\)/.test(reasonOf(granted, coreless)), reasonOf(granted, coreless));
+  check('no bone list is its own reason, in both providers',
+        /bones aren't known/.test(reasonOf(granted, null)) &&
+        /bones aren't known/.test(resolveFlight(devFlightProvider({ allow: ['m'] }), { identity: 'm' }).reason ?? ''),
+        reasonOf(granted, null));
   // Live, not captured: revoking grounds a body that was already flying.
   {
     let rights: any = { role: 'builder', fly: true };

@@ -134,6 +134,14 @@ export type Destination = { x: number; y: number; z: number; reach: number; labe
   /** a region: only places to stand inside it count, anywhere in it */
   inside?: (x: number, z: number) => boolean };
 
+/** How far a named room's walkable floor may sit from its declared height —
+ *  in world metres, the walking body's tolerance: the body does not scale
+ *  with the thing, so neither does this. */
+export const ROOM_FLOOR_EPS = 0.1;
+/** A seat is reached from beside it: the body's own standoff (world metres)
+ *  plus the seat's half-width, which IS the model's and scales with it. */
+export const SEAT_STANDOFF = 0.7, SEAT_HALF = 0.3;
+
 /** Where to walk to reach a place. A region: anywhere on its floor, the
  *  middle preferred. A seat: the floor beside it (not the seat's own surface
  *  — the body sits by mounting it), the nearest floor below the seat. A door
@@ -148,12 +156,15 @@ export function destinationOf(e: PlaceHolder, p: Place): Destination {
     // whatever clear floor it has, not only round its middle
     const half = Math.hypot(p.max![0] - p.min![0], p.max![2] - p.min![2]) * s / 2;
     const room = { ...p, min: [p.min![0], -Infinity, p.min![2]] as Vec3, max: [p.max![0], Infinity, p.max![2]] as Vec3 };
-    return { x: mid[0], y: mid[1], z: mid[2], reach: Math.max(0.6, half), label, above: 0.1 * s, below: 0.1 * s,
+    return { x: mid[0], y: mid[1], z: mid[2], reach: Math.max(0.6, half), label, above: ROOM_FLOOR_EPS, below: ROOM_FLOOR_EPS,
       inside: (x, z) => inRegion(e, room, [x, 0, z]) };
   }
   const w = toWorld(e, p.at!);
   // a seat's point is where hips rest, at or a little above the seat's
-  // surface: the floor beside it is the nearest one below — at any scale
-  if (p.kind === "seat") return { x: w[0], y: w[1] - 0.05 * s, z: w[2], reach: Math.max(1, s), label, above: 0 };
+  // surface: the floor beside it is the nearest one below. The margin that
+  // keeps the seat's own surface out is the model's (an authoring error grows
+  // with the thing; never less than 5cm) — it only looks below the seat, so
+  // it can't pick another storey over the floor beside it.
+  if (p.kind === "seat") return { x: w[0], y: w[1] - 0.05 * Math.max(1, s), z: w[2], reach: SEAT_STANDOFF + SEAT_HALF * s, label, above: 0 };
   return { x: w[0], y: w[1], z: w[2], reach: 0.6, label };
 }

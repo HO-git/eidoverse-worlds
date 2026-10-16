@@ -1687,7 +1687,8 @@ export class WorldAgent {
     return out;
   }
 
-  private terrainRev = 0;
+  private terrainRev = 0;       // build generation: bumped when a terrain request starts
+  private navTerrainRev = 0;    // committed terrain generation: route grids key on this
   /** A heightmap terrain received but not yet buildable — its grid has not arrived. The last ground stands
    *  (never noise in its place); tick() retries the grid, and the arrival builds THIS bag, once. */
   private pendingTerrain: { args: any; rev: number; grid: string } | null = null;
@@ -1718,6 +1719,7 @@ export class WorldAgent {
     this.pendingTerrain = null;
     const t = (globalThis as any).makeTerrain({ ...args, layers: [] });
     this.terrain = shape ? { heightAt: shapedHeightAt(t.heightAt, args) } : t;
+    this.navTerrainRev++;       // only committed ground invalidates a route grid
     this.water = waterParams(args);
     const waterKey = this.water ? JSON.stringify([this.water.level, args.size, args.water]) : null;
     if (waterKey !== this.waterKey) { this.waterKey = waterKey; this.endFloat(); }
@@ -3013,7 +3015,7 @@ export class WorldAgent {
       // seated body's y is not where its feet will be
       const feet = { x: this.pos.x, y: this.pos.y, z: this.pos.z };
       // a grid is good until the colliders or the terrain change
-      const navKey = `${collidersGeneration()}|${this.terrainRev}`;
+      const navKey = `${collidersGeneration()}|${this.navTerrainRev}`;
       if (this.navGrid?.gen !== navKey) this.navGrid = { gen: navKey, grid: makeNavGrid(probe) };
       const grid = this.navGrid.grid;
       const nav = inWorld(this.world, () => {
@@ -3245,8 +3247,6 @@ export class WorldAgent {
   /** What the route planner has learned about this world's columns, good
    *  until the colliders change (physics.ts collidersGeneration). */
   private navGrid: { gen: string; grid: ReturnType<typeof makeNavGrid> } | null = null;
-  /** Bumped when the terrain is rebuilt: route grids read it. */
-  private terrainRev = 0;
   /** How close counts as reaching an intermediate waypoint of the walk under way. */
   private legTolerance = 0;
   /** Set from a join until its support registrations land (see the join). */

@@ -135,7 +135,26 @@ const escapeRx = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 let pageCursor = null;              // next page is everything below this seq; null = from now
 let loadingOlder = false;
 let noMoreHistory = false;
+let trimmedThrough = -1;            // highest seq the MAX_LINES trim has removed
 const MAX_SKIP_PAGES = 25;          // pages of already-shown lines walked per scroll
+
+/** Keep the log to MAX_LINES rows, dropping from the top. A trimmed row is
+ *  history again, not "already shown": its seq leaves renderedSeqs so paging
+ *  brings it back, and if the backward walk had already passed it, the walk
+ *  starts over from the present (skipping what is still on screen) instead of
+ *  stepping over the new hole. */
+function trimLog() {
+  while (logEl.children.length > MAX_LINES) {
+    const row = logEl.firstElementChild;
+    if (row.dataset.seq !== undefined) {
+      const seq = +row.dataset.seq;
+      renderedSeqs.delete(seq);
+      if (seq > trimmedThrough) trimmedThrough = seq;
+      if (pageCursor !== null && seq >= pageCursor) { pageCursor = null; noMoreHistory = false; }
+    }
+    row.remove();
+  }
+}
 
 /** Put one paged-in line where it belongs: straight after the last row that
  *  is older than it. NOT "before the first row that is newer" — a spoken row
@@ -184,9 +203,14 @@ function pinView() {
 function insertPage(entries) {
   const fresh = (entries ?? []).filter((e) => typeof e.seq === 'number' && !renderedSeqs.has(e.seq));
   if (!fresh.length) return 0;
+  // a re-join's fill can land below the pinned row; a reader who was
+  // following the end must still be, not left with the newest lines below
+  // the fold and live-follow stopped
+  const following = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 48;
   const restore = pinView();
   for (const e of fresh) insertHistorical(e.actor, e.args?.text ?? '', e.ts, e.seq);
   restore();
+  if (following) logEl.scrollTop = logEl.scrollHeight;
   return fresh.length;
 }
 
@@ -277,7 +301,10 @@ const renderedSeqs = new Set();
 
 export function logChat(who, text, kind = '', meta = {}) {
   if (typeof meta.seq === 'number' && meta.seq >= 0) {
-    if (renderedSeqs.has(meta.seq)) return;
+    // ...or trimmed off the top: a re-join's window can replay such a line,
+    // and appending it would put it under hours of newer talk. Paging slots
+    // it back where it belongs.
+    if (renderedSeqs.has(meta.seq) || meta.seq <= trimmedThrough) return;
     renderedSeqs.add(meta.seq);
   }
   // the VR quad reads the tail of the log from here — every line, merged
@@ -348,7 +375,7 @@ export function logChat(who, text, kind = '', meta = {}) {
       +(line.dataset.tsn ?? 0) - +(prev.dataset.tsn ?? 0) < 90_000;
     line.classList.toggle('cont', near);
   } else logEl.appendChild(line);
-  while (logEl.children.length > MAX_LINES) logEl.removeChild(logEl.firstChild);
+  trimLog();
 
   account(line, { who, text, merged: false,
     newlyPinged: line.dataset.kind === 'mention', wasAtBottom });
@@ -1200,7 +1227,7 @@ export function logWhisper({ from, to, text, echo }) {
   applyFilter(line);
   const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 48;
   logEl.appendChild(line);
-  while (logEl.children.length > MAX_LINES) logEl.removeChild(logEl.firstChild);
+  trimLog();
 
   if (!echo) {
     const c = convos.get(other);

@@ -146,6 +146,9 @@ console.log("the reader's view holds still while rows land above it");
   let scroll = 0;
   Object.defineProperty(logEl, "scrollTop", { get: () => scroll, set: (v) => { scroll = v; }, configurable: true });
   const LOG_TOP = 100, ROW = 20;
+  // and a height: happy-dom's 0/0 would read as "following the bottom"
+  Object.defineProperty(logEl, "scrollHeight", { get: () => logEl.children.length * ROW, configurable: true });
+  Object.defineProperty(logEl, "clientHeight", { get: () => 200, configurable: true });
   const realRect = Element.prototype.getBoundingClientRect;
   Element.prototype.getBoundingClientRect = function (this: Element) {
     if (this === logEl) return { top: LOG_TOP, bottom: LOG_TOP + 200, height: 200 } as DOMRect;
@@ -205,6 +208,128 @@ console.log("a reconnect's new window does not leave a hole");
     await r2(5); await settle();
     return shownIn(el2).length === 0;
   })());
+}
+
+console.log("lines the log trimmed off the top come back when paging");
+{
+  // 600 says arrive live (#601–#1200); the log keeps 400 rows, so #601–#800
+  // are trimmed from the top. They are history now, not "already shown":
+  // scrolling up must page them back in, in order, between #600 and #801.
+  // A visitor spoke once at #650; the fair window keeps that line, so a
+  // re-join's window replay offers #650 again after it was trimmed.
+  const { logChat, logEl } = await freshChat();
+  const t0 = Date.now() - 3_600_000;
+  const log: any[] = [];
+  for (let s = 1; s <= 1200; s++) log.push(say(s, s === 650 ? "visitor" : s % 2 ? "cairn" : "mythos", t0 + s * 1000));
+  setLog(log);
+  for (const e of log.slice(600)) logChat(e.actor, e.args.text, "", { seq: e.seq, ts: e.ts });
+  check("precondition: the log trimmed to #801–#1200", shownIn(logEl)[0] === "#801" && rowsOf(logEl).length === 400,
+    `${shownIn(logEl)[0]}, ${rowsOf(logEl).length} rows`);
+  const win = windowOf(log);
+  check("precondition: the re-join window holds the trimmed #650", win.some((m) => m.seq === 650));
+  for (const m of win) logChat(m.actor, m.text, "", { seq: m.seq, ts: m.ts });
+  check("a trimmed line replayed by a re-join window is not appended at the bottom",
+    shownIn(logEl).at(-1) === "#1200" && !shownIn(logEl).includes("#650"), shownIn(logEl).slice(-3).join(" "));
+  await scrollUp(logEl);
+  const afterOne = shownIn(logEl);
+  check("the first scroll-up brings back the newest trimmed line", afterOne.includes("#800"), afterOne.slice(0, 3).join(" "));
+  check("…and nothing older than the trimmed lines", !afterOne.includes("#600"), afterOne.slice(0, 3).join(" "));
+  await scrollToTop(logEl);
+  const final = shownIn(logEl);
+  const want = log.map((e) => e.args.text);
+  check("every say comes back exactly once, in world order",
+    final.length === want.length && final.join(" ") === want.join(" "),
+    `${final.length} of ${want.length}; ${final.slice(598, 603).join(" ")}`);
+}
+
+console.log("a trim after paging does not strand the walk below a new hole");
+{
+  // the reader paged back to the beginning, then live talk trimmed the log
+  // down to 400 again — taking the paged rows with it. The walk's cursor
+  // sits at the beginning; the next scroll-up must start over from the
+  // present rather than declare the world exhausted.
+  const { logChat, logEl } = await freshChat();
+  const t0 = Date.now() - 3_600_000;
+  const log: any[] = [];
+  for (let s = 1; s <= 450; s++) log.push(say(s, s % 2 ? "cairn" : "mythos", t0 + s * 1000));
+  setLog(log);
+  for (const e of log.slice(400)) logChat(e.actor, e.args.text, "", { seq: e.seq, ts: e.ts });
+  await scrollToTop(logEl);
+  check("precondition: paged to the beginning", shownIn(logEl).length === 450);
+  const more: any[] = [];
+  for (let s = 451; s <= 470; s++) more.push(say(s, "cairn", t0 + s * 1000));
+  setLog([...log, ...more]);
+  for (const e of more) logChat(e.actor, e.args.text, "", { seq: e.seq, ts: e.ts });
+  check("precondition: the live lines trimmed the paged rows away", shownIn(logEl)[0] === "#71", shownIn(logEl)[0]);
+  await scrollToTop(logEl);
+  const final = shownIn(logEl);
+  check("scrolling up again refills them, once each, in order",
+    final.length === 470 && isSorted(final) && final[0] === "#1", `${final.length}, first ${final[0]}`);
+}
+
+console.log("a reader following the bottom keeps following through a re-join fill");
+{
+  // the same fixed layout as above, with scrollHeight/clientHeight and a
+  // browser's clamping: a 60-row view (1200px) over 20px rows. The reader is
+  // at the end when the socket drops; the re-join's resync lands rows BELOW
+  // the first visible row, which the pin holds still — pushing the newest
+  // lines below the fold. A reader who was following must still be.
+  const { logChat, logEl, resyncChatAfter } = await freshChat();
+  const LOG_TOP = 100, ROW = 20, VIEW = 1200;
+  const height = () => logEl.children.length * ROW;
+  let scroll = 0;
+  Object.defineProperty(logEl, "scrollTop", { get: () => scroll,
+    set: (v) => { scroll = Math.max(0, Math.min(v, height() - VIEW)); }, configurable: true });
+  Object.defineProperty(logEl, "scrollHeight", { get: height, configurable: true });
+  Object.defineProperty(logEl, "clientHeight", { get: () => VIEW, configurable: true });
+  const realRect = Element.prototype.getBoundingClientRect;
+  Element.prototype.getBoundingClientRect = function (this: Element) {
+    if (this === logEl) return { top: LOG_TOP, bottom: LOG_TOP + VIEW, height: VIEW } as DOMRect;
+    if (this.parentElement === logEl) {
+      const i = [...logEl.children].indexOf(this);
+      const top = LOG_TOP + i * ROW - scroll;
+      return { top, bottom: top + ROW, height: ROW } as DOMRect;
+    }
+    return realRect.call(this);
+  };
+  try {
+    const t0 = Date.now() - 3_600_000;
+    const log: any[] = [];
+    for (let s = 1; s <= 300; s++) log.push(say(s, s % 2 ? "cairn" : "mythos", t0 + s * 1000));
+    setLog(log);
+    for (const e of log.slice(0, 200)) logChat(e.actor, e.args.text, "", { seq: e.seq, ts: e.ts });
+    logEl.scrollTop = 1e9;                           // clamped: the reader is at the end
+    const gap = () => logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight;
+    check("precondition: the reader is at the bottom", gap() === 0, `${gap()}px`);
+    await resyncChatAfter(200); await settle();
+    check("precondition: the fill landed below the view", shownIn(logEl).length === 300, `${shownIn(logEl).length}`);
+    check("the reader is still at the bottom after the fill", gap() < 1, `${gap()}px above the end`);
+
+    // …and a reader who had scrolled away is NOT yanked down
+    const { logChat: lc2, logEl: el2, resyncChatAfter: r2 } = await freshChat();
+    let scroll2 = 0;
+    const h2 = () => el2.children.length * ROW;
+    Object.defineProperty(el2, "scrollTop", { get: () => scroll2,
+      set: (v) => { scroll2 = Math.max(0, Math.min(v, h2() - VIEW)); }, configurable: true });
+    Object.defineProperty(el2, "scrollHeight", { get: h2, configurable: true });
+    Object.defineProperty(el2, "clientHeight", { get: () => VIEW, configurable: true });
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      if (this === el2) return { top: LOG_TOP, bottom: LOG_TOP + VIEW, height: VIEW } as DOMRect;
+      if (this.parentElement === el2) {
+        const i = [...el2.children].indexOf(this);
+        const top = LOG_TOP + i * ROW - scroll2;
+        return { top, bottom: top + ROW, height: ROW } as DOMRect;
+      }
+      return realRect.call(this);
+    };
+    for (const e of log.slice(0, 200)) lc2(e.actor, e.args.text, "", { seq: e.seq, ts: e.ts });
+    scroll2 = 1000;                                  // reading mid-log
+    const reading = rowsOf(el2).find((c) => c.getBoundingClientRect().bottom > LOG_TOP)!;
+    const was = reading.getBoundingClientRect().top;
+    await r2(200); await settle();
+    check("a reader scrolled up stays on the row they were reading",
+      reading.getBoundingClientRect().top === was && scroll2 === 1000, `${was} → ${reading.getBoundingClientRect().top}`);
+  } finally { Element.prototype.getBoundingClientRect = realRect; }
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

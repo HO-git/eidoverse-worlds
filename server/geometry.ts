@@ -425,8 +425,12 @@ export async function summarizeGlb(absPath: string): Promise<GeomSummary | null>
  *  rather than a path, because its caller is a client of that route.
  *  Triangle-list primitives only: strips, fans, lines and points contribute
  *  nothing (three's GLTFLoader turns strips/fans into lists; none ship here).
+ *  `building` is the model's own description of itself when a scene node
+ *  carries one in its glTF extras (rooms, portals, seats, arrivals — what
+ *  mcpl/places.ts reads named places from), parsed if it was stored as a
+ *  JSON string, as Blender's exporter stores custom properties.
  *  null when parsing is unavailable or the bytes are not a readable GLB. */
-export async function collisionTriangles(bytes: Uint8Array): Promise<{ positions: Float32Array; indices: Uint32Array } | null> {
+export async function collisionTriangles(bytes: Uint8Array): Promise<{ positions: Float32Array; indices: Uint32Array; building?: unknown } | null> {
   const io = await getIO();
   if (!io) return null;
   let doc: any;
@@ -465,5 +469,12 @@ export async function collisionTriangles(bytes: Uint8Array): Promise<{ positions
     }
   }
   if (!idx.length) return null;
-  return { positions: new Float32Array(pos), indices: new Uint32Array(idx) };
+  let building: unknown;
+  for (const node of inScene) {
+    const b = node.getExtras?.()?.building;
+    if (b == null) continue;
+    try { building = typeof b === "string" ? JSON.parse(b) : b; } catch { /* not ours to repair */ }
+    if (building) break;
+  }
+  return { positions: new Float32Array(pos), indices: new Uint32Array(idx), ...(building ? { building } : {}) };
 }

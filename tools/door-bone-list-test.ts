@@ -45,7 +45,7 @@ console.warn = (...args: unknown[]) => { warned.push(args.map(String).join(' '))
 console.log('\nA FAILED READ');
 let r = await ag.takeOff();
 check('take_off says the bones aren\'t known, not that the skeleton lacks them',
-  /no bone list available/.test(text(r)) && !/hip|spine|head/i.test(text(r)), text(r));
+  /bones aren't known/.test(text(r)) && !/hip|spine|head/i.test(text(r)), text(r));
 check('the failed read is not kept as an empty list', ag.bodyBoneNames === null);
 check('the failure goes to the door\'s log', warned.some((l) => /couldn't read the bones of mythos-wings\.vrm: 503/.test(l)), warned.join(' | '));
 r = await ag.foldWings(true);
@@ -88,7 +88,7 @@ bench.avatar = 'unread.vrm';
 bench.flightCap = devFlightProvider({ allow: ['mythos'], bones: WINGED });
 r = await bench.takeOff();
 check("a bench provider doesn't fly an unread body on its constructor's rig",
-  !/took off/.test(text(r)) && /no bone list available/.test(text(r)), text(r));
+  !/took off/.test(text(r)) && /bones aren't known/.test(text(r)), text(r));
 
 console.log('\nAN AVATAR CHANGE');
 const worn: any = new WorldAgent({ name: 'mythos', world: 'bone-bench' });
@@ -100,7 +100,7 @@ worn.setAvatar('wingless.vrm');
 serve = DOWN;
 r = await worn.takeOff();
 check("after a swap the old body's bones aren't used: the new body's are unknown until read",
-  worn.bodyBoneNames === null && /no bone list available/.test(text(r)), text(r));
+  worn.bodyBoneNames === null && /bones aren't known/.test(text(r)), text(r));
 
 // A no-op until the fetch is made, so a read served from a cache fails the check rather than the run.
 let release: () => void = () => {};

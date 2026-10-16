@@ -4,6 +4,9 @@
 import { createHash } from "node:crypto";
 import { planStructure } from "../shared/structure.js";
 import { terrainParams, makeHeightField } from "../shared/terrainmath.js";
+import { shapedHeightAt, waterParams as levelParams } from "../shared/terrainshape.js";
+import { analyzeWater } from "../shared/waterkind.js";
+import "./heightmap.ts";   // registers the heightmap grid loader the shaped terrain reads
 import { effectiveWorldTransform } from "../mcpl/effective.ts";
 import { since } from "../client/lib/motioneval.js";
 import { effectiveSky, effectiveClock } from "../shared/forecast.js";
@@ -23,10 +26,32 @@ const clients = new WeakMap<Client, Cache>();
 const worlds = new WeakMap<World, { seq: number; entities: any[]; environment: any; signature: string; envSource: string }>();
 const failures = new WeakMap<World, { seq: number; detail: string }>();
 
+// The world's one water level (shared/terrainshape.js) and what it fills, analysed on the terrain's own
+// vertex grid (shared/waterkind.js): only wet vertices travel, as [index, kind 0 still|1 river|2 ocean,
+// flowX, flowZ, waveSpeed, toShoreX, toShoreZ, shore metres]. Depth is the level minus the heights sent.
+function projectWater(terrain: any, height: (x: number, z: number) => number, size: number, n: number) {
+  const w = levelParams(terrain);
+  if (!w) return null;
+  const raw = terrain?.water ?? {};
+  const a = analyzeWater(height, size, { level: w.level, kind: raw.kind, flow: raw.flow }, n);
+  const K: Record<string, number> = { still: 0, river: 1, ocean: 2 };
+  const r3 = (v: number) => Math.round(v * 1000) / 1000;
+  const cells: number[] = [];
+  for (let k = 0; k < a.depth.length; k++) {
+    if (!(a.depth[k] > 0) || a.comp[k] < 0) continue;
+    const b = a.bodies[a.comp[k]]; if (!b) continue;
+    const river = b.kind === "river", ocean = b.kind === "ocean";
+    cells.push(k, K[b.kind] ?? 0, river ? r3(a.flow[2 * k]) : 0, river ? r3(a.flow[2 * k + 1]) : 0, river ? r3(b.waveSpeed ?? 0) : 0,
+      ocean ? r3(a.toShore[2 * k]) : 0, ocean ? r3(a.toShore[2 * k + 1]) : 0, r3(Math.min(a.shore[k], 999)));
+  }
+  return { level: w.level, color: w.color, opacity: w.opacity, cells };
+}
+
 export function projectEnvironment(state: any) {
   const p = terrainParams(state.terrain ?? { size: 200, amplitude: 0 });
   if (!(p.size > 0 && p.size <= 10000)) throw Error("terrain size unsupported");
-  const n = Math.min(128,Math.max(64,Math.round(Number(state.terrain?.segments)||64))), height = makeHeightField(p), heights: number[] = [];
+  // The shaped ground (placed features, heightmaps) over the base law — what the browser and agents stand on.
+  const n = Math.min(128,Math.max(64,Math.round(Number(state.terrain?.segments)||64))), height = shapedHeightAt(makeHeightField(p), state.terrain ?? {}), heights: number[] = [];
   for (let z = 0; z <= n; z++) for (let x = 0; x <= n; x++)
     heights.push(height((x / n - .5) * p.size, (z / n - .5) * p.size));
   const tint=state.terrain?.color??state.terrain?.layers?.[0]?.color??0x70815a;
@@ -35,6 +60,7 @@ export function projectEnvironment(state: any) {
     color: typeof l?.color === "string" ? parseInt(l.color.replace("#", ""), 16) : Number(l?.color ?? 0x70815a),
     repeat: Number.isFinite(l?.repeat) ? l.repeat : 16 })) : [];
   return { terrain: { size: p.size, segments: n, heights, color:Number.isFinite(color)?color:0x70815a, authored: !!state.terrain, layers },
+    water: projectWater(state.terrain, height, p.size, n),
     sky: state.sky ?? null, grass: state.grass ?? null, flora: projectFlora(state.grass,height) };
 }
 

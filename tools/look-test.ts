@@ -27,9 +27,19 @@ ok(out.includes("at (3.0, -4.0)"), "finite coordinates render normally");
 // Heading (#225): every person line says which way they face, from pose.yaw
 // (world yaw: 0 faces +z, which bearing() names S; +π/2 faces +x, E).
 const lineFor = (id: string, text: string) => text.split("\n").find((l) => l.includes(`- ${id}:`)) ?? "";
+// the direction must end at a word boundary, so a cardinal row fails on a diagonal (S ≠ SE)
+const facingIs = (line: string, want: string) => new RegExp(`facing ${want}(?![A-Za-z])`).test(line);
 for (const [yaw, want] of [[0, "S"], [Math.PI / 2, "E"], [Math.PI, "N"], [-Math.PI / 2, "W"], [Math.PI / 4, "SE"]] as const) {
   ag.people.set("apricot", { id: "apricot", avatar: "", agent: false, pose: { p: [3, 0, -4], yaw, speed: 0, clip: "idle" } });
-  ok(lineFor("apricot", ag.look()).includes(`standing, facing ${want}`), `yaw ${yaw.toFixed(2)} reads as facing ${want}`);
+  const l = lineFor("apricot", ag.look());
+  ok(l.includes("standing, facing") && facingIs(l, want), `yaw ${yaw.toFixed(2)} reads as facing ${want}`);
+}
+ok(!facingIs("standing, facing SE", "S") && !facingIs("standing, facing NW", "N"), "a cardinal match does not accept a diagonal");
+// knocked over / lying down: the clip changes, the standing yaw stays — omit facing
+for (const clip of ["ragdoll", "lie"]) {
+  ag.people.set("apricot", { id: "apricot", avatar: "", agent: false, pose: { p: [3, 0, -4], yaw: Math.PI / 2, speed: 0, clip } });
+  const l = lineFor("apricot", ag.look());
+  ok(l.includes("apricot: 5.0m") && !l.includes("facing"), `a ${clip} body's line omits facing`);
 }
 // the same formatter as our own line: a body facing the same way reads the same
 ag.people.set("apricot", { id: "apricot", avatar: "", agent: false, pose: { p: [3, 0, -4], yaw: 0.6, speed: 0, clip: "idle" } });
@@ -49,7 +59,7 @@ ag.mounts.set("apricot", { to: "bench-1", slot: "seat" });
 const rider = lineFor("apricot", ag.look());
 ok(rider.includes("on bench-1") && !rider.includes("facing"), "a rider's line omits facing");
 ag.mounts.delete("apricot");
-ok(lineFor("apricot", ag.look()).includes("facing E"), "dismounted, facing returns");
+ok(facingIs(lineFor("apricot", ag.look()), "E"), "dismounted, facing returns");
 
 console.log(`\n${passed} passed, 0 failed`);
 process.exit(0);   // the agent keeps a timer alive; the checks are done

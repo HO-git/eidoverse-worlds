@@ -73,7 +73,8 @@ export const TOOLS = [
   { name: "body_state", description: "Perceive your body or another present participant (who; omitted or 'self' means you). Default summary reports posture, wings, position, held poses/reaches and freshness. detail:'bones' adds published quaternions and derived world joint positions; 'contacts' adds named world-space contact points, outward normals, self-relative positions and ready-to-use reach targets; 'all' includes both. Optional window_ms (0–5000) measures reconstructed joint motion and endpoint residuals over a short window; a snapshot alone does not measure stability. Optional points filters contacts, e.g. ['chest_front','hand_l','hand_r']. Geometry evaluates the shared VRMA posture clips, published bone rotations and dependent limb reaches. Missing clips or unresolved/cyclic reach dependencies return incomplete geometry. Contacts are bone-bound anatomical estimates; full renderer blending, emotes and springbones are not reproduced. Reading never moves or touches anyone. Use returned reachTarget with reach to track a named point; use selfPosition to plan offsets around your own body.", inputSchema: { type: "object", properties: { who: { type: "string" }, detail: { type: "string", enum: ["summary", "bones", "contacts", "all"] }, points: { type: "array", items: { type: "string" }, maxItems: Object.keys(CONTACT_POINTS).length }, window_ms: { type: "integer", minimum: 0, maximum: 5000 } } } },
   { name: "look", description: "Text-tier perception: where you are, who's present and what they're doing, every placed thing with distance/bearing, and chat since you last looked.", inputSchema: { type: "object", properties: {} } },
   { name: "snapshot", description: "A rendered image from the world (spectator browser on a GPU host). Slower than look — use when spatial/visual detail matters. view: 'first' (default) is your avatar's eyes — you are not in frame; 'third' is an over-the-shoulder chase view — your body and what's ahead of it; 'selfie' faces you from in front — your avatar, framed.", inputSchema: { type: "object", properties: { view: { type: "string", enum: ["first", "third", "selfie"] } } } },
-  { name: "walk_to", description: "Walk (or run) to world coordinates. Griddled structures route through walkable openings; sealed, oversized, or conflicting local routes return a reason without walking through walls. This is horizontal centerline routing with a 0.5m feet-to-step obstruction band, not full-body clearance or general mesh navigation. Placed models are solid, as they are to people: you stand on their floors, climb their stairs and are stopped by their walls and furniture — and walk_to routes through them: round furniture, through doorways, up and down stairs, onto other storeys (pick one with y). A destination with nowhere to stand, or no way there, is refused with the reason; a walk something unexpected stops ends early and says where. Main follows terrain support; identified-floor support requires the separate standing implementation. Default arrival tolerance is 0.01m, so short positioning moves are honored. Optional tolerance (0–0.4 metres) changes how close to the requested point counts as arrived. This is destination accuracy, not distance from another body.", inputSchema: { type: "object", properties: { x: { type: "number" }, z: { type: "number" }, y: { type: "number", description: "which floor at the destination: the highest walkable surface no more than a step (0.55m) above this height — 0 for a ground floor, an upper storey's floor height for that storey. Omit for your own storey if the destination has one, else its lowest floor (the ground floor of another building, the ground under a balcony)." }, run: { type: "boolean" }, tolerance: { type: "number", minimum: 0, maximum: 0.4 } }, required: ["x", "z"] } },
+  { name: "walk_to", description: "Walk (or run) to a named place, a thing, a person, or world coordinates. Griddled structures route through walkable openings; sealed, oversized, or conflicting local routes return a reason without walking through walls. This is horizontal centerline routing with a 0.5m feet-to-step obstruction band, not full-body clearance or general mesh navigation. Placed models are solid, as they are to people: you stand on their floors, climb their stairs and are stopped by their walls and furniture — and walk_to routes through them: round furniture, through doorways, up and down stairs, onto other storeys (pick one with y). A destination with nowhere to stand, or no way there, is refused with the reason; a walk something unexpected stops ends early and says where. Main follows terrain support; identified-floor support requires the separate standing implementation. Default arrival tolerance is 0.01m, so short positioning moves are honored. Optional tolerance (0–0.4 metres) changes how close to the requested point counts as arrived. This is destination accuracy, not distance from another body.", inputSchema: { type: "object", properties: { to: { type: "string", description: "a named destination instead of coordinates: \"thing/place\" (e.g. \"lookout/balcony\"), a place's name or label alone (\"reading room\" — the nearest one), a thing alone (its entrance), or a person. look lists each thing's places." }, x: { type: "number" }, z: { type: "number" }, y: { type: "number", description: "which floor at the destination: the walkable surface nearest this height, no more than a step (0.55m) above it — 0 for a ground floor, an upper storey's floor height for that storey. Omit for your own storey if the destination has one, else its lowest floor (the ground floor of another building, the ground under a balcony)." }, run: { type: "boolean" }, tolerance: { type: "number", minimum: 0, maximum: 0.4 } } } },
+  { name: "name_place", description: "Give a spot a name, so you and everyone else can walk_to it by name. Names where you stand (or x/z, with y optional: the floor there nearest your height), on the thing you are in or the nearest placed thing (or `on`), in that thing's own frame — it moves with it. Written to the thing's `places` component (builder rights; answers once the world accepts or refuses it): a name can be added, re-pointed or retired any time, and covers places the model itself declares. remove: true retires a name.", inputSchema: { type: "object", properties: { name: { type: "string" }, label: { type: "string", description: "how it reads, e.g. \"the window seat\"" }, on: { type: "string", description: "the thing's id; default: the thing you are in, else the nearest within 15m" }, x: { type: "number" }, y: { type: "number" }, z: { type: "number" }, remove: { type: "boolean" } }, required: ["name"] } },
   // ---- FLIGHT (upstream's flight arc, merged 2026-09-02; behind the `fly`
   // grant — the agent refuses on the ground it stands on). Deliberately no
   // file_plan: a sortie is these tools called in sequence from the pilot's own
@@ -321,18 +322,40 @@ export const HANDLERS: Record<string, ToolHandler> = {
 
   },
   walk_to: async (ag, a, ctx, name) => {
-      const x = Number(a.x), z = Number(a.z), tolerance = a.tolerance ?? 0.01;
+      // `to` names the destination (a place, a thing, a person); x/z/y are
+      // coordinates. A named place carries its own floor and reach.
+      let x = Number(a.x), z = Number(a.z), y = a.y != null ? Number(a.y) : undefined, label: string | null = null;
+      let near: { reach?: number; above?: number; below?: number; inside?: (x: number, z: number) => boolean } = {};
+      if (typeof a.to === "string") {
+        const d = ag.destination(a.to);
+        if ("refusal" in d) return text(d.refusal);
+        ({ x, z } = d); y = d.y; near = { reach: d.reach, above: d.above, below: d.below, inside: d.inside }; label = d.label;
+      }
+      const tolerance = a.tolerance ?? 0.01;
       if (![x, z, tolerance].every(Number.isFinite) || tolerance < 0 || tolerance > 0.4)
-        return { content: [{ type: "text", text: "walk_to needs finite x/z and tolerance between 0 and 0.4 metres" }], isError: true };
-      if (a.y != null && !Number.isFinite(Number(a.y)))
+        return { content: [{ type: "text", text: "walk_to needs finite x/z and tolerance between 0 and 0.4 metres" }], isError: true };   // walkTo's own words (WALK_ARGS_REASON)
+      if (y != null && !Number.isFinite(y))
         return { content: [{ type: "text", text: "walk_to's y, when given, must be a finite height in metres" }], isError: true };
       // This request's own refusal (its plan may wait for geometry still loading).
       const receipt = { refusal: null as string | null };
-      const arrived = await ag.walkTo(x, z, Boolean(a.run), 90_000, tolerance, a.y != null ? Number(a.y) : undefined, receipt);
-      return text(arrived
-        ? `arrived at (${ag.pos.x.toFixed(3)}, ${ag.pos.z.toFixed(3)}); ${Math.hypot(ag.pos.x - x, ag.pos.z - z).toFixed(3)}m from requested destination`
-        : receipt.refusal ?? ag.walkStopReason ?? ag.walkStall ?? "walk interrupted or timed out");
+      const arrived = await ag.walkTo(x, z, Boolean(a.run), 90_000, tolerance, y, near, receipt);
+      if (!arrived) return text(receipt.refusal ?? ag.walkStopReason ?? ag.walkStall ?? "walk interrupted or timed out");
+      const here = ag.placesAt([ag.pos.x, ag.pos.y, ag.pos.z])[0];
+      return text(label
+        ? `arrived at ${label}: (${ag.pos.x.toFixed(2)}, ${ag.pos.y.toFixed(2)}, ${ag.pos.z.toFixed(2)})${here ? `, in ${here.place.label ?? here.place.name}` : ""}`
+        : `arrived at (${ag.pos.x.toFixed(3)}, ${ag.pos.z.toFixed(3)}); ${Math.hypot(ag.pos.x - x, ag.pos.z - z).toFixed(3)}m from requested destination${here ? `, in ${here.place.label ?? here.place.name} (${here.entity.id}/${here.place.name})` : ""}`);
 
+  },
+  name_place: async (ag, a) => {
+      // coordinates: x and z together (y optional: the floor there nearest
+      // your own height), or none — never some of them silently dropped
+      const given = [a.x, a.y, a.z].some((v: unknown) => v != null);
+      if (given && ![a.x, a.z].every((v: unknown) => typeof v === "number" && Number.isFinite(v)))
+        return { content: [{ type: "text", text: "name_place's coordinates need x and z (y is optional: the floor there nearest your own height) — or leave them all out to name where you stand" }], isError: true };
+      if (a.y != null && !(typeof a.y === "number" && Number.isFinite(a.y)))
+        return { content: [{ type: "text", text: "name_place's y, when given, must be a finite height in metres" }], isError: true };
+      const at = given ? { x: a.x as number, z: a.z as number, y: a.y as number | undefined } : undefined;
+      return text(await ag.namePlace(String(a.name ?? ""), { on: a.on, label: a.label, remove: a.remove === true, at }));
   },
   face: async (ag, a, ctx, name) => {
       if (a.target) {

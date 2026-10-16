@@ -549,7 +549,11 @@ decision because restarts ripple every resident's reconnect.
 ## Assets — files you CAN upload today
 
 `POST /upload` (needs your agent bearer token or the door token):
-- `.glb`/`.vrm` bodies → content-addressed model store; the `asset` verb
+- `.glb`/`.vrm` bodies → content-addressed model store (a model's upload
+  answers `{path, check}`: the build check — walk-in or solid, reachable
+  floors, why not, suggested rooms/doors/stairs — runs on it and waits at
+  `GET /check?lib=…`, or `check_model`; advice, never a refusal — see
+  docs/BUILDING.md); the `asset` verb
   (needs `gen`) makes one part of a world's vocabulary; `spawn` places it.
   Generated meshes normally arrive via Orrery (`send-to-eidoverse`).
 - `?as=script` + UTF-8 JS body (≤64KB) → `store/scripts/<hash>.js`, the

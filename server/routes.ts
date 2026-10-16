@@ -21,7 +21,7 @@ import { wantsKtx2, KTX2_KEY } from "../shared/ktx2.js";
 import { LOD_RECIPE, lodVariantPath, lodVerdictKind, lodVerdictFinal } from "./store-variants.ts";
 import { hnSessions, hnJti, sessionFromCookie, saveSessions, SESSION_TTL_MS, HN_ISSUER_KEY, HN_ISS, HN_AUD, HN_LOGIN_URL, HN_REQUIRE_LOGIN } from "./auth.ts";
 import { verifyToken } from "./aid1.ts";
-import { resolveLibFile, libraryPath, onLadder } from "./lint.ts";
+import { resolveLibFile, libraryPath, libraryRel, onLadder } from "./lint.ts";
 import { summarizeGlb } from "./geometry.ts";
 import { worlds, getWorld, type World } from "./world.ts";
 import { handleUpload, optStatus, rebuildAsset } from "./upload.ts";
@@ -1004,20 +1004,11 @@ const ROUTES: Route[] = [
   {
     match: (u) => u.pathname.startsWith("/library/"),
     handler: ({ req, url }) => {
-      // url.pathname keeps percent-encoding, so a library file whose name has
-      // a space ("Frosted Glass Window Seat.glb" → %20) was looked up on disk
-      // with the literal "%20" and 404'd for every client. Decode once, with
-      // three guards: a raw path that already names a file wins (a model
-      // literally called "box%41.glb" must not turn into "boxA.glb"); a
-      // malformed sequence or a NUL keeps the raw path; and a decoded ".."
-      // segment is refused outright — normalize()+startsWith(base) further
-      // down is a string-prefix check, so "..%2flibrary-backup%2fx" would
-      // otherwise reach a SIBLING directory whose name starts with the base's.
-      let rel = url.pathname.slice("/library/".length);
-      if (rel.includes("%") && !existsSync(join(LIBRARY_DIR, rel)) && !existsSync(join(OPT_DIR, rel))) {
-        try { const d = decodeURIComponent(rel); if (!d.includes("\0")) rel = d; } catch {}
-        if (rel.split(/[\/\\]/).includes("..")) return new Response("forbidden", { status: 403 });
-      }
+      // url.pathname keeps percent-encoding; libraryRel() decodes it to the
+      // disk name (and refuses a decoded ".."), the same function lint, /geom,
+      // boxes and the rosters resolve through, so they agree on every name.
+      const rel = libraryRel(url.pathname.slice("/library/".length));
+      if (rel === null) return new Response("forbidden", { status: 403 });
       // optimized mirror first (draco+webp): same path, ~30x smaller
       const versioned = url.searchParams.has("v") || rel.startsWith("store/"); // content-addressed = immutable
       // Deliberate upstream forks win over EVERYTHING (upstream-patched/

@@ -153,11 +153,16 @@ export function setAvatarDetail(v) {
 }
 if (avatarDetail !== 'auto') setLodBias(AVATAR_DETAILS[avatarDetail]);
 
-// ---- the resident's master switch (local patch) -----------------------------
+// ---- the resident's master switch -------------------------------------------
 // 'keep full detail': the governor never sheds and the cruise never steps
 // pixels — a builder looking at the world wants it as it is, not smooth at
 // any cost. Turning it on hands back everything already shed, at once.
 // Persisted like the dials above; loading grace and the calm signal still run.
+// What it overrides today: all eight levers, INCLUDING the emergency pixels
+// rung below 26fps that a pinned render scale still yields to (§22k, "a
+// crisis outranks a preference, only while it lasts"). Whether this switch
+// should outrank that crisis rule is an open question for the maintainers;
+// record the decision here.
 const FD_KEY = 'ew-full-detail';
 let fullDetail = (() => { try { return localStorage.getItem(FD_KEY) === '1'; } catch { return false; } })();
 export const getFullDetail = () => fullDetail;

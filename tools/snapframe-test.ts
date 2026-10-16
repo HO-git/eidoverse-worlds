@@ -108,7 +108,8 @@ check("snapshot tool advertises pitch, dist and height", ["pitch", "dist", "heig
 async function viaTool(args: Record<string, unknown>) {
   const before = asked.length;
   const r = await rpc("tools/call", { name: "snapshot", arguments: args });
-  return { img: r.result?.content?.[0]?.type === "image", got: asked.length > before ? asked.at(-1) : undefined };
+  const note = r.result?.content?.find((c: any) => c.type === "text")?.text as string | undefined;
+  return { img: r.result?.content?.[0]?.type === "image", note, got: asked.length > before ? asked.at(-1) : undefined };
 }
 let t = await viaTool({});
 check("tool, no framing → renderer sees only {view}", t.img && same(t.got, { view: "first" }), JSON.stringify(t.got));
@@ -118,6 +119,13 @@ t = await viaTool({ view: "selfie", dist: 1.2, height: 0.8 });
 check("tool, dist+height → forwarded", t.img && same(t.got, { view: "selfie", dist: 1.2, height: 0.8 }), JSON.stringify(t.got));
 t = await viaTool({ view: "third", dist: 500, pitch: "junk", height: false });
 check("tool, out-of-range / junk / boolean → clamped or dropped", t.img && same(t.got, { view: "third", dist: 30 }), JSON.stringify(t.got));
+check("tool, fields the view uses → no note", t.note === undefined, String(t.note));
+t = await viaTool({ view: "selfie", pitch: 20 });
+check("tool, pitch with selfie → image plus an ignored note", t.img && t.note === "pitch applies only to view first; ignored", String(t.note));
+t = await viaTool({ view: "first", dist: 2, height: 1 });
+check("tool, dist+height with first → named as ignored", t.img && t.note === "dist and height apply only to views third and selfie; ignored", String(t.note));
+t = await viaTool({ height: 1 });
+check("tool, height with the default view → named as ignored", t.img && t.note === "height applies only to views third and selfie; ignored", String(t.note));
 
 const before = asked.length;
 const h = await fetch(`http://127.0.0.1:${PORT}/snap?world=${WORLD}&follow=framer&view=third&dist=abc&height=-5&pitch=10`);

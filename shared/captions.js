@@ -59,6 +59,8 @@
 // of CJK is ~720 UTF-8 bytes and that is fine — the bag is folded state, not
 // a verb payload under the 8 KB comp cap.
 
+import { shown } from './shown.js';
+
 export const CAPTIONS_MAX_LINES = 20;
 export const CAPTION_TEXT_MAX = 240;
 export const CAPTIONS_TITLE_MAX = 120;
@@ -70,18 +72,6 @@ const KNOWN_KEYS = new Set(['session', 'n', 'gen', 'title', 'mediaTime', 'window
 
 function cleanText(s, max) {
   return String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
-}
-
-/** An arg as a refusal quotes it back: its JSON, cut short, or "nothing".
- *  Numbers print as themselves, since JSON writes NaN and Infinity as null,
- *  and a value JSON can't write (a BigInt, a cycle) is quoted as a string
- *  rather than throwing out of a refusal. */
-function shown(v) {
-  if (v === undefined) return 'nothing';
-  let s;
-  try { s = typeof v === 'number' || typeof v === 'bigint' ? String(v) : JSON.stringify(v) ?? String(v); }
-  catch { s = Object.prototype.toString.call(v); }
-  return s.length > 60 ? `${s.slice(0, 59)}…` : s;
 }
 
 /** A line's parts and what keeps them from being a line: the one statement

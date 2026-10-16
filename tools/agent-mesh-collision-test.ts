@@ -13,68 +13,19 @@
 //      same triangles;
 //   2. against an isolated sequencer, a real WorldAgent in a two-storey
 //      building — standing on a raised floor, climbing a stair to the upper
-//      floor and back down, staying downstairs under the upper floor, and
-//      stopping (and saying so) at a wall instead of walking through it.
+//      floor and back down, staying downstairs under the upper floor,
+//      standing up and rejoining upstairs, and stopping (saying so) at
+//      something solid that appears in its way. Routing round things is
+//      navgrid-test's subject.
 process.env.AGENT_BODY_ENGINE = "verlet";
 process.env.WORLD_TOKEN = "";
-const { Document, NodeIO } = await import("@gltf-transform/core");
-const { KHRDracoMeshCompression, ALL_EXTENSIONS } = await import("@gltf-transform/extensions");
-const draco3d = (await import("draco3dgltf")).default;
 const { collisionTriangles } = await import("../server/geometry.ts");
+const { FLOOR, UPPER, boxes, buildGlb, boxMesh } = await import("./two-storey-fixture.ts");
+const { Document, NodeIO } = await import("@gltf-transform/core");
+const { ALL_EXTENSIONS } = await import("@gltf-transform/extensions");
+type Box = [number, number, number, number, number, number];
 const { scratchSequencer, mkCheck, sleep } = await import("./harness.ts");
 const { check, tally } = mkCheck();
-
-// ---- a two-storey building, as boxes ------------------------------------------
-// Model frame, Y up, door on +Z. Ground floor top 0.30 (a raised floor: the
-// sinking case). A straight stair of 15 solid treads (rise 0.1875, going 0.25)
-// climbs the east side toward -Z onto an upper floor at 3.30; the well is
-// open above the stair and railed on its west edge.
-const FLOOR = 0.3, UPPER = 3.3, RISE = 0.1875, GOING = 0.25;
-type Box = [number, number, number, number, number, number];   // minX minY minZ maxX maxY maxZ
-const boxes: Box[] = [
-  [-3, 0, -3, 3, FLOOR, 3],                                   // raised ground floor
-  [-3, FLOOR, -3, -2.8, 6.3, 3], [2.8, FLOOR, -3, 3, 6.3, 3],  // west, east walls
-  [-3, FLOOR, -3, 3, 6.3, -2.8],                              // back wall
-  [-3, FLOOR, 2.8, -0.6, 6.3, 3], [0.6, FLOOR, 2.8, 3, 6.3, 3], [-0.6, 2.4, 2.8, 0.6, 6.3, 3], // front, door gap
-  [-2.8, 3.1, -2.8, 1.6, UPPER, 2.8],                         // upper floor west of the well
-  [1.6, 3.1, -2.8, 2.8, UPPER, -2.0],                         // ...and the strip the stair arrives on
-  [1.55, UPPER, -2.0, 1.6, UPPER + 1.0, 1.5],                 // railing along the well
-];
-for (let i = 1; i <= 15; i++) boxes.push([1.6, FLOOR, 1.5 - i * GOING, 2.8, FLOOR + i * RISE, 1.5 - (i - 1) * GOING]);
-
-function boxMesh(list: Box[]) {
-  const pos: number[] = [], idx: number[] = [];
-  for (const [x0, y0, z0, x1, y1, z1] of list) {
-    const b = pos.length / 3;
-    for (const x of [x0, x1]) for (const y of [y0, y1]) for (const z of [z0, z1]) pos.push(x, y, z);
-    // corners: index = xi*4 + yi*2 + zi
-    for (const f of [[0, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1], [2, 3, 7, 6], [0, 2, 6, 4], [1, 5, 7, 3]])
-      idx.push(b + f[0], b + f[1], b + f[2], b + f[0], b + f[2], b + f[3]);
-  }
-  return { pos: new Float32Array(pos), idx: new Uint32Array(idx) };
-}
-
-/** A GLB whose one mesh sits under a translated parent node (so the world
- *  matrix matters), with an orphan mesh node outside the scene. */
-async function buildGlb(list: Box[], { draco = false, lift = 0, shift = 0 } = {}) {
-  const doc = new Document();
-  const buf = doc.createBuffer();
-  const make = (l: Box[]) => {
-    const { pos, idx } = boxMesh(l);
-    return doc.createMesh().addPrimitive(doc.createPrimitive()
-      .setAttribute("POSITION", doc.createAccessor().setType("VEC3").setArray(pos).setBuffer(buf))
-      .setIndices(doc.createAccessor().setType("SCALAR").setArray(idx).setBuffer(buf)));
-  };
-  const parent = doc.createNode("lift").setTranslation([0, lift, 0]);
-  parent.addChild(doc.createNode("building").setMesh(make(list)).setTranslation([shift, 0, 0]));
-  doc.createScene("s").addChild(parent);
-  doc.createNode("orphan").setMesh(make([[50, 0, 50, 51, 1, 51]]));
-  if (draco) doc.createExtension(KHRDracoMeshCompression).setRequired(true)
-    .setEncoderOptions({ method: KHRDracoMeshCompression.EncoderMethod.SEQUENTIAL });
-  const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({
-    "draco3d.decoder": await draco3d.createDecoderModule(), "draco3d.encoder": await draco3d.createEncoderModule() });
-  return io.writeBinary(doc);
-}
 
 const bounds = (p: Float32Array) => {
   const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
@@ -156,7 +107,8 @@ try {
   for (let i = 0; i < 100 && !a.supportIds?.get("tower"); i++) await sleep(50);
   await a.supportReady();
   await sleep(300);                                     // the fit itself is a detached registration
-  const walk = async (x: number, z: number) => { const ok = await a.walkTo(x, z, false, 30_000); return ok; };
+  // y: which floor at the destination, where it has more than one (navgrid)
+  const walk = async (x: number, z: number, y?: number) => a.walkTo(x, z, false, 30_000, 0.01, y);
 
   check("starts outside, on the terrain", await walk(0, 5) && near(a.pos.y, a.heightAt(0, 5)), `y ${a.pos.y}`);
   check("walks in through the doorway onto the raised floor — feet ON it, not 0.3m under",
@@ -164,8 +116,8 @@ try {
   check("crosses the hall beneath the upper floor and stays downstairs",
     await walk(-1.5, -1.5) && near(a.pos.y, gy + FLOOR), `y ${a.pos.y.toFixed(3)}`);
   await walk(0, 2);
-  check("reaches the foot of the stair", await walk(2.2, 1.9) && near(a.pos.y, gy + FLOOR), `y ${a.pos.y.toFixed(3)}`);
-  check("climbs the stair to the upper floor", await walk(2.2, -2.4) && near(a.pos.y, gy + UPPER), `y ${a.pos.y.toFixed(3)} want ${(gy + UPPER).toFixed(3)}`);
+  check("reaches the foot of the stair", await walk(2.2, 2.4) && near(a.pos.y, gy + FLOOR), `y ${a.pos.y.toFixed(3)}`);
+  check("climbs the stair to the upper floor", await walk(2.2, -2.4, gy + UPPER) && near(a.pos.y, gy + UPPER), `y ${a.pos.y.toFixed(3)} want ${(gy + UPPER).toFixed(3)}`);
   check("walks across the upper floor, still upstairs", await walk(0, -2.4) && near(a.pos.y, gy + UPPER), `y ${a.pos.y.toFixed(3)}`);
   a.setPosture("idle");
   check("standing still upstairs does not drop it to the ground floor", near(a.pos.y, gy + UPPER), `y ${a.pos.y.toFixed(3)}`);
@@ -207,25 +159,34 @@ try {
       through && Math.abs(other.pos.z + 2) < 0.05 && near(other.pos.y, other.heightAt(0, -2)), `at (${other.pos.x.toFixed(2)}, ${other.pos.y.toFixed(3)}, ${other.pos.z.toFixed(2)})`);
     other.close();
   }
-  check("is held back by the railing at the well's edge (no walking off it)",
-    !(await walk(2.2, 0)) && a.pos.x < 1.6 && near(a.pos.y, gy + UPPER), `at (${a.pos.x.toFixed(2)}, ${a.pos.y.toFixed(2)}, ${a.pos.z.toFixed(2)})`);
-  check("...and the walk says why it stopped", /blocked at .* something solid/.test(a.walkStall ?? ""), String(a.walkStall));
-  await walk(0, -2.4);
-  check("goes back down the stair", await walk(2.2, -2.4) && await walk(2.2, 1.9) && near(a.pos.y, gy + FLOOR), `y ${a.pos.y.toFixed(3)}`);
-  check("and out the door to the terrain", await walk(0, 2) && await walk(0, 5) && near(a.pos.y, a.heightAt(0, 5)), `y ${a.pos.y.toFixed(3)}`);
-  await walk(-6, 5); await walk(-6, 0);
+  // Something solid that arrives AFTER the walk was planned: a barrier
+  // spawned across the upper floor while the body is on its way. The feet
+  // meet it (its collider is fitted like any other), and the walk ends
+  // promptly, saying where — the route planner is not the only thing
+  // standing between a body and a wall.
+  const bar = await (await fetch(`${h.BASE}/upload?name=barrier`, { method: "POST",
+    body: await buildGlb([[-1.4, 0, -0.1, 1.4, 1.4, 0.1]]) })).json() as { path: string };
+  const crossing = walk(0, 1.8);
+  await sleep(300);
+  a.verb("spawn", { id: "barrier", lib: bar.path, pos: [-1.3, gy + UPPER, -0.6], yaw: 0, collide: "box" });
   const t0 = Date.now();
-  const through = await walk(0, 0);
-  check("a straight walk at the west wall from outside stops at the wall instead of passing through it",
-    !through && a.pos.x < -3 + 0.1, `ended at x ${a.pos.x.toFixed(2)}`);
-  // 2.68m of open ground at 1.55 m/s, then the stall window: seconds, not the 30s timeout
-  check("...promptly, not at the walk timeout", Date.now() - t0 < 5_000, `${Date.now() - t0}ms`);
-
+  check("a walk that something solid blocks after it set off stops at it",
+    !(await crossing) && a.pos.z < -0.6 - 0.1 && near(a.pos.y, gy + UPPER), `at (${a.pos.x.toFixed(2)}, ${a.pos.y.toFixed(2)}, ${a.pos.z.toFixed(2)})`);
+  check("...says why it stopped", /blocked at .* something solid/.test(a.walkStall ?? ""), String(a.walkStall));
+  check("...and promptly, not at the walk timeout", Date.now() - t0 < 4_000, `${Date.now() - t0}ms`);
+  a.verb("remove", { id: "barrier" });
+  await sleep(300);
+  await walk(0, -2.4);
+  check("goes back down the stair", await walk(2.2, -2.4) && await walk(2.2, 2.4) && near(a.pos.y, gy + FLOOR), `y ${a.pos.y.toFixed(3)}`);
+  check("and out the door to the terrain", await walk(0, 2) && await walk(0, 5) && near(a.pos.y, a.heightAt(0, 5)), `y ${a.pos.y.toFixed(3)}`);
   console.log("\nwalking while a placed thing's shape is still loading:");
   {
     const { forgetMeshCache } = await import("../mcpl/agent.ts");
-    // a thin wall across the way, its model download held up 2.5s
-    const wallUp = await fetch(`${h.BASE}/upload?name=wall`, { method: "POST", body: await buildGlb([[-0.1, 0, -3, 0.1, 3, 3]]) });
+    // a closed pen 2m across, its model download held up 2.5s: there is no
+    // way into it, so a walk planned against it is refused — and one planned
+    // before it exists here walks straight in
+    const wallUp = await fetch(`${h.BASE}/upload?name=pen`, { method: "POST", body: await buildGlb([
+      [-1.1, 0, -1.1, 1.1, 3, -0.9], [-1.1, 0, 0.9, 1.1, 3, 1.1], [-1.1, 0, -1.1, -0.9, 3, 1.1], [0.9, 0, -1.1, 1.1, 3, 1.1]]) });
     const wallLib = ((await wallUp.json()) as { path: string }).path;
     const realFetch = globalThis.fetch;
     let delayed = 0;
@@ -236,13 +197,13 @@ try {
     try {
       // round the tower to the test ground east of it
       const there = await walk(-6, 0) && await walk(-6, 10) && await walk(19, 10);
-      check("(at the test ground, x 19)", there && Math.abs(a.pos.x - 19) < 0.05, `at (${a.pos.x.toFixed(2)}, ${a.pos.z.toFixed(2)})`);
+      check("(at the test ground, x 19)", there && Math.abs(a.pos.x - 19) < 0.15, `at (${a.pos.x.toFixed(2)}, ${a.pos.z.toFixed(2)})`);
       const wy = a.heightAt(20, 10);
-      a.verb("spawn", { id: "wall", lib: wallLib, pos: [20, wy, 10], yaw: 0, collide: "exact" });
+      a.verb("spawn", { id: "wall", lib: wallLib, pos: [21, wy, 10], yaw: 0, collide: "exact" });
       for (let i = 0; i < 40 && !a.entities.get("wall"); i++) await sleep(25);
       const crossed = await walk(21, 10);
-      check("a wall spawned just now, its shape still downloading: a walk at it waits, then stops at it — never passes through",
-        !crossed && a.pos.x > 19 - 0.1 && a.pos.x < 19.9 && delayed > 0, `ended at x ${a.pos.x.toFixed(2)}, ${delayed} delayed fetch(es), ${a.walkStall ?? a.walkRefusal}`);
+      check("a pen spawned just now, its shape still downloading: a walk into it waits for it, then is refused — never passes through its wall",
+        !crossed && a.pos.x > 19 - 0.15 && a.pos.x < 19.9 && delayed > 0, `ended at x ${a.pos.x.toFixed(2)}, ${delayed} delayed fetch(es), ${a.walkStall ?? a.walkRefusal}`);
 
       // a cold join: a body that left beside the wall comes back, and its
       // first walk is through the wall while the wall's shape is downloading
@@ -254,7 +215,7 @@ try {
       await a.connect();
       const pending = a.supportPending.size, from = a.pos.x;
       const back = await walk(21, 10);
-      check("rejoining beside it and walking at it at once: blocked by it too",
+      check("rejoining beside it and walking into it at once: refused too",
         Math.abs(from - 19.3) < 0.7 && !back && a.pos.x < 19.9 && delayed > 0, `ended at x ${a.pos.x.toFixed(2)}, ${pending} syncs pending at the first walk, ${delayed} delayed`);
     } finally { globalThis.fetch = realFetch; }
   }

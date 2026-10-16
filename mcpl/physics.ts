@@ -52,6 +52,7 @@ import { leafForceFor, DEFAULT_LEAF_FORCE } from "../shared/leafforce.js";
 import { bodyFrame, fromBody } from "../shared/joints.js";
 // the walking capsule's dimensions — pure module, the browser controller's own numbers
 import { colliderFor } from "../client/lib/bodyscale.js";
+import type { NavProbe } from "./navgrid.ts";
 
 const HEADLESS_CORE = fileURLToPath(new URL("./headless-core.mjs", import.meta.url));
 
@@ -178,6 +179,7 @@ export async function registerSupport(
   // re-fit unconditionally: a place moves the box, and the newest claimant's
   // transform is the freshest reading of where the thing actually is
   m.colliders.fitSupportBox(id, min, max, xform);
+  generation++;
   scopeEntry(m, id);
 }
 
@@ -204,6 +206,7 @@ export async function registerSupportGrid(
   const m = await loadSim();
   if (!m) return false;
   if (!m.colliders.fitSupportGrid(id, topGrid, xform)) return false;
+  generation++;
   scopeEntry(m, id);
   (holders.get(id) ?? holders.set(id, new Set()).get(id)!).add(holder);
   return true;
@@ -256,12 +259,17 @@ export async function registerMeshSupport(
     console.error(`[physics] mesh support ${id} abstained — fit failed:`, String(err).split("\n")[0]);
     return false;
   }
+  generation++;
   (holders.get(id) ?? holders.set(id, new Set()).get(id)!).add(holder);
   return true;
 }
 
 const WALKING = colliderFor(1);
 
+/** Bumped whenever the collider map changes (a fit, a refit, a removal):
+ *  what a route planner learned about the world is good until it moves. */
+let generation = 0;
+export const collidersGeneration = () => generation;
 /** Support ids are `<world>/<entity>…` (agent.ts): the entry belongs to that
  *  world, and queries made inside another world (inWorld) don't see it. */
 function scopeEntry(m: NonNullable<typeof simMods>, id: string) {
@@ -310,6 +318,22 @@ export function standOn(pos: { x: number; y: number; z: number }, heightAt: (x: 
   return ground;
 }
 
+/** The route planner's view of the world (mcpl/navgrid.ts): the same
+ *  surfaceUnder and resolveColliders, with the same walking capsule, that the
+ *  feet will be moved by. null while the sim is not loaded. */
+export function navProbe(heightAt: (x: number, z: number) => number): NavProbe | null {
+  if (!simMods) { void loadSim(); return null; }
+  const C = simMods.colliders, v = new simMods.THREE.Vector3();
+  return {
+    surfaceUnder: (x, z, maxY) => C.surfaceUnder(x, z, heightAt, maxY).y,
+    stand: (x, y, z) => {
+      v.set(x, y, z);
+      const ground = C.resolveColliders(v, heightAt, WALKING.r, WALKING.tall, true);
+      return { ground, push: Math.hypot(v.x - x, v.z - z) };
+    },
+  };
+}
+
 export async function removeSupport(holder: string, id: string) {
   const m = await loadSim();
   if (!m) return;
@@ -319,6 +343,7 @@ export async function removeSupport(holder: string, id: string) {
   if (hs.size) return;              // someone else is still standing on it
   holders.delete(id);
   m.colliders.removeCollider(id);
+  generation++;
 }
 
 // skeletons are per-VRM and immutable — parse each avatar file once

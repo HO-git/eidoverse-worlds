@@ -17,7 +17,8 @@ import * as TSL from "three/tsl";
 import { NoiseGate, SHORT_STINT_MS, APPROACH_REFRACT_MS, APPROACH_RADIUS, REARM_RADIUS,
   APPROACH_DWELL_MS, APPROACH_STILL_MPS, APPROACH_MAX_WAIT_MS,
   ACTIVITY_RADIUS_M, ACTIVITY_PULSE_MS, ACTIVITY_REFRESH_MS, MOVER_MIN_M } from "./denoise.ts";
-import { HeadlessBody, ReachBody, setHeightField, setWaterField, registerSupport, registerSupportGrid, registerMeshSupport, removeSupport, standOn, collidersReady, inWorld } from "./physics.ts";
+import { HeadlessBody, ReachBody, setHeightField, setWaterField, registerSupport, registerSupportGrid, registerMeshSupport, removeSupport, standOn, collidersReady, navProbe, collidersGeneration, inWorld } from "./physics.ts";
+import { makeNavGrid, NAV_SUBSTEP, NAV_NUDGE } from "./navgrid.ts";
 import { collisionTriangles } from "../server/geometry.ts";
 // FLIGHT. The same deterministic integrator the browser bench and the capture
 // path run -- one function, every runtime, per the spec's Q2 ruling.
@@ -67,8 +68,8 @@ import { makeVerdictCache, seatGateCore, nameFromAvatarPath } from "../client/li
 
 const WALK = 1.55, RUN = 4.0, TICK_MS = 100, ARRIVE = 0.01;
 const STATURE_FALLBACK = 1.7;   // metres: an ordinary adult, while a body's own height is being read
-/** Longest horizontal move between two collision checks. */
-const COLLIDE_SUBSTEP = 0.1;
+/** Collision and planner line steps share one browser-frame-sized distance. */
+const COLLIDE_SUBSTEP = NAV_SUBSTEP;
 /** A walk making less than this fraction of intended progress is stalled. */
 const STALL_PROGRESS = 0.2, STALL_TICKS = 15;
 const GRAVITY = 16;
@@ -2061,7 +2062,7 @@ export class WorldAgent {
         const next = this.legs.shift();
         if (next) {
           this.target = { x: next.x, z: next.z, run: this.target.run,
-            tolerance: this.legs.length ? 0 : this.walkTolerance };
+            tolerance: this.legs.length ? this.legTolerance : this.walkTolerance };
         } else {
           this.target = null; this.walkHeightAt = null; this.speed = 0; this.clip = "idle";
           this.walkDone?.(true); this.walkDone = null;
@@ -2940,9 +2941,13 @@ export class WorldAgent {
     return { refusal: "the body stands in a wall, with no clear point within half a metre to step out to" };
   }
 
-  walkTo(x: number, z: number, run = false, timeoutMs = 90_000, tolerance = ARRIVE,
+  /** `y`, when given, picks the floor at the destination: the highest place
+   *  to stand no more than a step above that height. Without it, the body's own storey if the
+   *  destination has a floor within a step of it, else the lowest there.
+   *  `receipt`: this request's own refusal (the plan may wait for geometry). */
+  walkTo(x: number, z: number, run = false, timeoutMs = 90_000, tolerance = ARRIVE, y?: number,
     receipt?: { refusal: string | null }): Promise<boolean> {
-    if (![x, z, tolerance].every(Number.isFinite) || tolerance < 0 || tolerance > 0.4) {
+    if (![x, z, tolerance].every(Number.isFinite) || tolerance < 0 || tolerance > 0.4 || (y != null && !Number.isFinite(y))) {
       // Not a walk request at all: the walk under way, if any, goes on.
       this.walkRefusal = WALK_ARGS_REASON;
       if (receipt) receipt.refusal = WALK_ARGS_REASON;
@@ -2954,7 +2959,7 @@ export class WorldAgent {
     this.walkStopReason = null;
     const ticket = ++this.walkTicket;
     const now = () => {
-      const p = this.walkNow(x, z, run, timeoutMs, tolerance);
+      const p = this.walkNow(x, z, run, timeoutMs, tolerance, y);
       if (receipt) receipt.refusal = this.walkRefusal;   // set synchronously by the plan
       return p;
     };
@@ -2982,12 +2987,42 @@ export class WorldAgent {
    *  geometry knows when it has been superseded. */
   private walkTicket = 0;
 
-  private walkNow(x: number, z: number, run: boolean, timeoutMs: number, tolerance: number): Promise<boolean> {
+  private walkNow(x: number, z: number, run: boolean, timeoutMs: number, tolerance: number, y?: number): Promise<boolean> {
     // Plan before touching the body, from the ground under it: a refused walk
     // leaves it seated, pinned, dragged, posed or tumbling as it was.
     const support = this.walkSupport();
     const plan = this.planWalk({ x, z }, support);
     if ("refusal" in plan) { this.walkRefusal = plan.refusal; return Promise.resolve(false); }
+    // Through placed models: a walk the structure planner leaves as one
+    // straight leg is routed against the colliders the feet will meet —
+    // round the furniture, through the door, up the stair (mcpl/navgrid.ts).
+    let legs = plan.legs, snapped = false, routed = false;
+    const probe = plan.legs.length === 1 ? navProbe((wx, wz) => this.heightAt(wx, wz)) : null;
+    if (probe) {
+      // plan from the floor under the body, not its root: a tumbling or
+      // seated body's y is not where its feet will be
+      const feet = { x: this.pos.x, y: this.pos.y, z: this.pos.z };
+      // a grid is good until the colliders or the terrain change
+      const navKey = `${collidersGeneration()}|${this.terrainRev}`;
+      if (this.navGrid?.gen !== navKey) this.navGrid = { gen: navKey, grid: makeNavGrid(probe) };
+      const grid = this.navGrid.grid;
+      const nav = inWorld(this.world, () => {
+        const fy = standOn(feet, (wx, wz) => this.heightAt(wx, wz)) ?? this.pos.y;
+        return grid.route({ x: this.pos.x, y: fy, z: this.pos.z }, { x, z, y });
+      });
+      if ("refusal" in nav) { this.walkRefusal = nav.refusal; return Promise.resolve(false); }
+      // griddled structures keep their walls out of the headless colliders,
+      // so a detour round the furniture is checked against them like any
+      // structure route; one that crosses a wall gives way to the structure
+      // planner's own legs
+      const structures = this.walkStructures(support);
+      const pts = [{ x: this.pos.x, z: this.pos.z }, ...nav.points.map((p) => ({ x: p.x, z: p.z }))];
+      const crosses = structures.length > 0 && pts.slice(1).some((p, k) => structures.some((st) => !st.clear(pts[k], p)));
+      if (!crosses) {
+        legs = nav.points.map((p) => ({ x: p.x, z: p.z }));
+        snapped = nav.snapped; routed = true;
+      }
+    }
     if (this.draggedBy) {   // deciding to walk IS breaking the dragger's hold
       this.ws?.send(JSON.stringify({ type: "bodydrag", target: this.draggedBy, end: true }));
       this.draggedBy = null;
@@ -3019,13 +3054,19 @@ export class WorldAgent {
     const supportAt = support.kind === "terrain" ? (wx: number, wz: number) => this.heightAt(wx, wz) : () => support.height;
     this.pos.y = inWorld(this.world, () => (collidersReady() ? standOn(this.pos, supportAt) : null)) ?? support.height;
     this.vy = 0; this.grounded = true; this.stallTicks = 0; this.walkStall = null;
-    this.walkTolerance = tolerance;
+    // A structure route's corners are reached exactly (its doorways are
+    // planned to the centimetre); a routed walk's may sit where something
+    // nudges the body a little, so they — and its end — count within that.
+    this.legTolerance = routed ? NAV_NUDGE : 0;
+    this.walkTolerance = routed ? Math.max(tolerance, NAV_NUDGE) : tolerance;
     // A terrain walk reads the live terrain each tick, as the planner read it;
     // a floor walk keeps the floor that admitted the route through its last tick.
     this.walkHeightAt = support.kind === "terrain" ? (wx, wz) => this.heightAt(wx, wz) : () => support.height;
-    this.legs = plan.legs.slice(0, -1).concat({ x, z });   // end on the point asked for, exactly
+    // end on the point asked for, exactly — unless it was no place to stand
+    // and the planner chose the nearest one that is
+    this.legs = snapped ? legs.slice() : legs.slice(0, -1).concat({ x, z });
     const first = this.legs.shift()!;
-    this.target = { x: first.x, z: first.z, run, tolerance: this.legs.length ? 0 : tolerance };
+    this.target = { x: first.x, z: first.z, run, tolerance: this.legs.length ? this.legTolerance : this.walkTolerance };
     return new Promise((resolve) => {
       this.walkDone = resolve;
       setTimeout(() => { if (this.walkDone === resolve) this.abandonWalk(); }, timeoutMs);
@@ -3040,6 +3081,13 @@ export class WorldAgent {
   // onto that ground or fall toward it under gravity.
   private vy = 0;
   private grounded = true;
+  /** What the route planner has learned about this world's columns, good
+   *  until the colliders change (physics.ts collidersGeneration). */
+  private navGrid: { gen: string; grid: ReturnType<typeof makeNavGrid> } | null = null;
+  /** Bumped when the terrain is rebuilt: route grids read it. */
+  private terrainRev = 0;
+  /** How close counts as reaching an intermediate waypoint of the walk under way. */
+  private legTolerance = 0;
   /** Set from a join until its support registrations land (see the join). */
   private feetSettling = false;
   private stallTicks = 0;
@@ -3075,7 +3123,9 @@ export class WorldAgent {
     return g ?? terrain(this.pos.x, this.pos.z);
   }
 
-  /** A walk pressed against something solid ends, and says so. Progress is
+  /** A walk pressed against something solid ends, and says so. Routes go
+   *  round what was there when they were planned (navgrid); this catches what
+   *  was not — a thing spawned, placed or set moving since. Progress is
    *  distance closed on the current waypoint; a body sliding along a wall it
    *  will never get past makes a little and is still stopped. */
   private noteWalkProgress(distBefore: number, intended: number) {
@@ -3087,8 +3137,8 @@ export class WorldAgent {
     const final = this.legs.length ? this.legs[this.legs.length - 1] : t;
     const short = Math.hypot(final.x - this.pos.x, final.z - this.pos.z);
     this.walkStall = `blocked at (${this.pos.x.toFixed(2)}, ${this.pos.z.toFixed(2)}), ${short.toFixed(2)}m short of ` +
-      `(${final.x.toFixed(2)}, ${final.z.toFixed(2)}): something solid is in the way. walk_to goes straight ` +
-      `through open ground and does not yet route around placed objects — give it a point you can walk to in a straight line first`;
+      `(${final.x.toFixed(2)}, ${final.z.toFixed(2)}): something solid is in the way that the route did not ` +
+      `expect (it moved or arrived after the walk was planned) — walk_to again and the route will take it into account`;
     this.stallTicks = 0;
     this.abandonWalk();
   }

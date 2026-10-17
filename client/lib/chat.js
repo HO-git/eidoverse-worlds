@@ -17,6 +17,7 @@ import { CONFIG, bus, colorFor, assignColors } from './base.js';
 // EXPORTED instead and main.js registers it — the dependency inverted rather than made
 // conditional, so there is no lite-mode flag buried in a chat file.
 import { lastWhy } from './debuglog.js';
+import { initAttention, attentionWhisper, mountAttentionControls } from './attention.js';
 import { makeFrame } from './frames.js';
 import { fsvg } from './icons.js';
 import { requestHistory } from './net.js';
@@ -977,7 +978,7 @@ function applyChatPrefs() {
   if (logEl) logEl.style.fontSize = `${chatFs}px`;
   sideEl('cols')?.classList.toggle('side-left', sideSt.pos === 'left');
 }
-let gearToggle = null, gearAnchor = null;
+let gearToggle = null, gearAnchor = null, placeGear = () => {};
 let chatFs = 14;
 const CMD_LS = 'ew-chat-md';
 let chatMd = true;   // *italic* **bold** `code` in the log — on by default (live, 09-05)
@@ -986,6 +987,26 @@ export const chatMarkdownOn = () => chatMd;
 try { chatFs = Math.min(20, Math.max(11, parseFloat(localStorage.getItem(CFS_LS)) || 14)) } catch {}
 function initChatGear() {
   const pop = frame.body.querySelector('.chat-gearpop');
+  placeGear = () => {
+    if (pop.hidden || !gearAnchor) return;
+    const a = gearAnchor.getBoundingClientRect(), f = frame.el.getBoundingClientRect();
+    const body = frame.body.getBoundingClientRect();
+    const minTop = Math.max(4, body.top - f.top + 4);
+    const bottom = Math.min(frame.el.clientHeight, body.bottom - f.top) - 4;
+    // Open below the gear when the options fit there, else UPWARD from it, its
+    // bottom edge above the gear: the compose row's gear has the log above and
+    // the frame's edge below. When neither side fits, the side with more room
+    // takes it, and a short frame scrolls the options instead of clipping them.
+    const below = a.bottom - f.top + 6, above = a.top - f.top - 6;
+    pop.style.maxHeight = 'none';
+    const height = pop.offsetHeight;
+    const roomBelow = bottom - below, roomAbove = above - minTop;
+    const down = height <= roomBelow || (height > roomAbove && roomBelow >= roomAbove);
+    const room = Math.max(1, down ? roomBelow : roomAbove);
+    pop.style.maxHeight = `${room}px`;
+    pop.style.top = `${down ? below : Math.max(minTop, above - Math.min(height, room))}px`;
+    pop.style.right = `${Math.max(4, Math.min(f.right - a.right, frame.el.clientWidth - pop.offsetWidth - 4))}px`;
+  };
   const paintPop = () => {
     pop.innerHTML = `
       <div class="gp-row"><span>text size</span>
@@ -996,6 +1017,8 @@ function initChatGear() {
       <div class="gp-row"><span>People Here</span>
         <button data-side="left" class="${sideSt.pos === 'left' ? 'on' : ''}">left</button>
         <button data-side="right" class="${sideSt.pos !== 'left' ? 'on' : ''}">right</button></div>`;
+    mountAttentionControls(pop);
+    placeGear();
   };
   pop.onclick = (e) => {
     const fs = e.target?.dataset?.fs, sd = e.target?.dataset?.side, md = e.target?.dataset?.md;
@@ -1016,11 +1039,6 @@ function initChatGear() {
     gearAnchor = anchor;
     if (!pop.hidden) {
       paintPop();
-      // UPWARD from the compose row's gear, its right edge on the gear's: the log is above, the frame's edge below
-      const a = anchor.getBoundingClientRect(), f = frame.el.getBoundingClientRect();
-      pop.style.right = `${Math.max(4, f.right - a.right)}px`;
-      pop.style.top = 'auto';
-      pop.style.bottom = `${f.bottom - a.top + 6}px`;
     }
   };
   // the gear lives at the right end of the compose box, like a settings affordance in a text field
@@ -1057,6 +1075,7 @@ function sizeInput() {
 function setInput(v) { if (!inputEl) return; inputEl.value = v; sizeInput(); }
 
 export function initChat({ send, whisper, typing, people }) {
+  initAttention({ bus, me: () => CONFIG.name, scope: () => CONFIG.world, mentions: mentionsMe });
   onSend = send;
   onWhisper = whisper ?? (() => {});
   onTyping = typing ?? (() => {});
@@ -1074,7 +1093,7 @@ export function initChat({ send, whisper, typing, people }) {
       // tab that's off-screen because the panel is too narrow"). frames.js has
       // called onResize(w, h) all along (frames.js:437); chat simply never
       // passed one. Debounced like emotebar's (emotebar.js:53).
-      onResize: () => { clearTimeout(_arrowT); _arrowT = setTimeout(() => paintTabs(), 120); },
+      onResize: () => { placeGear(); clearTimeout(_arrowT); _arrowT = setTimeout(() => paintTabs(), 120); },
   });
 
   frame.body.innerHTML = `
@@ -1225,7 +1244,9 @@ export function initChat({ send, whisper, typing, people }) {
 // you never see because you were on another tab is worse than no tabs at all.
 // The tab is for following a thread, not for hiding it.
 
-export function logWhisper({ from, to, text, echo }) {
+export function logWhisper(msg) {
+  const { from, to, text, echo } = msg;
+  attentionWhisper(msg);
   const other = echo ? to : from;
   if (!echo) lastWhisperFrom = from;
   ensureConvo(other);

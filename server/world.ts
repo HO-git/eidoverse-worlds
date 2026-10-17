@@ -71,6 +71,7 @@ export type Client = {
                        // it, and a superseded generation's messages are refused structurally —
                        // takeover retires the GENERATION, not just the socket.
                        // Deferred authored verbs capture it and recheck before committing.
+  presenceSession?: string; // `session` on arrive and snapshot.present: the joining page's id, else a token for this leg (server.ts presenceSession)
   surface?: string;    // (name, surface) session model: "world" = the embodied primary (default);
                        // anything else = an auxiliary media leg (voice, vr-hands, …) — invisible,
                        // poseless, log-mute, rtc-capable, and REAPED when its primary dies.

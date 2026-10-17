@@ -196,6 +196,13 @@ export function sendDrag(id, pos, yaw) {
   }
 }
 
+/** This page's presence session: one id for as long as the page lives, sent
+ *  with every join, so listeners can tell a reconnect (the same page, whose
+ *  utterance counter goes on) from a new page (whose counter starts again).
+ *  index.html's early socket sends the first join, with the same id. */
+const PAGE_SESSION = (globalThis.__ewPageSession ??= globalThis.crypto?.randomUUID?.()
+  ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`);
+
 export function sendJoin() {
   const id = CONFIG.renderer ? `renderer-${CONFIG.name}`
     : CONFIG.spectate ? `retina-${CONFIG.name}` : CONFIG.name;
@@ -205,6 +212,7 @@ export function sendJoin() {
     spectate: CONFIG.spectate || CONFIG.renderer,
     renderer: CONFIG.renderer,
     token: CONFIG.token,
+    session: PAGE_SESSION,
   }));
 }
 
@@ -545,6 +553,7 @@ async function handle(msg) {
       // present — and ensureRemote resets the mesh's transient expressions
       // before transplanting it into a fresh record.
       if (remotes.has(msg.id)) bus.emit('participant-teardown', msg.id);
+      bus.emit('participant-session', { id: msg.id, session: msg.session });
       ensureRemote(msg.id, msg.avatar, { agent: msg.agent, authority: true });
       logChat('*', `${msg.id} arrived`);
       bus.emit('roster');
@@ -795,6 +804,7 @@ async function onSnapshot(msg) {
   if (lastSeq >= 0) void resyncChatAfter(lastSeq);
   if (typeof msg.throughSeq === 'number' && msg.throughSeq > lastSeq) lastSeq = msg.throughSeq;
   bus.emit('net', net);
+  bus.emit('participant-sessions', msg.present ?? []);
   // #57 matrix 7: who has which aux legs live NOW (surface-transition keeps it
   // current after this). Consumers key hold-then-fallback TTS on it.
   bus.emit('surfaces', [...(msg.present ?? []),

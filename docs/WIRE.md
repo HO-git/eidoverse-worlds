@@ -111,7 +111,7 @@ Every message belongs to exactly one plane:
 - `whisper` (with `echo:true` on your own sent copy), `anim`, `puppet`,
   `bodydrag`, `caption`, `typing`, `drag`, `rtc`, `performed` — presence
   relays, shapes as sent (see §3) plus attribution stamps.
-- `snap` — `{id, follow?, view?, dist?, height?, pitch?}`: server asks a renderer leg for a PNG. The framing fields are optional and normalised by `shared/snapframe.js` on both ends; absent = the fixed default framing.
+- `snap` — `{id, follow?, view?, frame?}`: server asks a renderer leg for a PNG. `frame` is the optional framing, `{dist?, height?, pitch?}`, normalised by `shared/snapframe.js` on both ends and sent only when a field is given; absent = the fixed default framing. It is nested so that no field of the message itself is read as framing. Its fields:
   - `dist`: `third`/`selfie` only. Flat distance from the body in metres, clamped to [0.5, 30]. The camera sits behind the body for `third` and in front for `selfie`. Defaults: 3.4 for `third`, 2.6 for `selfie`.
   - `height`: `third`/`selfie` only. Camera height above the body's feet in metres, clamped to [0, 30]. Defaults: 2.1 for `third`, 1.6 for `selfie`.
   - `pitch`: `first` only. Gaze tilt in degrees, clamped to [-85, 85]; positive looks up, negative looks down. Omitted keeps the existing gaze of about −4.3° (dropped 0.6 m over 8 m).

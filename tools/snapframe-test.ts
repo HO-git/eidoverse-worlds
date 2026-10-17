@@ -8,8 +8,9 @@
 //   2. client/lib/fp_view.js — composeFirstPerson's pitch: + looks up,
 //      − looks down, omitted keeps the old gaze exactly.
 //   3. the wire — a scratch sequencer, a plain-door agent calling the
-//      snapshot tool, an HTTP /snap, and a fake renderer leg recording each
-//      `snap` it is asked for. Absent fields must put nothing new on the wire.
+//      snapshot tool, an HTTP /snap, and a fake renderer leg recording the
+//      view and framing of each `snap` it is asked for. Absent fields must
+//      put no `frame` on the wire.
 
 import { normalizeSnapFrame, SNAP_DIST, SNAP_HEIGHT, SNAP_PITCH } from "../shared/snapframe.js";
 import * as fp from "../client/lib/fp_view.js";
@@ -72,14 +73,18 @@ let up2 = false;
 for (let i = 0; i < 60 && !up2; i++) { try { await fetch(`http://127.0.0.1:${PORT}/worlds`); up2 = true; } catch { await Bun.sleep(200); } }
 if (!up2) { console.error("FATAL: scratch sequencer never came up (bun install in the repo root?)"); process.exit(2); }
 
-// fake renderer leg: answer every snap with a 1×1 PNG, remember what it asked
+// fake renderer leg: answer every snap with a 1×1 PNG, and remember its view
+// and framing, which is all this test is about (a sender may add other fields)
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 const asked: Record<string, unknown>[] = [];
 const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
 await new Promise<void>((res) => { ws.onopen = () => { ws.send(JSON.stringify({ type: "join", world: WORLD, id: "renderer-fake", spectate: true, renderer: true, token: TOKEN })); res(); }; });
 ws.onmessage = (ev) => {
   const m = JSON.parse(String(ev.data));
-  if (m.type === "snap") { const { type, id, follow, ...rest } = m; asked.push(rest); ws.send(JSON.stringify({ type: "snap-result", id, dataUrl: PNG })); }
+  if (m.type === "snap") {
+    asked.push(m.frame === undefined ? { view: m.view } : { view: m.view, frame: m.frame });
+    ws.send(JSON.stringify({ type: "snap-result", id: m.id, dataUrl: PNG }));
+  }
 };
 
 // plain-door agent over MCP stdio
@@ -112,13 +117,13 @@ async function viaTool(args: Record<string, unknown>) {
   return { img: r.result?.content?.[0]?.type === "image", note, got: asked.length > before ? asked.at(-1) : undefined };
 }
 let t = await viaTool({});
-check("tool, no framing → renderer sees only {view}", t.img && same(t.got, { view: "first" }), JSON.stringify(t.got));
+check("tool, no framing → no frame on the wire", t.img && same(t.got, { view: "first" }), JSON.stringify(t.got));
 t = await viaTool({ view: "first", pitch: -40 });
-check("tool, pitch → forwarded", t.img && same(t.got, { view: "first", pitch: -40 }), JSON.stringify(t.got));
+check("tool, pitch → forwarded, nested as frame", t.img && same(t.got, { view: "first", frame: { pitch: -40 } }), JSON.stringify(t.got));
 t = await viaTool({ view: "selfie", dist: 1.2, height: 0.8 });
-check("tool, dist+height → forwarded", t.img && same(t.got, { view: "selfie", dist: 1.2, height: 0.8 }), JSON.stringify(t.got));
+check("tool, dist+height → forwarded, nested as frame", t.img && same(t.got, { view: "selfie", frame: { dist: 1.2, height: 0.8 } }), JSON.stringify(t.got));
 t = await viaTool({ view: "third", dist: 500, pitch: "junk", height: false });
-check("tool, out-of-range / junk / boolean → clamped or dropped", t.img && same(t.got, { view: "third", dist: 30 }), JSON.stringify(t.got));
+check("tool, out-of-range / junk / boolean → clamped or dropped", t.img && same(t.got, { view: "third", frame: { dist: 30 } }), JSON.stringify(t.got));
 check("tool, fields the view uses → no note", t.note === undefined, String(t.note));
 t = await viaTool({ view: "selfie", pitch: 20 });
 check("tool, pitch with selfie → image plus an ignored note", t.img && t.note === "pitch applies only to view first; ignored", String(t.note));
@@ -129,7 +134,7 @@ check("tool, height with the default view → named as ignored", t.img && t.note
 
 const before = asked.length;
 const h = await fetch(`http://127.0.0.1:${PORT}/snap?world=${WORLD}&follow=framer&view=third&dist=abc&height=-5&pitch=10`);
-check("HTTP /snap query → normalised before the wire", h.status === 200 && asked.length > before && same(asked.at(-1), { view: "third", height: 0, pitch: 10 }), JSON.stringify(asked.at(-1)));
+check("HTTP /snap query → normalised before the wire", h.status === 200 && asked.length > before && same(asked.at(-1), { view: "third", frame: { height: 0, pitch: 10 } }), JSON.stringify(asked.at(-1)));
 
 ws.close();
 console.log(`\n${pass} passed, ${fail} failed`);

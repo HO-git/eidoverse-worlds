@@ -7,8 +7,9 @@
 // client/lib/net_snap.js does with dist / height. This runs the shipped
 // snapshot() with only the browser boundary stubbed (core.js's camera, the
 // remotes map, capture.js, fp_view.js's composer) and checks the eye and the
-// aim for third and selfie, with and without framing, and that pitch reaches
-// composeFirstPerson.
+// aim for third and selfie, with and without framing, that pitch reaches
+// composeFirstPerson, and that only the nested `frame` is read as framing: a
+// message that carries an image size's `height` keeps the default camera.
 //
 // The third-view aim's look-ahead scales with distance (4 m at the default
 // 3.4 m): a fixed 4 m look-ahead lost the body off the bottom of a close
@@ -76,17 +77,17 @@ console.log("third");
 let t = await shoot({ view: "third" });
 check("default eye: 2.1 m up, 3.4 m behind", t.ok && !!t.shot && near(t.shot.eye, at(2.1, -3.4)), t.shot ? fmt(t.shot.eye) : String(t.r));
 check("default aim: 1.2 m up, 4 m ahead (unchanged)", !!t.shot && near(t.shot.at, at(1.2, 4)), t.shot ? fmt(t.shot.at) : "");
-t = await shoot({ view: "third", dist: 1, height: 1.5 });
+t = await shoot({ view: "third", frame: { dist: 1, height: 1.5 } });
 check("dist+height move the eye", !!t.shot && near(t.shot.eye, at(1.5, -1)), t.shot ? fmt(t.shot.eye) : "");
 check("look-ahead scales with dist (4·1/3.4 m)", !!t.shot && near(t.shot.at, at(1.2, 4 / 3.4)), t.shot ? fmt(t.shot.at) : "");
-t = await shoot({ view: "third", height: 3 });
+t = await shoot({ view: "third", frame: { height: 3 } });
 check("height alone keeps the default look-ahead", !!t.shot && near(t.shot.eye, at(3, -3.4)) && near(t.shot.at, at(1.2, 4)), t.shot ? `${fmt(t.shot.eye)} → ${fmt(t.shot.at)}` : "");
 for (const dist of [2, 1, 0.5]) {
-  t = await shoot({ view: "third", dist });
+  t = await shoot({ view: "third", frame: { dist } });
   const low = t.shot ? lowestInFrame(t.shot) : null;
   check(`dist ${dist}: the body is in frame from below 1 m up`, low !== null && low < 1 && inFrame(t.shot!, 1.6), `lowest in frame ${low}`);
 }
-t = await shoot({ view: "third", dist: 0.5 });
+t = await shoot({ view: "third", frame: { dist: 0.5 } });
 check("dist 0.5 at default height: in frame from 0.92 m up", !!t.shot && lowestInFrame(t.shot) === 0.92, `lowest ${t.shot && lowestInFrame(t.shot)}`);
 
 // ---- selfie -----------------------------------------------------------------
@@ -94,21 +95,30 @@ console.log("selfie");
 t = await shoot({ view: "selfie" });
 check("default eye: 1.6 m up, 2.6 m in front", t.ok && !!t.shot && near(t.shot.eye, at(1.6, 2.6)), t.shot ? fmt(t.shot.eye) : String(t.r));
 check("aim at the body, 1.25 m up", !!t.shot && near(t.shot.at, at(1.25, 0)), t.shot ? fmt(t.shot.at) : "");
-t = await shoot({ view: "selfie", dist: 1.2, height: 0.8 });
+t = await shoot({ view: "selfie", frame: { dist: 1.2, height: 0.8 } });
 check("dist+height move the eye", !!t.shot && near(t.shot.eye, at(0.8, 1.2)), t.shot ? fmt(t.shot.eye) : "");
 check("aim stays on the body", !!t.shot && near(t.shot.at, at(1.25, 0)), t.shot ? fmt(t.shot.at) : "");
 
 // ---- first ------------------------------------------------------------------
 console.log("first");
 let n = composed.length;
-t = await shoot({ view: "first", pitch: -60 });
+t = await shoot({ view: "first", frame: { pitch: -60 } });
 check("pitch reaches composeFirstPerson", t.ok && composed.length === n + 1 && composed.at(-1)!.pitch === -60, JSON.stringify(composed.at(-1)?.pitch));
 check("first places no captureFrom camera", t.shot === null);
 n = composed.length;
 await shoot({ view: "first" });
 check("omitted pitch reaches it as undefined", composed.length === n + 1 && composed.at(-1)!.pitch === undefined);
-await shoot({ view: "first", pitch: -200 });
+await shoot({ view: "first", frame: { pitch: -200 } });
 check("pitch is clamped before the composer", composed.at(-1)!.pitch === -85, JSON.stringify(composed.at(-1)?.pitch));
+
+// ---- fields on the message itself -------------------------------------------
+console.log("fields on the message itself");
+// A snap that also carries an image size (width, height) asks for no framing.
+t = await shoot({ view: "selfie", width: 960, height: 540 });
+check("selfie with an image size: the default eye, 1.6 m up", !!t.shot && near(t.shot.eye, at(1.6, 2.6)), t.shot ? fmt(t.shot.eye) : String(t.r));
+n = composed.length;
+await shoot({ view: "first", pitch: -60 });
+check("first with a pitch outside frame: the default gaze", composed.length === n + 1 && composed.at(-1)!.pitch === undefined, JSON.stringify(composed.at(-1)?.pitch));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

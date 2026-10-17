@@ -1,8 +1,9 @@
-// Optional framing for a world snapshot (GET /snap, the `snap` wire message,
-// the agent `snapshot` tool). One normaliser, three readers: the sequencer
-// cleans what arrives over HTTP, the renderer cleans what arrives over the
-// wire, the agent tool cleans what the model asked for — and an absent field
-// always means "today's fixed framing", so old callers see no change.
+// Optional framing for a world snapshot (GET /snap's query, the `snap` wire
+// message's nested `frame`, the agent `snapshot` tool's arguments). One
+// normaliser, three readers: the sequencer cleans what arrives over HTTP, the
+// renderer cleans what arrives over the wire, the agent tool cleans what the
+// model asked for — and an absent field always means "today's fixed framing",
+// so old callers see no change.
 //
 //   dist   — third/selfie: metres between the camera and the body, measured
 //            flat (third sits behind, selfie in front).        [0.5, 30]

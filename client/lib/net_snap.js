@@ -27,9 +27,10 @@ export async function snapshot(msg) {
     if (!r?.avatar) throw new Error(`${msg.follow} not in local scene (still loading?)`);
     const root = r.avatar.root;
     const fwd = new THREE.Vector3(Math.sin(root.rotation.y), 0, Math.cos(root.rotation.y));
-    // Optional framing (shared/snapframe.js): absent fields keep the fixed
-    // defaults below, so a request without them frames exactly as before.
-    const frame = normalizeSnapFrame(msg);
+    // Optional framing (shared/snapframe.js), nested as msg.frame, so no field
+    // of the message itself is read as the camera's. Absent fields keep the
+    // fixed defaults below, so a request without them frames exactly as before.
+    const frame = normalizeSnapFrame(msg.frame);
     let dataUrl;
     if (msg.view === 'third') {
       // The aim's look-ahead scales with the camera's distance: 4 m ahead at

@@ -84,7 +84,9 @@ function requestSnap(world: World, follow: string, view = "first", frame: { dist
   const id = `snap-${nextSnapId++}`;
   return new Promise((resolve) => {
     pendingSnaps.set(id, { resolve });
-    renderer.ws.send(JSON.stringify({ type: "snap", id, follow, view, ...frame }));
+    // the framing rides nested, so no field of the message itself is read as
+    // the camera's, and only when asked for, so an unframed snap is unchanged
+    renderer.ws.send(JSON.stringify({ type: "snap", id, follow, view, ...(Object.keys(frame).length ? { frame } : {}) }));
     setTimeout(() => {
       if (pendingSnaps.delete(id)) resolve({ ok: false, err: "renderer timed out", status: 504 });
     }, 12_000);

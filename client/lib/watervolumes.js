@@ -108,7 +108,8 @@ export function environmentSettings() {
 export function movementBounds() { const env=environmentSettings(); return env?.bounds ?? (env || waters.length ? {} : null); }
 export function waterAt(p) { return mediumAt(Array.isArray(p)?p:[p.x,p.y,p.z],waters,airs,clock.value); }
 export function waterTime() { return clock.value; }
-export function waterDebug() { return { waters:waters.length, air:airs.length, enabled:installed, time:clock.value }; }
+let rebuilds = 0;
+export function waterDebug() { return { waters:waters.length, air:airs.length, enabled:installed, time:clock.value, rebuilds }; }
 function matrixFor(id,ent) {
   const obj=objects().get(id);
   if(obj) { obj.updateWorldMatrix(true,false);return obj.matrixWorld; }
@@ -147,7 +148,7 @@ export function updateWater() {
   // Epoch wrapped for float precision; same clock on every peer.
   clock.value=(serverNow()%3600000)/1000;
   const rebuild=dirty;dirty=false;
-  if(rebuild){clearSurfaces();volumeIds.clear();if(particles){scene.remove(particles);particles.geometry.dispose();particles.material.dispose();particles=null;}}
+  if(rebuild){rebuilds++;clearSurfaces();volumeIds.clear();if(particles){scene.remove(particles);particles.geometry.dispose();particles.material.dispose();particles=null;}}
   waters.length=0;airs.length=0;
   for(const [id,e] of entries()) {
     const comp=e.comp??{}, matrix=matrixFor(id,e);
@@ -182,15 +183,26 @@ export function updateWater() {
   if(skyDome)skyDome.position.copy(camera.position);
 }
 // Rebuild surfaces/particles/sky only when water or environment data can have changed: a reset, a water or
-// environment comp, or a spawn/remove/place/(dis)mount of an entity carrying one (its size follows scale).
-// Positions and dry boxes refresh every frame anyway, so other edits cost nothing here.
-const volumeIds = new Set();
+// environment comp, or an edit to an entity that carries (or carried, at the last build) one — or to any
+// carrier above one in its mount chain, whose scale sizes the water it carries. Positions and dry boxes
+// refresh every frame anyway, so unrelated edits cost nothing here.
+const volumeIds = new Set();   // owners at the last rebuild: a same-id respawn or removal still counts
+function touchesVolume(id) {
+  if (id == null) return false;
+  if (volumeIds.has(id)) return true;
+  const c = state.st.entities[id]?.comp;
+  if (c?.water || c?.environment) return true;
+  for (const v of volumeIds) {   // is `id` a carrier somewhere above a volume owner?
+    let p = state.st.entities[v]?.parent?.to;
+    for (let hops = 0; p && hops < 8; hops++, p = state.st.entities[p]?.parent?.to) if (p === id) return true;
+  }
+  return false;
+}
 onWorldChange(ev=>{
   if(ev.type!=='entry'){dirty=true;return;}
   const {verb,args}=ev.entry,id=args?.id;
-  if(verb==='comp'){if(args?.type==='water'||args?.type==='environment'||volumeIds.has(id))dirty=true;return;}
-  if(verb==='spawn'){const c=state.st.entities[id]?.comp;if(c?.water||c?.environment)dirty=true;return;}
-  if(['remove','place','mount','dismount'].includes(verb)&&volumeIds.has(id))dirty=true;
+  if(verb==='comp'&&(args?.type==='water'||args?.type==='environment')){dirty=true;return;}
+  if(['comp','spawn','remove','place','mount','dismount'].includes(verb)&&touchesVolume(id))dirty=true;
 });
 
 // 0 inside any dry box, 1 inside a water volume, else 0 (portable TSL, as the fog)

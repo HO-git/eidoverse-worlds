@@ -316,6 +316,10 @@ try {
     check("alice adds subject human:discord:8001 as builder", (await ask(AS, "grant", { id: "human:discord:8001", role: "builder" })) === null);
     const g7 = lastLog(AS, (e) => e.verb === "grant" && e.args.sub && e.args.role === "builder");
     check("…the grant goes to that subject (Tamsin), not to the namesake", g7?.args?.sub === "human:discord:8001" && g7?.args?.id === "Tamsin", JSON.stringify(g7?.args));
+    // #8 `revoke *` takes the door back to the default (a closed world opens)
+    check("alice closes the subject-test world", (await ask(AS, "grant", { id: "*", role: "none" })) === null);
+    check("…and revoking * is accepted", (await ask(AS, "grant", { id: "*", revoke: true })) === null);
+    check("…which opens it again (anonymous callers see it, door open)", (await worldsAs()).some((w) => w.name === SW && w.access === "open"));
     M.close(); AS.close();
   }
 

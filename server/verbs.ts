@@ -228,7 +228,11 @@ function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
   // same person). Never a record that merely sits under the subject's current
   // display name — that can be another person's (Greptile #258: a revoke by
   // subject once took a different member's record whose name collided).
-  const key = rec ? named : sub ? Object.keys(roles).find((k) => roles[k]?.sub === sub) : undefined;
+  // The wildcard is its own record: `revoke *` takes the door back to the
+  // world's default (Greptile #258 caught this lookup skipping it). A subject
+  // string never matches by key — a display name can be made to look like one.
+  const key = id === "*" ? (roles["*"] ? "*" : undefined)
+    : rec ? named : sub ? Object.keys(roles).find((k) => roles[k]?.sub === sub) : undefined;
   const target = key ? roles[key] : undefined;
   if (until != null && (role === "owner" || (role == null && target?.role === "owner"))) {
     return { error: "ownership doesn't expire — grant builder for a time, or revoke ownership later" };

@@ -1,7 +1,7 @@
 // net — the wire. One socket carrying two planes: the world log (ordered,
 // persisted, replayed on join) and presence (batched, lossy, never persisted).
 
-import { CONFIG, report, bus } from './base.js';
+import { CONFIG, report, bus, nameFromJoinAck } from './base.js';
 // The world as data (TEL0S_NOTES §11.2): every snapshot and live entry
 // folds here — synchronously, through the same shared/fold.js the
 // sequencer runs — and the realizers project it into the scene.
@@ -777,9 +777,15 @@ async function onSnapshot(msg) {
   // The server's `you` is authoritative (verified identity, or a suffixed name
   // when two people share a nick). If it differs from what this client thinks,
   // adopt it — and say so, a silently different nameplate is confusing.
-  if (msg.you && msg.you !== CONFIG.name) {
-    CONFIG.name = msg.you;
-    localStorage.setItem('ew-name', msg.you);
+  // Renderer/spectator clients join under a transport prefix ("renderer-" /
+  // "retina-", see sendJoin) that is part of the wire id, not the name. Strip
+  // it before comparing and storing, or ew-name grows one prefix per reload
+  // (renderer-renderer-…) — unless the ack is a verified identity, which the
+  // server named itself (base.js nameFromJoinAck).
+  const you = nameFromJoinAck(msg.you, { renderer: CONFIG.renderer, spectate: CONFIG.spectate, verified: !!msg.yourSub });
+  if (you && you !== CONFIG.name) {
+    CONFIG.name = you;
+    localStorage.setItem('ew-name', you);
     toast(`you're appearing as “${msg.you}”`, 'info', 8000);
   }
   if (typeof msg.throughSeq === 'number' && msg.throughSeq > lastSeq) lastSeq = msg.throughSeq;

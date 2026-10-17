@@ -33,13 +33,16 @@
 // restarts (the replay then picks up exactly what was confirmed). What is
 // already queued still drains: it is in memory and on disk. `end` is not a
 // line — a perception clear, idempotent at the door — so it goes through
-// even with the spool down. The other rows (acked, refused, overflow) are
-// bookkeeping: a failed write there means a restart may resend a line that
-// already landed, which the door's dedupe makes harmless, so those log and
-// continue. `spoolBestEffort` (env SPOOL_BEST_EFFORT=1) states the weaker
-// promise instead: a `queued` row that cannot be written is said once (then
-// every 100th, like the refusals) and the line queues anyway — counted in
-// `spoolMissed`, because a restart before it is confirmed loses it.
+// even with the spool down; when its row can't be written that is said and
+// counted (`endMissed`), since a restart before the world confirms it
+// replays the session's lines without the clear. The other rows (acked,
+// refused, overflow) are bookkeeping: a failed write there means a restart
+// may resend a line that already landed, which the door's dedupe makes
+// harmless, so those log and continue. `spoolBestEffort` (env
+// SPOOL_BEST_EFFORT=1) states the weaker promise instead: a `queued` row
+// that cannot be written is said once (then every 100th, like the refusals)
+// and the line queues anyway — counted in `spoolMissed`, because a restart
+// before it is confirmed loses it.
 //
 // Captions are durable world testimony like `say`; `end` clears current
 // perception, not history. This client keeps nothing the world does not.
@@ -103,9 +106,13 @@ export class WorldClient {
   /** Lines queued WITHOUT their `queued` row (spoolBestEffort): a restart
    *  before the world confirms them loses them. */
   spoolMissed = 0;
-  /** Lines the spool's promise was not kept for, either way. A run that
-   *  ends with this non-zero did not do what the operator was told it does. */
-  get spoolLost(): number { return this.spoolRefused + this.spoolMissed; }
+  /** Ends queued WITHOUT their `queued` row: `end` goes through with the
+   *  spool down, and a restart before the world confirms it replays the
+   *  session's lines without the clear. */
+  endMissed = 0;
+  /** Entries the spool's promise was not kept for, any of these ways. A run
+   *  that ends with this non-zero did not do what the operator was told it does. */
+  get spoolLost(): number { return this.spoolRefused + this.spoolMissed + this.endMissed; }
   /** The first spool failure that halted intake, or null while writable. */
   spoolFailed: string | null = null;
   onReceipt: ((args: Args) => void) | null = null;
@@ -197,6 +204,12 @@ export class WorldClient {
       // the weaker promise, kept out loud: once, then every 100th line
       this.spoolMissed++;
       if (this.spoolMissed === 1 || this.spoolMissed % 100 === 0) this.log(`⚠ spool write failed (${this.spoolFailed}): SPOOL_BEST_EFFORT=1, so the line queues anyway — a restart before the world confirms it loses it; ${this.spoolMissed} such line${this.spoolMissed === 1 ? '' : 's'} so far`);
+    }
+    if (!durable && !wrote) {
+      // `end` still goes through, but its row isn't on disk: said every time,
+      // since a session has one
+      this.endMissed++;
+      this.log(`⚠ spool write failed (${this.spoolFailed}): the session's end queues anyway, since a clear goes through with the spool down — a restart before the world confirms it replays this session's lines without it`);
     }
     this.pending.push(p);
     const max = this.opts.maxPending ?? 600;

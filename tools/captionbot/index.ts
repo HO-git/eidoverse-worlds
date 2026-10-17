@@ -45,6 +45,7 @@ import { AudioTap } from './tap.ts';
 import { ffmpegSource, fileSource } from './sources.ts';
 import { Captioner, type Caption } from './captioner.ts';
 import { WorldClient } from './world.ts';
+import { normalizeCaption } from '../../shared/captions.js';
 
 const env = (k: string, d = '') => process.env[k] ?? d;
 const RATE = 16_000;
@@ -94,11 +95,20 @@ if (file) {
     // re-run an event's captions against a world, and what the CLI process
     // test drives the real exit owner with.
     log(`replaying lines from ${file}`);
-    for (const row of readFileSync(file, 'utf8').split('\n')) {
-      if (!row.trim()) continue;
-      const { t0, t1, text, speaker } = JSON.parse(row) as Caption;
-      onLine({ t0, t1, text, ...(speaker ? { speaker } : {}) });
-    }
+    // every row is checked before any is sent, with the caption checks the
+    // door applies: a row that isn't a caption line fails the run with its
+    // line number, rather than being counted here and dropped at the door
+    const replay: Caption[] = [];
+    const refuse: (n: number, why: string) => never = (n, why) => { log(`⛔ ${file}:${n}: ${why}; nothing was sent`); world?.close(); process.exit(1); };
+    readFileSync(file, 'utf8').split('\n').forEach((row, i) => {
+      if (!row.trim()) return;
+      let parsed: unknown;
+      try { parsed = JSON.parse(row); } catch (e) { refuse(i + 1, `not JSON (${(e as Error).message})`); }
+      const line = normalizeCaption(parsed) as Caption | null;
+      if (!line) refuse(i + 1, 'not a caption line: it needs finite times with 0 ≤ t0 ≤ t1, and non-empty text');
+      replay.push(line);
+    });
+    for (const c of replay) onLine(c);
   } else {
     log(`rehearsing from ${file}`);
     await fileSource(file, tap);
@@ -106,10 +116,17 @@ if (file) {
   await new Promise((r) => setTimeout(r, 2000)); // let the last final settle
   world?.end();
   await new Promise((r) => setTimeout(r, 1500)); // and the receipts land
-  log(`done — ${lines} lines, ${captioner.lateRevisions} late revisions dropped${world ? `; ${world.acked} confirmed, ${world.pendingCount} unconfirmed${world.spoolMissed ? ` (${world.spoolMissed} of this run's lines are NOT in the spool: ${world.spoolFailed})` : ' (in the spool)'}${world.spoolRefused ? `, ${world.spoolRefused} REFUSED (spool unwritable: ${world.spoolFailed})` : ''}` : ''}`);
+  // where the unconfirmed entries are: the spool, memory only, or partly
+  // memory only, by which entries
+  const missing = world ? [world.spoolMissed ? `${world.spoolMissed} of this run's lines` : '', world.endMissed ? 'its end' : ''].filter(Boolean) : [];
+  const where = !spool ? ' (in memory only: there is no spool)'
+    : missing.length ? ` (${missing.join(' and ')} ${missing.length > 1 || (world?.spoolMissed ?? 0) > 1 ? 'are' : 'is'} NOT in the spool: ${world?.spoolFailed})`
+    : ' (in the spool)';
+  log(`done — ${lines} lines, ${captioner.lateRevisions} late revisions dropped${world ? `; ${world.acked} confirmed, ${world.pendingCount} unconfirmed${where}${world.spoolRefused ? `, ${world.spoolRefused} REFUSED (spool unwritable: ${world.spoolFailed})` : ''}` : ''}`);
   world?.close();
   // a batch caller reads the exit status: a run that refused lines, or
-  // queued them without their row, did not keep the spool's promise
+  // queued lines or its end without their rows, did not keep the spool's
+  // promise
   process.exit(world?.spoolLost ? 1 : 0);
 } else {
   const url = env('STREAM_URL', 'rtsp://127.0.0.1:8554/screen');

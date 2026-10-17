@@ -30,7 +30,8 @@ case "$STREAM_PATH" in *[!A-Za-z0-9_-]*|"") echo "mkconfig: PROJECTOR_PATH must 
 # reads `&` (the match), `\` (an escape) and the `|` delimiter as syntax, so
 # a key like `p&ss|word` would render silently wrong (the `&` becomes the
 # literal text `${PUBLISH_KEY}`) or truncate the file. The template quotes
-# every spliced value, because YAML types a plain scalar by its whole value
+# every value that comes from the environment, because YAML types a plain
+# scalar by its whole value
 # (`true` is a boolean, `123` a number, `-` a list), but a quote or `\`
 # inside a quoted value would still end it or start an escape. Rather than
 # escape our way through two grammars, each value is checked against the
@@ -40,7 +41,8 @@ case "$STREAM_PATH" in *[!A-Za-z0-9_-]*|"") echo "mkconfig: PROJECTOR_PATH must 
 #   user:  [A-Za-z0-9_.-]              key:  [A-Za-z0-9_./=-]  (hex, base64 without +, urlsafe)
 #   bind:  [A-Za-z0-9.:-]  (IPv4, IPv6, or a hostname)   ports: 1–65535
 # A key has no `+`: the RTMP publish URL carries the key as a query value,
-# and MediaMTX reads a `+` there as a space, so that key would never match.
+# and MediaMTX reads an unencoded `+` there as a space, so a publisher that
+# puts the key in the URL as written would not match it.
 inert() { # $1 = name, $2 = value, $3 = allowed class (a case pattern body), $4 = "secret" keeps the value out of stderr
   case "$2" in "") echo "mkconfig: $1 must not be empty" >&2; exit 2;; esac
   case "$2" in *[!$3]*)
@@ -64,9 +66,13 @@ port() { # $1 = name, $2 = value
 }
 inert PROJECTOR_PUBLISH_USER "$USER_" 'A-Za-z0-9_.-'
 inert PROJECTOR_BIND "$BIND" 'A-Za-z0-9.:-'
+# A bind is a host, never host:port: the ports are their own settings. An
+# IPv6 address has at least two colons, so a bind with one is a host:port,
+# which would be bracketed below and refused by mediamtx at load.
+case "$BIND" in *:*:*) ;; *:*) echo "mkconfig: PROJECTOR_BIND is a host or an IPv6 address, not host:port (got '$BIND'); set the ports with PROJECTOR_*_PORT" >&2; exit 2;; esac
 if [ -n "$KEY" ]; then
   case "$KEY" in *+*)
-    echo "mkconfig: PROJECTOR_PUBLISH_KEY may not contain '+': the RTMP publish URL carries the key as a query value, where '+' reads as a space, so it would never match (the value is a secret and is not shown)" >&2
+    echo "mkconfig: PROJECTOR_PUBLISH_KEY may not contain '+': the RTMP publish URL carries the key as a query value, where an unencoded '+' reads as a space, so a publisher using the key as written would not match (the value is a secret and is not shown)" >&2
     exit 2;;
   esac
   inert PROJECTOR_PUBLISH_KEY "$KEY" 'A-Za-z0-9_./=-' secret

@@ -14,7 +14,8 @@
 //   D. a replayed row that isn't a caption line → nothing is sent → exits 1, naming its line;
 //   E. the spool fails after the lines' rows, before the end's → the summary says
 //      the end is not in the spool → exits 1;
-//   F. no spool → the summary says the unconfirmed lines are in memory only.
+//   F. no spool → the summary says the unconfirmed lines are in memory only;
+//   G. lines dropped for overflow → the summary counts them → exits 1.
 // Mutating the final owner back to an unconditional `process.exit(0)` turns
 // A and B red (Mica, #202 round-three review).
 import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
@@ -90,20 +91,25 @@ for (const [label, second] of [
 console.log('\n— E. the spool goes after the lines are on it, before the end —\n');
 {
   const spool = join(dir, 'spool-end.jsonl');
-  const proc = Bun.spawn(['bun', CLI], { env: envFor({ SPOOL: spool }), stdout: 'pipe', stderr: 'pipe' });
+  const rowsIn = (p: string) => existsSync(p) ? readFileSync(p, 'utf8').split('\n').filter(Boolean).length : 0;
   // the CLI waits 2 s after the replay before it ends the session: once both
   // lines' rows are on disk, a directory takes the spool's place, so the
-  // end's append is the first write to fail
-  let rows = 0;
-  for (let i = 0; i < 3000 && rows < 2; i++) {
-    await Bun.sleep(10);
-    rows = existsSync(spool) ? readFileSync(spool, 'utf8').split('\n').filter(Boolean).length : 0;
+  // end's append is the first write to fail. A process stalled past those
+  // 2 s misses the window (the end's row lands first), which says nothing
+  // about the CLI, so that attempt is run again, up to three times.
+  let rows = 0, caught = false, code: number | null = null, out = '';
+  for (let attempt = 1; attempt <= 3 && !caught; attempt++) {
+    rmSync(spool, { recursive: true, force: true }); rmSync(`${spool}.lines`, { force: true });
+    const proc = Bun.spawn(['bun', CLI], { env: envFor({ SPOOL: spool }), stdout: 'pipe', stderr: 'pipe' });
+    rows = 0;
+    for (let i = 0; i < 3000 && rows < 2; i++) { await Bun.sleep(10); rows = rowsIn(spool); }
+    if (rows === 2) { renameSync(spool, `${spool}.lines`); mkdirSync(spool); }
+    else proc.kill();
+    code = await proc.exited;
+    out = (await new Response(proc.stdout).text()) + (await new Response(proc.stderr).text());
+    caught = rows === 2 && rowsIn(`${spool}.lines`) === 2;
   }
-  if (rows === 2) { renameSync(spool, `${spool}.lines`); mkdirSync(spool); }
-  else proc.kill();
-  const code = await proc.exited;
-  const out = (await new Response(proc.stdout).text()) + (await new Response(proc.stderr).text());
-  check('the spool held both lines before it went', rows === 2, `rows=${rows}`);
+  check('the spool held both lines, and only them, before it went', caught, `rows=${rows}`);
   check('the end\'s failed write is said', /session's end queues anyway/.test(out), out.slice(-400));
   check('the summary says the end is NOT in the spool', /3 unconfirmed \(its end is NOT in the spool: /.test(out), out.slice(-400));
   check('the run exits non-zero', code === 1, `exit=${code}`);
@@ -114,6 +120,14 @@ console.log('\n— F. no spool: the summary says the lines are in memory only �
   const r = run({ SPOOL: '' });
   check('the summary says the unconfirmed entries are in memory only', /3 unconfirmed \(in memory only: there is no spool\)/.test(r.out), r.out.slice(-400));
   check('the run exits zero: no spool, no promise', r.code === 0, `exit=${r.code}`);
+}
+
+console.log('\n— G. lines dropped for overflow: the summary counts them, and the run exits 1 —\n');
+{
+  // one line of room: the second line pushes the first out, and the end the second
+  const r = run({ SPOOL: join(dir, 'spool-overflow.jsonl'), MAX_PENDING: '1' });
+  check('the summary counts the lines dropped for overflow', /2 DROPPED for overflow/.test(r.out), r.out.slice(-400));
+  check('the run exits non-zero', r.code === 1, `exit=${r.code}`);
 }
 
 rmSync(dir, { recursive: true, force: true });

@@ -25,16 +25,19 @@
 //   VAD_DB         voiced threshold dBFS           (default -45; raise for noisy feeds)
 //   SPOOL          JSONL path of every line tried and every receipt (default
 //                  ./captionbot.spool.jsonl; SPOOL= empty for none). A restart
-//                  re-queues whatever the world never confirmed. Append-only:
+//                  re-queues each line the world never confirmed, except
+//                  one whose overflow or refused row is on disk. Append-only:
 //                  rotate it between events. The spool is a promise, so it
 //                  fails closed: if a line's row cannot be written the line is
 //                  refused and intake halts, out loud, until a restart.
 //   SPOOL_BEST_EFFORT=1  the weaker promise: a spool failure is said once
 //                  (then every 100th line) and the line queues anyway — a
-//                  restart may then miss it. Either way a FILE run whose
-//                  spool promise was not kept for some line exits non-zero.
+//                  restart may then miss it. Either way a FILE run exits
+//                  non-zero when the spool's promise was not kept for a line
+//                  or for its end, or when lines were dropped for overflow.
 //   MAX_PENDING    queue bound in lines (default 600); past it the oldest
-//                  queued lines are dropped, out loud, into the spool
+//                  queued lines are dropped, out loud, into the spool as
+//                  overflow, and a FILE run that drops any exits non-zero
 //   DRY_RUN=1      no world: print each line as it would be sent
 //   TRANSCRIPT     optional local JSONL copy of every final line — a
 //                  convenience for the operator, not the record: the world
@@ -122,12 +125,12 @@ if (file) {
   const where = !spool ? ' (in memory only: there is no spool)'
     : missing.length ? ` (${missing.join(' and ')} ${missing.length > 1 || (world?.spoolMissed ?? 0) > 1 ? 'are' : 'is'} NOT in the spool: ${world?.spoolFailed})`
     : ' (in the spool)';
-  log(`done — ${lines} lines, ${captioner.lateRevisions} late revisions dropped${world ? `; ${world.acked} confirmed, ${world.pendingCount} unconfirmed${where}${world.spoolRefused ? `, ${world.spoolRefused} REFUSED (spool unwritable: ${world.spoolFailed})` : ''}` : ''}`);
+  log(`done — ${lines} lines, ${captioner.lateRevisions} late revisions dropped${world ? `; ${world.acked} confirmed, ${world.pendingCount} unconfirmed${where}${world.spoolRefused ? `, ${world.spoolRefused} REFUSED (spool unwritable: ${world.spoolFailed})` : ''}${world.overflow ? `, ${world.overflow} DROPPED for overflow` : ''}` : ''}`);
   world?.close();
   // a batch caller reads the exit status: a run that refused lines, or
   // queued lines or its end without their rows, did not keep the spool's
-  // promise
-  process.exit(world?.spoolLost ? 1 : 0);
+  // promise, and lines dropped for overflow didn't reach the world
+  process.exit(world && (world.spoolLost || world.overflow) ? 1 : 0);
 } else {
   const url = env('STREAM_URL', 'rtsp://127.0.0.1:8554/screen');
   log(`listening to ${url}`);

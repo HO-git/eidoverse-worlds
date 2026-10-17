@@ -24,7 +24,8 @@
 // one written to the spool as `overflow` and counted out loud — never a
 // silent drop, never unbounded memory. The spool (`spool` path, JSONL,
 // append-only) is the bot's durable record of what it tried and what the
-// world confirmed; a restart re-queues whatever it never saw confirmed.
+// world confirmed; a restart re-queues each line it never saw confirmed,
+// except one whose overflow or refused row is on disk.
 //
 // THE SPOOL IS A PROMISE, SO IT FAILS CLOSED (Mica, #187 round-two
 // follow-up). A line is queued only once its `queued` row is on disk; if
@@ -36,9 +37,10 @@
 // even with the spool down; when its row can't be written that is said and
 // counted (`endMissed`), since a restart before the world confirms it
 // replays the session's lines without the clear. The other rows (acked,
-// refused, overflow) are bookkeeping: a failed write there means a restart
-// may resend a line that already landed, which the door's dedupe makes
-// harmless, so those log and continue. `spoolBestEffort` (env
+// refused, overflow) are bookkeeping, so those log and continue: a failed
+// acked or refused row means a restart may resend a line that already
+// landed, which the door's dedupe makes harmless, and a failed overflow row
+// means a restart sends a line this run reported dropped. `spoolBestEffort` (env
 // SPOOL_BEST_EFFORT=1) states the weaker promise instead: a `queued` row
 // that cannot be written is said once (then every 100th, like the refusals)
 // and the line queues anyway — counted in `spoolMissed`, because a restart
@@ -219,7 +221,7 @@ export class WorldClient {
       this.spool({ state: 'overflow', key: old.key, at: Date.now() });
       dropped++;
     }
-    if (dropped) { this.overflow += dropped; this.log(`⚠ overflow: dropped the ${dropped} oldest queued caption${dropped === 1 ? '' : 's'} (queue > ${max}); they are in the spool as overflow`); }
+    if (dropped) { this.overflow += dropped; this.log(`⚠ overflow: dropped the ${dropped} oldest queued caption${dropped === 1 ? '' : 's'} (queue > ${max}); each is written to the spool as overflow, and a restart doesn't resend one whose overflow row is there`); }
     this.schedule();
   }
 
@@ -313,7 +315,7 @@ export class WorldClient {
     catch (e) {
       const why = (e as Error).message;
       if (row.state === 'queued') this.spoolFailed ??= why;
-      else this.log(`spool write failed on a ${row.state} row for ${row.key}: ${why} — a restart may resend it; the door dedupes`);
+      else this.log(`spool write failed on ${/^[aeiou]/.test(row.state) ? 'an' : 'a'} ${row.state} row for ${row.key}: ${why} — ${row.state === 'overflow' ? 'a restart may send this line, though this run dropped it' : 'a restart may resend it; the door dedupes'}`);
       return false;
     }
   }

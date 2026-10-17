@@ -8,8 +8,8 @@
 // follow-up). What must hold:
 //   A. the defaults render: exit 0, a minted hex key printed and present in
 //      the YAML, no `${…}` left, mode 600;
-//   B. an explicit key of the allowed set lands verbatim (hex, base64,
-//      urlsafe alphabets);
+//   B. an explicit key of the allowed set lands verbatim (hex, base64
+//      without `+`, urlsafe alphabets);
 //   C. each spliced value — user, key, bind, every port — refuses `&`, `|`,
 //      `\`, a newline, a quote, `#`, and an out-of-range or non-numeric
 //      port, with exit 2 (a refusal, not sed's exit 1), the variable named
@@ -22,7 +22,8 @@
 //      file is parsed as YAML, the values YAML would otherwise type
 //      (`-`, `true`, `123`, a key of zeros) included, and the YAML 1.1
 //      booleans mediamtx reads (`on`, `yes`) are written quoted;
-//   F. an IPv6 bind is written bracketed beside its port, `::1` still
+//   F. a host:port bind is refused (the ports are their own settings); an
+//      IPv6 bind is written bracketed beside its port, `::1` still
 //      becomes 127.0.0.1, and an IPv4 bind is left as it is.
 //
 //   bun tools/mkconfig-test.ts   (E and F parse with Bun.YAML, Bun 1.2.21 or later)
@@ -92,7 +93,7 @@ check(`all ${hostile.length} hostile values refused with exit 2, the variable na
 console.log('— D. the refusal is the validator\'s: bad characters masked, the key never shown —');
 {
   const r = render({ ...base, PROJECTOR_PUBLISH_KEY: 'abcdefgh&ijklmnop' });
-  check('the key refusal names the allowed set…', /PROJECTOR_PUBLISH_KEY may only use \[A-Za-z0-9_.+\/=-\]/.test(r.stderr), r.stderr);
+  check('the key refusal names the allowed set…', r.stderr.includes('PROJECTOR_PUBLISH_KEY may only use [A-Za-z0-9_./=-]'), r.stderr);
   check('…and none of the key reaches stderr (the smoke run prints it on failure)', !/abcdefgh|ijklmnop/.test(r.stderr), r.stderr);
   const plus = render({ ...base, PROJECTOR_PUBLISH_KEY: 'abcdefgh+ijklmnop' });
   check('a key with `+` is refused, saying the RTMP URL reads it as a space, and leaves no file',
@@ -139,7 +140,12 @@ else {
   check('every address is a string', !!d && ['rtspAddress', 'rtmpAddress', 'hlsAddress', 'webrtcAddress', 'webrtcLocalUDPAddress'].every((a) => typeof d[a] === 'string'), JSON.stringify(d && [d.rtspAddress, d.rtmpAddress, d.hlsAddress, d.webrtcAddress, d.webrtcLocalUDPAddress]));
 }
 
-console.log('— F. an IPv6 bind is bracketed beside its port —');
+console.log('— F. a host:port bind is refused; an IPv6 bind is bracketed beside its port —');
+for (const bind of ['0.0.0.0:1935', 'localhost:8554']) {
+  const hp = render({ PROJECTOR_BIND: bind, PROJECTOR_PUBLISH_KEY: '0123456789abcdef' });
+  check(`${bind} is refused with exit 2 as a host:port, and leaves no file`,
+    hp.code === 2 && /PROJECTOR_BIND is a host or an IPv6 address, not host:port/.test(hp.stderr) && hp.yaml === null, `exit=${hp.code} ${hp.stderr}`);
+}
 if (YAML) {
   const v6 = render({ PROJECTOR_BIND: 'fe80::1', PROJECTOR_PUBLISH_KEY: '0123456789abcdef' });
   const c = parsed(v6);

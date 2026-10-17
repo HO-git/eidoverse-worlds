@@ -2,7 +2,8 @@
 # (anima_dev/eidoverse_projector_design.md, layer 2 route A).
 #
 # This is a TEMPLATE. mkconfig.sh renders it into a runtime config in scratch
-# space, filling every ${…} from the environment, and it is the only thing
+# space, filling every ${…} from the environment (the two WebRTC values from
+# the bind), and it is the only thing
 # that does: there is no committed credential and no committed public bind.
 # By default everything binds loopback with a key minted for the run; a
 # network-facing appliance needs an explicit PROJECTOR_BIND and an explicit
@@ -18,9 +19,11 @@
 # Publishing needs the key; reading needs nothing — what a screen may point
 # at is the WORLD's decision (its comp allow-list), not the appliance's.
 #
-# Every ${…} below is quoted: YAML types a plain scalar by its whole value,
-# so an unquoted user `true`, key `0000000000000000` or path `123` would
-# reach mediamtx as a boolean or a number where it reads a string.
+# Every ${…} an environment value fills is quoted: YAML types a plain scalar
+# by its whole value, so an unquoted user `true`, key `0000000000000000` or
+# path `123` would reach mediamtx as a boolean or a number where it reads a
+# string. The two WebRTC lines are bare: mkconfig.sh writes a bool and a
+# list there itself.
 
 logLevel: info
 api: false

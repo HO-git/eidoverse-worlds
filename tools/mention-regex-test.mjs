@@ -1,7 +1,8 @@
-// The mention pattern is built from an id that arrives UNVALIDATED in
-// tokens.json. Before this was escaped, an id with regex metacharacters threw
-// inside a catch-all — so the agent silently never heard its own name again,
-// for the life of the process, with a single log line and no other symptom.
+// The mention pattern is built from a body's id and display name, which
+// arrive UNVALIDATED in tokens.json. Before names were escaped, an id with
+// regex metacharacters threw inside a catch-all — so the agent silently never
+// heard its own name again, for the life of the process, with a single log
+// line and no other symptom.
 import { mentionRegexFor } from '../mcpl/mention.ts';
 let pass = 0, fail = 0;
 const check = (n, c) => { c ? (pass++, console.log(`ok   ${n}`)) : (fail++, console.log(`FAIL ${n}`)); };
@@ -49,6 +50,8 @@ check('control: the unescaped form does throw', oldThrew);
   // The short form refuses a parenthetical after it, which can't be told from
   // another resident's qualifier: the trade this body's alias keeps.
   check('the short form with an aside after it stays unheard (the kept trade)', !rx.test('@Artie (quick question) can you look?'));
+  check('an unclosed parenthesis is no qualifier: the short form before it is heard', rx.test('@Artie (quick question can you look?'));
+  check('a distinct id is heard with an aside after it', rx.test('@artie-kube (quick question) can you look?'));
   check('a prefix of the id is a different body', !rx.test('artie-kubernetes is a different body'));
   check('a prefix of the dropped name is a different body', !rx.test('artiest of them all'));
   check('an id with a trailing qualifier gets the same treatment', mentionRegexFor(['zed (two)']).test('@zed hi'));
@@ -67,6 +70,10 @@ check('control: the unescaped form does throw', oldThrew);
   check('a whole name is heard with an aside after it', rx.test('@Artie (quick question) can you look?'));
   check('a bare whole name is heard with an aside after it', rx.test("hey Artie (when you can), the door's stuck"));
   check('a whole qualified name is heard with an aside after it', mentionRegexFor(['artie-kube', 'Artie (kube)']).test('@Artie (kube) (when you can) look'));
+  // A plain name can't tell another resident's qualifier from an aside, so it
+  // hears both: the trade a plain name keeps, as two bodies answering to one
+  // first name are both addressed.
+  check("a plain name also hears another resident's qualified address (the plain name's trade)", rx.test('@Artie (kube) can you check the pods?'));
 }
 
 // Enrollment reserves a complete name, not every alias it could shorten to.
@@ -77,6 +84,12 @@ check('control: the unescaped form does throw', oldThrew);
   check('self-enrolled id remains mentionable', rx.test('@antra-anything, over here'));
   check('self-enrolled name cannot match a different qualifier', !rx.test('@Antra (elsewhere)'));
   check('self-enrolled policy also applies to qualified ids', !mentionRegexFor(['Antra (anything)'], { dropQualifiers: false }).test('@Antra'));
+  // An id that is its own name's short form is held to the parenthetical
+  // after it, self-enrolled or not.
+  const own = mentionRegexFor(['antra', 'Antra (anything)'], { dropQualifiers: false });
+  check('a self-enrolled id equal to its short form is heard alone', own.test('@antra, over here'));
+  check('a self-enrolled id equal to its short form refuses an aside', !own.test('@antra (quick question) hi'));
+  check('a self-enrolled id equal to its short form refuses a different qualifier', !own.test('@Antra (elsewhere) hi'));
   check('operator-configured names retain short mentions', mentionRegexFor(['antra-anything', 'Antra (anything)']).test('@Antra'));
 }
 

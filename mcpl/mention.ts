@@ -1,11 +1,13 @@
-/** The "was I named?" pattern, built from the names a body answers to.
+/** The "was I named?" pattern, built from the names a body answers to: its
+ *  id and its display name, both from tokens.json.
  *
- *  🔴 ESCAPE THE NAME. This was built inline in three places from an id that
- *  arrives UNVALIDATED in tokens.json, so an id containing regex metacharacters
- *  produced an invalid RegExp — and the throw landed in a catch-all, meaning the
- *  agent silently never heard its own name again, for the life of the process,
- *  with one log line and no other symptom. (`a(` and `x[` throw; `b+` does not
- *  throw but silently changes what matches.)
+ *  🔴 ESCAPE THE NAME. The pattern was first built inline in three places from
+ *  an id that arrives UNVALIDATED in tokens.json, so an id containing regex
+ *  metacharacters produced an invalid RegExp — and the throw landed in a
+ *  catch-all, meaning the agent silently never heard its own name again, for
+ *  the life of the process, with one log line and no other symptom. (`a(` and
+ *  `x[` throw; `b+` does not throw but silently changes what matches.) A display
+ *  name arrives the same way.
  *
  *  🔴 AND \b IS WRONG AFTER A NON-WORD CHARACTER. `\b` asserts a WORD boundary,
  *  so `a\(\b` can never match: `(` is not a word character, so there is no
@@ -14,17 +16,18 @@
  *  escaped version rather than assuming it worked.
  *
  *  Lookarounds instead: "not preceded/followed by a word character" is the
- *  property actually wanted, and it holds regardless of what the id ends with.
+ *  property actually wanted, and it holds regardless of what a name ends with.
  *
  *  🔴 AND THE TYPE IS A PROMISE, NOT A GUARANTEE (2026-08-16). `id: string` is
- *  erased at runtime, and this id comes from JSON.parse of an operator-edited
+ *  erased at runtime, and these names come from JSON.parse of an operator-edited
  *  file — net-server's readTokens() does no shape validation at all. A tokens
- *  entry missing `id`, or with a numeric one, reaches here and throws
- *  `id.replace is not a function` INSIDE the same catch-all as before: the agent
- *  is deaf to its own name for the life of the process, one log line, no other
- *  symptom. That is the identical failure the escaping fixed, arriving through a
- *  different door. Returns null so callers can decide; a thrown regex was never
- *  a useful answer to "was I named?". */
+ *  entry missing `id`, or with a numeric one, used to reach the builder and
+ *  throw `id.replace is not a function` INSIDE the same catch-all as before: the
+ *  agent deaf to its own name for the life of the process, one log line, no
+ *  other symptom. That is the identical failure the escaping fixed, arriving
+ *  through a different door. So a name that isn't a non-empty string is
+ *  skipped, and a list with none returns null so callers can decide; a thrown
+ *  regex was never a useful answer to "was I named?". */
 
 /** A trailing ` (qualifier)` on a name, the house label convention
  *  (`#name (Guild)`, `Artie (kube)`): the part people drop when they address
@@ -47,17 +50,21 @@ const TRAILING_QUALIFIER = /\s*\([^()]*\)\s*$/u;
  *  name, whether it is the dropped alias or the body's own id, refuses a
  *  parenthetical after it, since "@Artie (cloud)" names a different resident;
  *  every other name is heard with an aside after it ("@Artie (quick
- *  question) can you look?" reaches a body named "Artie"). */
+ *  question) can you look?" reaches a body named "Artie"). That includes
+ *  another resident's qualifier: "@Artie (kube)" reaches a body named plain
+ *  "Artie" too, since with only its own names a body can't tell a qualifier
+ *  from an aside, and two bodies that answer to one first name are both
+ *  addressed, as above. */
 export function mentionRegexFor(names: readonly unknown[], { dropQualifiers = true }: { dropQualifiers?: boolean } = {}): RegExp | null {
   const forms = new Map<string, string>();   // lower-cased form -> the form
   const shorts = new Set<string>();          // short forms of the qualified names
   for (const candidate of names) {
     if (typeof candidate !== "string" || !candidate) continue;
-    if (!forms.has(candidate.toLowerCase())) forms.set(candidate.toLowerCase(), candidate);
+    forms.set(candidate.toLowerCase(), candidate);
     const short = candidate.replace(TRAILING_QUALIFIER, "");
     if (!short || short === candidate) continue;
     shorts.add(short.toLowerCase());
-    if (dropQualifiers && !forms.has(short.toLowerCase())) forms.set(short.toLowerCase(), short);
+    if (dropQualifiers) forms.set(short.toLowerCase(), short);
   }
   if (forms.size === 0) return null;
   const parts = [...forms].map(([key, form]) => form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")

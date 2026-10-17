@@ -14,7 +14,7 @@
 //      (observer sees it) — allowed operations still work.
 //   5. live mention routing: the observer says "@claude …" in-world and the
 //      granted host receives channels/incoming tagged chat:mention with
-//      metadata.mentioned — the mentionRegex path end to end.
+//      metadata.mentioned — the mentionRegexFor path end to end.
 //
 // 🔴 THE HARNESS OWNS ITS PORTS, ITS STATE, AND ITS CHILDREN (#129 re-review:
 // "the owned-scratch harness is neither owned nor scratch-clean"). The first

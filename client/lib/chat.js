@@ -146,14 +146,20 @@ const MAX_SKIP_PAGES = 25;          // pages of already-shown lines walked per s
 function trimLog() {
   while (logEl.children.length > MAX_LINES) {
     const row = logEl.firstElementChild;
-    if (row.dataset.seq !== undefined) {
-      const seq = +row.dataset.seq;
+    for (const seq of seqsOf(row)) {
       renderedSeqs.delete(seq);
       if (seq > trimmedThrough) trimmedThrough = seq;
       if (pageCursor !== null && seq >= pageCursor) { pageCursor = null; noMoreHistory = false; }
     }
     row.remove();
   }
+}
+
+/** Every seq a row shows: one, or several when logChat merged the rest of a
+ *  spoken utterance into it (dataset.seqs). */
+function seqsOf(row) {
+  if (row.dataset.seqs) return row.dataset.seqs.split(',').map(Number);
+  return row.dataset.seq !== undefined ? [+row.dataset.seq] : [];
 }
 
 /** Put one paged-in line where it belongs: straight after the last row that
@@ -265,15 +271,23 @@ async function loadOlder() {
   try {
     let added = 0;
     for (let page = 0; !added && !noMoreHistory && page < MAX_SKIP_PAGES; page++) {
+      const from = pageCursor;
       const r = await requestHistory({
-        ...(pageCursor !== null ? { before: pageCursor } : {}),
+        ...(from !== null ? { before: from } : {}),
         limit: 40, verbs: ['say'],
       });
-      if (!r.entries?.length) { noMoreHistory = true; break; }
-      pageCursor = typeof r.oldestSeq === 'number' ? r.oldestSeq : r.entries[0].seq;
-      if (!r.hasMore) noMoreHistory = true;
+      const entries = r.entries ?? [];
+      // A trim that passed the cursor while this page was in flight has
+      // restarted the walk (trimLog is the only other writer of the cursor).
+      // The page's lines still slot in, but where the walk stands, and
+      // whether it has reached the beginning, now come from the restart.
+      if (pageCursor === from) {
+        if (entries.length) pageCursor = typeof r.oldestSeq === 'number' ? r.oldestSeq : entries[0].seq;
+        if (!entries.length || !r.hasMore) noMoreHistory = true;
+      }
+      if (!entries.length) continue;
       marker.remove();               // out before pinView measures, or it could be the anchor
-      added = insertPage(r.entries);
+      added = insertPage(entries);
       if (!added && !noMoreHistory) logEl.prepend(marker);
     }
     marker.remove();
@@ -322,6 +336,11 @@ export function logChat(who, text, kind = '', meta = {}) {
       lastLineEl.dataset.author === who && lastLineEl.dataset.utt === String(meta.utt)) {
     const body = lastLineEl.querySelector('.body');
     if (body) {
+      // the row now shows this say too: a trim must release its seq with
+      // the row's own, or paging would treat it as still on screen
+      if (typeof meta.seq === 'number' && meta.seq >= 0) {
+        lastLineEl.dataset.seqs = [...seqsOf(lastLineEl), meta.seq].join(',');
+      }
       const wasAtBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 48;
       body.append(' ', renderBody(text, namesForHighlight()));
       lastAt = Date.now();

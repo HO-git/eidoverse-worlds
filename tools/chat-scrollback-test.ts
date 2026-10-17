@@ -12,7 +12,11 @@
 // order, never renders a line twice, and reaches the beginning with every
 // say on screen exactly once. Also pinned (review of #243): a spoken row that
 // logChat moved by t0 does not scramble the fill, the reader's view holds
-// still when rows land above it, and a reconnect's new hole gets filled.
+// still when rows land above it, and a reconnect's new hole gets filled. And
+// (its second review) a row that merged a spoken utterance's says gives every
+// one of them back when it's trimmed, and a page that lands after a trim has
+// restarted the walk neither moves the cursor past the new hole nor ends the
+// walk.
 //
 // Each scenario gets a FRESH chat.js (cache-busted specifier): the paging
 // cursor is module state, and one scenario's walk must not leak into another.
@@ -32,7 +36,7 @@ plugin({
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 GlobalRegistrator.register();
 
-const { setLog } = await import("./chat-history-stub.mjs");
+const { setLog, holdNext, release, inFlight } = await import("./chat-history-stub.mjs");
 const { frameStub } = await import("./chat-frames-stub.mjs");
 const { emptyState, foldEntry } = await import("../shared/fold.js");
 
@@ -330,6 +334,91 @@ console.log("a reader following the bottom keeps following through a re-join fil
     check("a reader scrolled up stays on the row they were reading",
       reading.getBoundingClientRect().top === was && scroll2 === 1000, `${was} → ${reading.getBoundingClientRect().top}`);
   } finally { Element.prototype.getBoundingClientRect = realRect; }
+}
+
+const voices = ["cairn", "mythos", "apricot"];
+
+console.log("a row that merged a spoken utterance gives back all of it when trimmed");
+{
+  // one utterance aired as two says, #501 and #502 under the same utt, which
+  // logChat merges into one row. 403 later says trim that row off the top,
+  // and both of its says are history again.
+  const { logChat, logEl } = await freshChat();
+  const t0 = Date.now() - 1_000_000;
+  const log = Array.from({ length: 905 }, (_, i) => say(i + 1, i + 1 === 501 || i + 1 === 502 ? "ava" : voices[(i + 1) % 3], t0 + (i + 1) * 1000));
+  setLog(log);
+  for (const s of [501, 502]) logChat("ava", `#${s}`, "agent", { seq: s, ts: log[s - 1].ts, spoken: true, utt: 7 });
+  check("precondition: the two says share one row",
+    rowsOf(logEl).length === 1 && shownIn(logEl)[0] === "#501 #502", shownIn(logEl).join(" | "));
+  for (const e of log.slice(502)) logChat(e.actor, e.args.text, "", { seq: e.seq, ts: e.ts });
+  check("precondition: the merged row was trimmed off the top",
+    !shownIn(logEl).some((t) => t.includes("#501")) && rowsOf(logEl).length === 400, shownIn(logEl)[0]);
+  await scrollUp(logEl);
+  const back = shownIn(logEl);
+  check("paging brings back both of the trimmed row's says", back.includes("#501") && back.includes("#502"),
+    back.slice(0, 8).join(" "));
+  check("…in world order", isSorted(back), back.slice(0, 8).join(" "));
+}
+
+console.log("a trim while a page is in flight does not send the walk past the new hole");
+{
+  // #601–#1000 arrive live, and one scroll-up pages #561–#600 in on top. The
+  // next page (#521–#560) is in flight when a live line trims the top rows,
+  // #561–#601 among them, so the walk restarts. The page that lands after
+  // that must not set the cursor below the hole it just left.
+  const { logChat, logEl } = await freshChat();
+  const t0 = Date.now() - 1_100_000;
+  const log = Array.from({ length: 1001 }, (_, i) => say(i + 1, voices[(i + 1) % 3], t0 + (i + 1) * 1000));
+  setLog(log.slice(0, 1000));
+  for (const e of log.slice(600, 1000)) logChat(e.actor, e.args.text, "", { seq: e.seq, ts: e.ts });
+  await scrollUp(logEl);
+  check("precondition: one scroll-up paged #561–#600 in on top",
+    shownIn(logEl)[0] === "#561" && rowsOf(logEl).length === 440, `${shownIn(logEl)[0]}, ${rowsOf(logEl).length} rows`);
+  holdNext();
+  logEl.dispatchEvent(new Event("scroll"));
+  await Bun.sleep(5);
+  check("precondition: the next page is in flight", inFlight());
+  setLog(log);
+  logChat(log[1000].actor, "#1001", "", { seq: 1001, ts: log[1000].ts });
+  check("precondition: the live line trimmed #561–#601", shownIn(logEl)[0] === "#602", shownIn(logEl)[0]);
+  release(); await settle();
+  for (let i = 0; i < 4; i++) await scrollUp(logEl);
+  const shown = shownIn(logEl);
+  const missing = log.filter((e) => e.seq >= 481 && !shown.includes(e.args.text)).map((e) => e.seq);
+  check("every say from #481 to #1001 is back on screen", !missing.length,
+    `${missing.length} missing, #${missing[0]}–#${missing.at(-1)}`);
+  check("…once each, in world order", isSorted(shown) && new Set(shown).size === shown.length);
+}
+
+console.log("a page that lands after a trim restarted the walk does not end it");
+{
+  // the walk has paged down to #1, the first say there is, and its next page
+  // (before #1, which will come back empty) is in flight when a live line
+  // trims #1–#41 off the top. That empty page belongs to the old walk: it
+  // must not declare the beginning reached while #1–#41 are history again.
+  const { logChat, logEl } = await freshChat();
+  const t0 = Date.now() - 600_000;
+  const log = Array.from({ length: 441 }, (_, i) => say(i + 1, voices[(i + 1) % 3], t0 + (i + 1) * 1000));
+  setLog(log.slice(0, 440));
+  for (const e of log.slice(40, 440)) logChat(e.actor, e.args.text, "", { seq: e.seq, ts: e.ts });
+  await scrollUp(logEl);
+  check("precondition: one scroll-up paged #1–#40 in on top",
+    shownIn(logEl)[0] === "#1" && rowsOf(logEl).length === 440, `${shownIn(logEl)[0]}, ${rowsOf(logEl).length} rows`);
+  holdNext();
+  logEl.dispatchEvent(new Event("scroll"));
+  await Bun.sleep(5);
+  check("precondition: the page before #1 is in flight", inFlight());
+  setLog(log);
+  logChat(log[440].actor, "#441", "", { seq: 441, ts: log[440].ts });
+  check("precondition: the live line trimmed #1–#41", shownIn(logEl)[0] === "#42", shownIn(logEl)[0]);
+  release(); await settle();
+  check("the old walk's empty page doesn't declare the beginning", !logEl.textContent!.includes("beginning of this world"));
+  check("…and the same scroll-up walks on from the restart, bringing back #2–#41",
+    shownIn(logEl)[0] === "#2" && rowsOf(logEl).length === 440, `${shownIn(logEl)[0]}, ${rowsOf(logEl).length} rows`);
+  await scrollToTop(logEl);
+  const final = shownIn(logEl);
+  check("scrolling up brings #1–#41 back: every say once, in order",
+    final.length === 441 && isSorted(final) && final[0] === "#1", `${final.length}, first ${final[0]}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

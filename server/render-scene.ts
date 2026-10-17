@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { planStructure } from "../shared/structure.js";
 import { terrainParams, makeHeightField } from "../shared/terrainmath.js";
-import { shapedHeightAt, waterParams as levelParams } from "../shared/terrainshape.js";
+import { shapedHeightAt, waterParams as levelParams, shapeReady, shapeParams } from "../shared/terrainshape.js";
 import { analyzeWater } from "../shared/waterkind.js";
 import "./heightmap.ts";   // registers the heightmap grid loader the shaped terrain reads
 import { effectiveWorldTransform } from "../mcpl/effective.ts";
@@ -126,6 +126,16 @@ export function localMotion(raw: any, nowMs: number, simBody: boolean) {
   const t0 = Number.isFinite(m.t0) ? m.t0 : nowMs - since(m, nowMs) * 1000;
   return { base: { pos: raw.pos, yaw: raw.yaw ?? 0 }, m: { ...m, t0 } };
 }
+/** child world = carrier world ∘ (offset scaled by the carrier, then the mount's yaw); scale multiplies. */
+export function composeMount(pt: { pos: number[]; quat: number[]; scale: number }, mount: { offset: number[]; yaw: number }, ownScale = 1) {
+  const [qx, qy, qz, qw] = pt.quat, o = mount.offset.map((v: number) => v * (pt.scale ?? 1));
+  // rotate o by the carrier's quaternion
+  const ix = qw * o[0] + qy * o[2] - qz * o[1], iy = qw * o[1] + qz * o[0] - qx * o[2], iz = qw * o[2] + qx * o[1] - qy * o[0], iw = -qx * o[0] - qy * o[1] - qz * o[2];
+  const pos = [pt.pos[0] + ix * qw + iw * -qx + iy * -qz - iz * -qy, pt.pos[1] + iy * qw + iw * -qy + iz * -qx - ix * -qz, pt.pos[2] + iz * qw + iw * -qz + ix * -qy - iy * -qx];
+  const h = (mount.yaw ?? 0) / 2, yq = [0, Math.sin(h), 0, Math.cos(h)];
+  const quat = [qw * yq[0] + qx * yq[3] + qy * yq[2] - qz * yq[1], qw * yq[1] - qx * yq[2] + qy * yq[3] + qz * yq[0], qw * yq[2] + qx * yq[1] - qy * yq[0] + qz * yq[3], qw * yq[3] - qx * yq[0] - qy * yq[1] - qz * yq[2]];
+  return { pos, quat, scale: (pt.scale ?? 1) * ownScale };
+}
 export function localMount(raw: any, parent: any) {
   const m = raw?.parent;
   if (!m?.to) return null;
@@ -159,6 +169,13 @@ export function renderScene(c: Client, msg: any, now = Date.now()): object | nul
   // Rate-limit errors too. Commit delivered revisions only after size checks.
   old.at = now; clients.set(c, old);
   if (msg.version !== RENDER_VERSION) return { type: "render-scene", version: 1, world: w.name, error: "unsupported_version" };
+  // A saved heightmap whose grid has not loaded yet would project the noise fallback as the ground, and
+  // cache it as success (terrain, water and plant positions all wrong until some unrelated edit). Refuse
+  // until it is ready, caching nothing; `moving` keeps native clients polling at their usual interval.
+  // (the NORMALIZED shape: a malformed grid ref the height law ignores must not hold the scene forever)
+  if (!shapeReady(shapeParams(w.state.terrain ?? {})))
+    return { type: "render-scene", version: 1, world: w.name, error: "terrain_pending", moving: true, updateIntervalMs: 300,
+      detail: `heightmap grid ${String(w.state.terrain?.heightmap?.grid ?? "").slice(0, 120)} is not available yet` };
   try {
     const jp = w.joinPayload();
     const seq = Math.max(jp.throughSeq, ...jp.tail.slice(-1).map((e: any) => e.seq));
@@ -198,6 +215,24 @@ export function renderScene(c: Client, msg: any, now = Date.now()): object | nul
       if (e && s && Array.isArray(s.p)) return { ...e, pos: s.p, yaw: s.yaw ?? 0, livePose: { q: s.q }, comp: { ...e.comp, motion: null } };
       return e && b ? { ...e, pos: b.p, yaw: b.yaw, comp: { ...e.comp, motion: null } } : e;
     }, mount: (id: string) => w.state.entities[id]?.parent };
+    // Each entity's pose now: the effective transform where it resolves, else (a part socket somewhere up
+    // its chain) its carrier's pose composed with the mount — recursively, cycle- and depth-guarded.
+    const poses = new Map<string, any>();
+    const poseOf = (id: string, depth = 8): any => {
+      if (poses.has(id)) return poses.get(id);
+      poses.set(id, null);
+      let r: any = null;
+      const t = effectiveWorldTransform(id, view, now);
+      if (t.ok) r = { pos: t.pos, quat: t.quat, scale: t.scale ?? 1 };
+      else {
+        const raw = w.state.entities[id];
+        if (raw?.parent?.to && depth > 0) {
+          const pt = poseOf(raw.parent.to, depth - 1), m = localMount(raw, w.state.entities[raw.parent.to]);
+          if (pt && m) r = composeMount(pt, m, raw.scale ?? 1);
+        }
+      }
+      poses.set(id, r); return r;
+    };
     const transforms: any[] = []; const warnings: string[] = [];
     warnings.push(...cached.environment.flora.warnings);
     const weather=effectiveSky(w.state.sky,now),clock=effectiveClock(w.state.sky,now);
@@ -220,17 +255,13 @@ export function renderScene(c: Client, msg: any, now = Date.now()): object | nul
         moving ||= !!t.moving || !!partMotions;
       }
       else if (raw?.parent) {
-        // Mounted on a part socket: no server-side part pose, so send the rest-pose
-        // composition and the mount; native clients ride the live part.
-        const pt = effectiveWorldTransform(raw.parent.to, view, now), mount = localMount(raw, w.state.entities[raw.parent.to]);
-        if (pt.ok && mount) {
-          const [qx, qy, qz, qw] = pt.quat, o = (mount.offset as number[]).map((v: number) => v * (pt.scale ?? 1));
-          // rotate o by the parent quaternion
-          const ix = qw * o[0] + qy * o[2] - qz * o[1], iy = qw * o[1] + qz * o[0] - qx * o[2], iz = qw * o[2] + qx * o[1] - qy * o[0], iw = -qx * o[0] - qy * o[1] - qz * o[2];
-          const p = [pt.pos[0] + ix * qw + iw * -qx + iy * -qz - iz * -qy, pt.pos[1] + iy * qw + iw * -qy + iz * -qx - ix * -qz, pt.pos[2] + iz * qw + iw * -qz + ix * -qy - iy * -qx];
-          const h = (mount.yaw as number) / 2, yq = [0, Math.sin(h), 0, Math.cos(h)];
-          const q = [qw * yq[0] + qx * yq[3] + qy * yq[2] - qz * yq[1], qw * yq[1] - qx * yq[2] + qy * yq[3] + qz * yq[0], qw * yq[2] + qx * yq[1] - qy * yq[0] + qz * yq[3], qw * yq[3] - qx * yq[0] - qy * yq[1] - qz * yq[2]];
-          transforms.push({ id: e.id, p, q, scale: (pt.scale ?? 1) * (raw.scale ?? 1), mount, ...(partMotions ? { parts: partMotions } : {}) });
+        // Mounted on a part socket — directly, or further down a chain that rides one (a bag on a seat on a
+        // swing): no server-side part pose, so send the rest-pose composition and the mount relation;
+        // native clients ride the live part and everything mounted below it.
+        const pt = poseOf(raw.parent.to), mount = localMount(raw, w.state.entities[raw.parent.to]);
+        if (pt && mount) {
+          const c = composeMount(pt, mount, raw.scale ?? 1);
+          transforms.push({ id: e.id, p: c.pos, q: c.quat, scale: c.scale, mount, ...(partMotions ? { parts: partMotions } : {}) });
           moving = true;
         } else warnings.push(`${e.id}: ${t.why}`);
       }

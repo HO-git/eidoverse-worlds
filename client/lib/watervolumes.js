@@ -86,6 +86,7 @@ function updateEnvironmentSky(settings) {
   const sky=settings?.sky;
   if(skyDome){scene.remove(skyDome);skyDome.geometry.dispose();skyDome.material.dispose();skyDome=null;}
   if(!sky){
+    envLight=null;
     if(skySaved){sun.color.copy(skySaved.sunColor);sun.intensity=skySaved.sunIntensity;sun.position.copy(skySaved.sunPosition);hemi.intensity=skySaved.ambient;skySaved=null;}
     return;
   }
@@ -96,10 +97,15 @@ function updateEnvironmentSky(settings) {
   skyDome=new THREE.Mesh(new THREE.SphereGeometry(18000,32,16),mat);
   skyDome.userData.skyExempt=true;skyDome.userData.noWet=true;skyDome.userData.noCloudShadow=true;skyDome.renderOrder=-100;
   scene.add(skyDome);
-  sun.color.set(sky.sunColor??'#fff4df');sun.intensity=Number.isFinite(sky.sunIntensity)?Math.max(0,sky.sunIntensity):3;
-  sun.position.fromArray(vector(sky.sunDirection,[.4,.8,.2])).multiplyScalar(100);
-  hemi.intensity=Number.isFinite(sky.ambient)?Math.max(0,sky.ambient):1.5;
+  // The environment owns the sun and ambient while it is authored: the world sky (sky.js) rewrites them every
+  // frame, and this module's update runs after it, so applyEnvLight re-asserts them each frame.
+  envLight={color:new THREE.Color(sky.sunColor??'#fff4df'),intensity:Number.isFinite(sky.sunIntensity)?Math.max(0,sky.sunIntensity):3,
+    position:new THREE.Vector3().fromArray(vector(sky.sunDirection,[.4,.8,.2])).normalize().multiplyScalar(60),   // a direction at the sky's 60 m (shadow fit, lightrig.js)
+    ambient:Number.isFinite(sky.ambient)?Math.max(0,sky.ambient):1.5};
+  applyEnvLight();
 }
+let envLight=null;
+function applyEnvLight(){if(!envLight)return;sun.color.copy(envLight.color);sun.intensity=envLight.intensity;sun.position.copy(envLight.position);hemi.intensity=envLight.ambient;}
 const _p = new THREE.Vector3(), _q = new THREE.Quaternion();
 const entries = () => Object.entries(state.st.entities).sort(([a],[b])=>a.localeCompare(b));
 export function environmentSettings() {
@@ -127,10 +133,13 @@ function makeSurface(w) {
     positions.setXYZ(i,Math.sign(x)*Math.pow(Math.abs(x),2)*(w.size[0]/2),0,Math.sign(z)*Math.pow(Math.abs(z),2)*(w.size[2]/2));
   }
   const p=TSL.positionLocal;
+  // the owner's LIVE centre (a uniform, refreshed per frame): the waves stay in world space as the pool moves,
+  // matching waveHeight — what swimmers float on — instead of the centre it had when the mesh was built
+  const centre=uniform(new THREE.Vector2(w.center[0],w.center[2]));
   let h=TSL.float(0),dx=TSL.float(0),dz=TSL.float(0);
   for(const wave of w.waves){
     const k=2*Math.PI/wave.wavelength;
-    const phase=p.x.add(w.center[0]).mul(wave.direction[0]*k).add(p.z.add(w.center[2]).mul(wave.direction[1]*k))
+    const phase=p.x.add(centre.x).mul(wave.direction[0]*k).add(p.z.add(centre.y).mul(wave.direction[1]*k))
       .sub(clock.mul(Math.sqrt(9.81*k))).add(wave.phase);
     h=h.add(phase.sin().mul(wave.amplitude));
     dx=dx.add(phase.cos().mul(wave.amplitude*k*wave.direction[0]));
@@ -141,7 +150,7 @@ function makeSurface(w) {
   const ripple=p.x.mul(2.1).add(p.z.mul(1.7)).add(clock).sin().mul(.035);
   material.normalNode=TSL.transformNormalToView(TSL.vec3(dx.negate().add(ripple),1,dz.negate().sub(ripple)).normalize());
   const o=new THREE.Mesh(geo,material);o.position.set(w.center[0],w.top,w.center[2]);
-  o.userData.skyExempt=true;o.userData.noWet=true;o.userData.noCloudShadow=true;
+  o.userData.skyExempt=true;o.userData.noWet=true;o.userData.noCloudShadow=true;o.userData.centre=centre;
   o.frustumCulled=false;scene.add(o);surfaces.push(o);return o;
 }
 export function updateWater() {
@@ -164,7 +173,7 @@ export function updateWater() {
       maxs.array[i].set(w.center[0]+w.size[0]/2,w.top,w.center[2]+w.size[2]/2,0);
       absorption.array[i].set(...w.absorption,0);scatter.array[i].set(...w.scatter,0);
       if(rebuild)makeSurface(w);
-      else if(surfaces[i])surfaces[i].position.set(w.center[0],w.top,w.center[2]);
+      else if(surfaces[i]){surfaces[i].position.set(w.center[0],w.top,w.center[2]);surfaces[i].userData.centre?.value.set(w.center[0],w.center[2]);}
     }
     for(const box of (Array.isArray(comp.air?.boxes)?comp.air.boxes:[])) {
       if(!box || typeof box!=='object')continue;
@@ -180,6 +189,7 @@ export function updateWater() {
   if(waters.length&&!installed){previousFog=scene.fogNode;scene.fogNode=fogNode;installed=true;}
   if(!waters.length&&installed){scene.fogNode=previousFog;installed=false;}
   if(rebuild){const env=environmentSettings();setEnvironmentFloor(Number.isFinite(env?.floor)?env.floor:null);updateEnvironmentSky(env);makeParticles(env?.particles);}
+  applyEnvLight();
   if(skyDome)skyDome.position.copy(camera.position);
 }
 // Rebuild surfaces/particles/sky only when water or environment data can have changed: a reset, a water or

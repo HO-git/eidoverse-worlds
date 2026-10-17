@@ -26,7 +26,14 @@ export function projectFlora(raw: any, heightFn: (x:number,z:number)=>number) {
       if (o.rows && ((o.rows.spacing??.76)<.1 || (o.rows.plant??.24)<.05)) throw Error('Flora row spacing below native budget');
       const explicit=Array.isArray(o.placements)&&o.placements.length>0;
       if (explicit && !o.placements.every((pl:any)=>Array.isArray(pl)&&Number.isFinite(pl[0])&&Number.isFinite(pl[1])&&(pl[2]==null||Number.isFinite(pl[2])))) throw Error('Invalid flora placements');
-      const candidates=explicit?o.placements.length:o.rows?o.width*o.depth/(o.rows.spacing??.76)/(o.rows.plant??.24)*Math.max(1,o.density??1):o.width*o.depth*1.6*spec.density*(o.density??1)*(o.footprint==='organic'?1.45:1);
+      // Budget the loops placeInstances/placeRows ACTUALLY run, not the area: each loop runs at least once
+      // per row, so a sliver (depth 1e-20) with a huge density passed an area estimate while looping
+      // trillions of times — synchronously, freezing every world on the server.
+      const k=o.density??1;
+      const loops=(span:number,step:number)=>Math.max(1,Math.ceil(span/step));
+      const candidates=explicit?o.placements.length
+        :o.rows?loops(o.depth,o.rows.spacing??.76)*loops(o.width,(o.rows.plant??.24)/Math.max(1,k))
+        :(()=>{const step=1/Math.sqrt(spec.density*k*(o.footprint==='organic'?1.45:1));return loops(o.width*1.25,step)*loops(o.depth*1.25,step);})();
       if (!Number.isFinite(candidates)||candidates>800000||candidates>candidateBudget||(spec.footRadius&&candidates>5000)) {warnings.push(`${name}: field exceeds native placement budget`);continue;}
       candidateBudget-=candidates;
       // Large meadows retain the SAME seeded plants as the browser, but only

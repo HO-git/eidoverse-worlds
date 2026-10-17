@@ -262,7 +262,7 @@ export const keys = new Set();
 // XR intent — a thumbstick is a keyboard that reports fractions (parity law:
 // every gesture must be sayable). xr.js fills this per-frame while presenting;
 // the same wish/gravity/mantle/seat code below does every bit of the moving.
-export const xrIntent = { fwd: 0, strafe: 0, yawDelta: 0, jump: false, active: false };
+export const xrIntent = { fwd: 0, strafe: 0, yawDelta: 0, jump: false, active: false, pitchDown: 0 };   // pitchDown: the head's, radians (+ looking down)
 // While an XR session presents, the headset owns the camera (via the rig in
 // xr.js) — the desktop follow-cam must not fight it. Probe pattern as usual.
 let xrPresenting = () => false;
@@ -552,7 +552,10 @@ function updateSwimming(dt, me, fwd, strafe) {
   if (!water || myState.seat) { swimVelocity=[0,0,0];return false; }
   _swimProbe.copy(myState.pos);
   const floor = resolveColliders(_swimProbe,heightAt);
-  const rise=keys.has('Space'), dive=keys.has('KeyC')||keys.has('ControlLeft')||keys.has('ControlRight');
+  // a headset swims where it looks: A/X (its jump) rises, and looking down while pushing forward dives —
+  // no invented buttons (the desktop's C/Ctrl have no VR twin by design)
+  const xr=xrIntent.active;
+  const rise=keys.has('Space')||(xr&&xrIntent.jump), dive=keys.has('KeyC')||keys.has('ControlLeft')||keys.has('ControlRight');
   // Wading is still walking. At a deep shoreline gravity hands over to swim.
   const stature=deskEyeY(me?.userScale)/deskEyeY(1);   // this body's size: float depth, handover and head sweep follow it
   if(floor >= waveHeight(water,myState.pos.x,myState.pos.z,waterTime())-1.1*stature && !rise) return false;
@@ -560,7 +563,7 @@ function updateSwimming(dt, me, fwd, strafe) {
   if(!myState.locomotion)flashHint('swimming — WASD move, Space rise, C / Ctrl dive, Shift faster');
   mantle=null;posture=null;grounded=false;vy=0;airborneFor=0;
   _dir.set(strafe,0,-fwd).applyAxisAngle(UP,camYaw);
-  _dir.y = Number(rise)-Number(dive)-fwd*Math.sin(camPitch-.32);
+  _dir.y = Number(rise)-Number(dive)-fwd*Math.sin(xr?xrIntent.pitchDown:camPitch-.32);
   const input={direction:_dir.toArray(),rise,dive,fast:keys.has('ShiftLeft')||keys.has('ShiftRight'),stature};
   let mode='swim';const steps=Math.max(1,Math.ceil(dt/(1/60)));
   for(let i=0;i<steps;i++){

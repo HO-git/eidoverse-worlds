@@ -10,6 +10,7 @@ import { projectFlora } from '../server/render-flora.ts';
 import { placeInstances, placeExplicit, resetFloraOccupancy } from '../shared/flora-placement.js';
 import grassSpec from '../defs/flora/grass.json';
 import { emptySim, simEntry, advanceSim, tickOf } from '../shared/sim.js';
+import { registerGrid, shapedHeightAt, encodeGrid, decodeGrid } from '../shared/terrainshape.js';
 
 const building = { levels: [{ y: 0, tiles: [[0,0],[1,0]], walls: [[0,0,0],[0,0,1],[1,0,0],[1,2,0]], apertures: [[0,0,0,"door"]] }] };
 function fixture() {
@@ -249,4 +250,39 @@ test("authored flora placements reach native renderers as the exact plants the b
   resetFloraOccupancy();const want=placeExplicit({seed:9,placements,heightFn:()=>0.25},grassSpec);
   expect(got.map((p:any)=>[p.x,p.z,p.scale,p.y,p.yaw])).toEqual(want.map((p:any)=>[p.x,p.z,p.scale,p.y,p.yaw]));
   expect(got.map((p:any)=>[p.x,p.z])).toEqual([[1,2],[3,4],[-2,5]]);
+});
+test("a sliver field with a huge density is refused by its real loop count, fast (no server freeze)",()=>{
+  const t0=performance.now();
+  for(const raw of [{species:"grass",width:500,depth:1e-20,density:1e20},{species:"corn",width:500,depth:2,density:1e20,rows:{spacing:.76,plant:.24}}]){
+    const out=projectFlora(raw,()=>0);expect(out.strokes).toEqual([]);expect(out.warnings.join(" ")).toMatch(/budget/);
+  }
+  expect(performance.now()-t0).toBeLessThan(500);
+  // an ordinary field still projects
+  expect(projectFlora({species:"grass",width:20,depth:20},()=>0).strokes[0].placements.length).toBeGreaterThan(100);
+});
+test("a heightmap whose grid has not loaded is refused (no noise ground cached), then projects once it arrives",()=>{
+  const f=fixture();const grid=`store/heightmaps/${Date.now().toString(16).padStart(16,'0').slice(-16)}.json`;
+  f.write("terrain",{seed:3,size:40,heightmap:{grid,min:-10,max:10}});
+  const a=f.request(1000);expect(a.error).toBe("terrain_pending");expect(a.moving).toBe(true);expect(a.detail).toContain(grid);
+  registerGrid(grid,decodeGrid(encodeGrid({w:2,h:2,data:new Uint16Array([65535,65535,65535,65535])})));
+  const b=f.request(1300);expect(b.error).toBeUndefined();
+  // the shaped ground with the grid in it — and not what the same seed's noise fallback gives
+  const t={seed:3,size:40,heightmap:{grid,min:-10,max:10}},n=b.environment.terrain.segments;
+  const law=shapedHeightAt(makeHeightField(terrainParams(t)),t),noise=makeHeightField(terrainParams({seed:3,size:40}));
+  const h=b.environment.terrain.heights,at=(i:number)=>[((i%(n+1))/n-.5)*40,(Math.floor(i/(n+1))/n-.5)*40];
+  for(const i of [0,n,(n+1)*(n+1)>>1,(n+1)*(n+1)-1]){const [x,z]=at(i);expect(h[i]).toBeCloseTo(law(x,z),6);}
+  expect(h.some((v:number,i:number)=>{const [x,z]=at(i);return Math.abs(v-noise(x,z))>.5;})).toBe(true);
+  // a malformed grid ref is ignored by the height law, so it must not hold the scene pending forever
+  const g=fixture();g.write("terrain",{seed:3,size:40,heightmap:{grid:"not/a/grid",min:-10,max:10}});
+  expect(g.request(1000).error).toBeUndefined();
+});
+test("a chain riding a part socket (bag on a seat on a swing) gets poses and mount relations all the way down",()=>{
+  const f=fixture();f.write("spawn",{id:"swing",lib:"s.glb",pos:[0,0,0],scale:2});f.write("spawn",{id:"seat",lib:"c.glb"});f.write("spawn",{id:"bag",lib:"b.glb"});
+  f.write("comp",{id:"swing",type:"sockets",data:{ride:{pos:[0,1,0],part:"arm"}}});
+  f.write("mount",{id:"seat",to:"swing",slot:"ride"});f.write("mount",{id:"bag",to:"seat",offset:[0,.5,0]});
+  const r=f.request(1000),get=(id:string)=>r.transforms.find((t:any)=>t.id===id);
+  expect(get("seat")).toMatchObject({p:[0,2,0],scale:2,mount:{to:"swing",part:"arm"}});
+  const bag=get("bag");expect(bag).toBeDefined();expect(bag.mount).toMatchObject({to:"seat"});
+  expect(bag.p.map((v:number)=>Math.round(v*1e6)/1e6)).toEqual([0,3,0]);expect(bag.scale).toBe(2);   // offset .5 scaled by the carrier's 2
+  expect(r.warnings.filter((x:string)=>x.startsWith("bag:")||x.startsWith("seat:"))).toEqual([]);
 });

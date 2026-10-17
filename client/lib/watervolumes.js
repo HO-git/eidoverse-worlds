@@ -6,7 +6,8 @@ import { report } from './base.js';
 import { state, onWorldChange } from './state.js';
 import { MAX_WATER, MAX_AIR, waterParams, mediumAt, vector } from '../../shared/water.js';
 import { setEnvironmentFloor } from './terrain.js';
-const { uniform, uniformArray, wgslFn, positionWorld, cameraPosition, output } = TSL;
+const { uniform, uniformArray, positionWorld, cameraPosition, output, Fn, Loop, If, Break, Continue, float, int, bool, vec2, vec3, vec4,
+  array, select, min, max, exp, distance, all } = TSL;
 let objects = () => new Map();
 export function setWaterObjects(fn) { objects = fn; }
 // The shared wave clock (server time). Injected by main.js: importing remotes.js
@@ -21,46 +22,62 @@ const absorption = uniformArray(Array.from({length:MAX_WATER},()=>new THREE.Vect
 const scatter = uniformArray(Array.from({length:MAX_WATER},()=>new THREE.Vector4()));
 const dryInverse = uniformArray(Array.from({length:MAX_AIR},()=>new THREE.Matrix4()));
 const dryExtent = uniformArray(Array.from({length:MAX_AIR},()=>new THREE.Vector4()));
-const rayBox = wgslFn(`fn waterRayBox(a:vec3f,b:vec3f,lo:vec3f,hi:vec3f)->vec2f {
- var t0=0.0; var t1=1.0;
- for(var j=0;j<3;j++) { let d=b[j]-a[j];
-  if(abs(d)<0.0000001) { if(a[j]<lo[j] || a[j]>hi[j]) {return vec2f(1.,0.);} }
-  else {let x=(lo[j]-a[j])/d;let y=(hi[j]-a[j])/d;t0=max(t0,min(x,y));t1=min(t1,max(x,y));}
- } return vec2f(t0,t1);
-}`);
+// Portable TSL (not raw WGSL): the same shader must compile on the WebGL backend too — VR on a headset
+// without WebGPU-XR forces WebGL (backend_choice.js), and a WGSL-only pass would not build there.
+// Segment a→b clipped to the box lo..hi, as [t0, t1] along the segment; t1 <= t0 means a miss.
+const rayBox = Fn(([a, b, lo, hi]) => {
+  const t0 = float(0).toVar(), t1 = float(1).toVar(), miss = bool(false).toVar();
+  for (const c of ['x', 'y', 'z']) {
+    const d = b[c].sub(a[c]).toVar();
+    If(d.abs().lessThan(0.0000001), () => {
+      If(a[c].lessThan(lo[c]).or(a[c].greaterThan(hi[c])), () => { miss.assign(true); });
+    }).Else(() => {
+      const x = lo[c].sub(a[c]).div(d), y = hi[c].sub(a[c]).div(d);
+      t0.assign(max(t0, min(x, y))); t1.assign(min(t1, max(x, y)));
+    });
+  }
+  return select(miss, vec2(1, 0), vec2(t0, t1));
+});
 // Exact finite-segment clipping, including union of overlapping dry boxes. Water
 // volumes higher in stable id order take priority instead of double-fogging.
-const fogFn = wgslFn(`fn waterFog(color:vec4f,a:vec3f,b:vec3f,n:i32,na:i32,
- lo:array<vec4f,4>,hi:array<vec4f,4>,sigma:array<vec4f,4>,light:array<vec4f,4>,
- inv:array<mat4x4f,16>,ext:array<vec4f,16>)->vec4f {
- var optical=vec3f(0.);var source=vec3f(0.);var total=0.;
- for(var w=0;w<n;w++) {
-  let wet=waterRayBox(a,b,lo[w].xyz,hi[w].xyz);
-  if(wet.y<=wet.x){continue;}
-  var spans:array<vec2f,20>;var count=0;
-  for(var j=0;j<na;j++) {
-   let x=(inv[j]*vec4f(a,1.)).xyz;let y=(inv[j]*vec4f(b,1.)).xyz;
-   let v=waterRayBox(x,y,-ext[j].xyz,ext[j].xyz);
-   spans[count]=vec2f(max(wet.x,v.x),min(wet.y,v.y));count++;
-  }
-  for(var j=w+1;j<n;j++) {
-   let v=waterRayBox(a,b,lo[j].xyz,hi[j].xyz);
-   spans[count]=vec2f(max(wet.x,v.x),min(wet.y,v.y));count++;
-  }
-  // Insertion sort uses only the active slots (15 boxes in the reference scene).
-  for(var j=1;j<count;j++){let v=spans[j];var k=j;
-   loop {if(k<=0){break;}if(spans[k-1].x<=v.x){break;}spans[k]=spans[k-1];k--;}
-   spans[k]=v;
-  }
-  var dry=0.;var end=wet.x;
-  for(var j=0;j<count;j++){let v=spans[j];if(v.y>v.x){dry+=max(0.,v.y-max(end,v.x));end=max(end,v.y);}}
-  let len=max(0.,wet.y-wet.x-dry)*distance(a,b);
-  optical+=sigma[w].xyz*len;source+=light[w].xyz*len;total+=len;
- }
- let trans=exp(-optical);
- return vec4f(color.rgb*trans+(source/max(total,.000001))*(vec3f(1.)-trans),color.a);
-}`, [rayBox]);
-const fogNode = fogFn(output,cameraPosition,positionWorld,waterCount,airCount,mins,maxs,absorption,scatter,dryInverse,dryExtent);
+const SPANS = MAX_AIR + MAX_WATER;
+const fogFn = Fn(([color, a, b]) => {
+  const optical = vec3(0).toVar(), source = vec3(0).toVar(), total = float(0).toVar();
+  const spans = array('vec2', SPANS).toVar();
+  Loop({ start: int(0), end: waterCount, type: 'int', name: 'w' }, ({ w }) => {
+    const wet = rayBox(a, b, mins.element(w).xyz, maxs.element(w).xyz).toVar();
+    If(wet.y.lessThanEqual(wet.x), () => { Continue(); });
+    const count = int(0).toVar();
+    Loop({ start: int(0), end: airCount, type: 'int', name: 'j' }, ({ j }) => {
+      const m = dryInverse.element(j), e = dryExtent.element(j).xyz;
+      const v = rayBox(m.mul(vec4(a, 1)).xyz, m.mul(vec4(b, 1)).xyz, e.negate(), e);
+      spans.element(count).assign(vec2(max(wet.x, v.x), min(wet.y, v.y))); count.addAssign(1);
+    });
+    Loop({ start: w.add(1), end: waterCount, type: 'int', name: 'j2' }, ({ j2 }) => {
+      const v = rayBox(a, b, mins.element(j2).xyz, maxs.element(j2).xyz);
+      spans.element(count).assign(vec2(max(wet.x, v.x), min(wet.y, v.y))); count.addAssign(1);
+    });
+    // Insertion sort uses only the active slots (15 boxes in the reference scene).
+    Loop({ start: int(1), end: count, type: 'int', name: 's' }, ({ s }) => {
+      const v = spans.element(s).toVar(), k = s.toVar();
+      Loop(k.greaterThan(0), () => {
+        If(spans.element(k.sub(1)).x.lessThanEqual(v.x), () => { Break(); });
+        spans.element(k).assign(spans.element(k.sub(1))); k.subAssign(1);
+      });
+      spans.element(k).assign(v);
+    });
+    const dry = float(0).toVar(), end = float(wet.x).toVar();
+    Loop({ start: int(0), end: count, type: 'int', name: 'u' }, ({ u }) => {
+      const v = spans.element(u).toVar();
+      If(v.y.greaterThan(v.x), () => { dry.addAssign(max(0, v.y.sub(max(end, v.x)))); end.assign(max(end, v.y)); });
+    });
+    const len = max(0, wet.y.sub(wet.x).sub(dry)).mul(distance(a, b));
+    optical.addAssign(absorption.element(w).xyz.mul(len)); source.addAssign(scatter.element(w).xyz.mul(len)); total.addAssign(len);
+  });
+  const trans = exp(optical.negate());
+  return vec4(color.rgb.mul(trans).add(source.div(max(total, 0.000001)).mul(vec3(1).sub(trans))), color.a);
+});
+const fogNode = fogFn(output,cameraPosition,positionWorld);
 let previousFog = null, installed = false, dirty = true;
 let skyDome=null, skySaved=null, particles=null;
 const warned=new Set();
@@ -130,10 +147,11 @@ export function updateWater() {
   // Epoch wrapped for float precision; same clock on every peer.
   clock.value=(serverNow()%3600000)/1000;
   const rebuild=dirty;dirty=false;
-  if(rebuild){clearSurfaces();if(particles){scene.remove(particles);particles.geometry.dispose();particles.material.dispose();particles=null;}}
+  if(rebuild){clearSurfaces();volumeIds.clear();if(particles){scene.remove(particles);particles.geometry.dispose();particles.material.dispose();particles=null;}}
   waters.length=0;airs.length=0;
   for(const [id,e] of entries()) {
     const comp=e.comp??{}, matrix=matrixFor(id,e);
+    if(rebuild&&(comp.water||comp.environment))volumeIds.add(id);
     if(comp.water) {
       if(waters.length>=MAX_WATER){warn(`Water renderer supports ${MAX_WATER} water volumes; extra volumes are inactive`);continue;}
       const w=waterParams(comp.water);_p.fromArray(w.center).applyMatrix4(matrix);w.center=_p.toArray();
@@ -163,13 +181,32 @@ export function updateWater() {
   if(rebuild){const env=environmentSettings();setEnvironmentFloor(Number.isFinite(env?.floor)?env.floor:null);updateEnvironmentSky(env);makeParticles(env?.particles);}
   if(skyDome)skyDome.position.copy(camera.position);
 }
-onWorldChange(ev=>{if(ev.type!=='entry'||['comp','spawn','remove','place','mount','dismount'].includes(ev.entry.verb))dirty=true;});
+// Rebuild surfaces/particles/sky only when water or environment data can have changed: a reset, a water or
+// environment comp, or a spawn/remove/place/(dis)mount of an entity carrying one (its size follows scale).
+// Positions and dry boxes refresh every frame anyway, so other edits cost nothing here.
+const volumeIds = new Set();
+onWorldChange(ev=>{
+  if(ev.type!=='entry'){dirty=true;return;}
+  const {verb,args}=ev.entry,id=args?.id;
+  if(verb==='comp'){if(args?.type==='water'||args?.type==='environment'||volumeIds.has(id))dirty=true;return;}
+  if(verb==='spawn'){const c=state.st.entities[id]?.comp;if(c?.water||c?.environment)dirty=true;return;}
+  if(['remove','place','mount','dismount'].includes(verb)&&volumeIds.has(id))dirty=true;
+});
 
-const particleAlpha=wgslFn(`fn waterParticleAlpha(p:vec3f,n:i32,na:i32,lo:array<vec4f,4>,hi:array<vec4f,4>,inv:array<mat4x4f,16>,ext:array<vec4f,16>)->f32{
- for(var j=0;j<na;j++){let q=(inv[j]*vec4f(p,1.)).xyz;if(all(abs(q)<=ext[j].xyz)){return 0.;}}
- for(var j=0;j<n;j++){if(all(p>=lo[j].xyz)&&all(p<=hi[j].xyz)){return 1.;}}
- return 0.;
-}`);
+// 0 inside any dry box, 1 inside a water volume, else 0 (portable TSL, as the fog)
+const particleAlpha = Fn(([p]) => {
+  const alpha = float(0).toVar(), dry = bool(false).toVar();
+  Loop({ start: int(0), end: airCount, type: 'int', name: 'j' }, ({ j }) => {
+    const q = dryInverse.element(j).mul(vec4(p, 1)).xyz;
+    If(all(q.abs().lessThanEqual(dryExtent.element(j).xyz)), () => { dry.assign(true); Break(); });
+  });
+  If(dry.not(), () => {
+    Loop({ start: int(0), end: waterCount, type: 'int', name: 'w' }, ({ w }) => {
+      If(all(p.greaterThanEqual(mins.element(w).xyz)).and(all(p.lessThanEqual(maxs.element(w).xyz))), () => { alpha.assign(1); Break(); });
+    });
+  });
+  return alpha;
+});
 function makeParticles(spec){
  if(!spec||!waters.length)return;
  const count=Math.max(0,Math.min(3000,Math.floor(Number(spec.count)||1200))),range=Math.max(2,Math.min(60,Number(spec.range)||16));
@@ -179,6 +216,6 @@ function makeParticles(spec){
  const mat=new THREE.PointsNodeMaterial({color:spec.color??'#aec8b4',size:Math.max(.005,Math.min(.08,Number(spec.size)||.018)),transparent:true,depthWrite:false,sizeAttenuation:true});
  const p=TSL.positionLocal.add(TSL.vec3(clock.mul(.025),clock.mul(-.035),0)).sub(cameraPosition).add(range).mod(range*2).sub(range).add(cameraPosition);
  mat.positionNode=p;
- mat.opacityNode=particleAlpha(p,waterCount,airCount,mins,maxs,dryInverse,dryExtent).mul(p.distance(cameraPosition).div(range).oneMinus().max(0)).mul(.55);
+ mat.opacityNode=particleAlpha(p).mul(p.distance(cameraPosition).div(range).oneMinus().max(0)).mul(.55);
  particles=new THREE.Points(geo,mat);particles.frustumCulled=false;particles.userData.skyExempt=true;particles.userData.noWet=true;particles.userData.noCloudShadow=true;scene.add(particles);
 }

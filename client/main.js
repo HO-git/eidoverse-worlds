@@ -1,5 +1,5 @@
 import { setTraversalObjects } from './lib/traversal.js';
-import { updateVehicle } from './lib/vehicles.js';
+import { updateVehicle, piloting } from './lib/vehicles.js';
 import { updateWater, setWaterObjects, setWaterClock, environmentSettings, waterDebug } from './lib/watervolumes.js';
 // eidoverse-worlds browser client.
 //
@@ -34,7 +34,7 @@ import './lib/pictures.js';
 import { tickSounds } from './lib/sounds.js';   // the sound comp: positional audio from an entity
 import { tickMotion } from './lib/motion.js';
 import {
-  myState, updateMe, updateSpectator, setCamYaw, setPosture, togglePhotoMode,
+  myState, updateMe, updateSpectator, setCamYaw, setPosture, togglePhotoMode, photoMode,
   setRightsHook, setMeHook, setFolded,
 } from './lib/controller.js';
 import { remotes, updateRemotes, updateGaze, serverNow } from './lib/remotes.js';
@@ -457,7 +457,7 @@ const MAIN_KEYS = [
   { code: 'Tab', key: 'Tab', id: 'key:people', title: 'people here', keywords: ['who', 'present', 'roster'], group: 'panels', icon: 'users',
     prevent: true, run: () => togglePeopleHere() },
   { code: 'KeyB', key: 'B', id: 'panel:edit', run: () => toggleEditMode() },
-  { code: 'KeyP', key: 'P', id: 'key:photo', title: 'photo mode (free camera)', keywords: ['camera', 'picture'], group: 'view', run: () => togglePhotoMode() },
+  { code: 'KeyP', key: 'P', id: 'key:photo', title: 'photo mode (free camera)', keywords: ['camera', 'picture'], group: 'view', run: () => (piloting() && !photoMode ? flashHint('photo mode needs the controls — leave the helm first (E)', 4000) : togglePhotoMode()) },
   { code: 'F1', key: 'F1', id: 'key:hidehud', title: 'hide the HUD', keywords: ['interface', 'clean', 'photo'], group: 'view', icon: 'eye-slash',
     prevent: true, run: () => document.body.classList.toggle('photo') },
   { code: 'F2', key: 'F2', id: 'key:screenshot', title: 'save a screenshot', keywords: ['picture', 'capture'], group: 'view', prevent: true, run: () => saveScreenshot() },
@@ -574,7 +574,7 @@ registerSystem('water', updateWater);
 registerSystem('me-drive', (dt) => {
   if (CONFIG.renderer) { /* camera is driven per snap request */ }
   else if (CONFIG.spectate) updateSpectator(dt, CONFIG.follow ? remotes.get(CONFIG.follow) : null);
-  else if (updateVehicle(dt, getMe())) { /* lease holder drives the helm */ }
+  else if (updateVehicle(dt, getMe())) { if (photoMode) togglePhotoMode(); /* the helm owns the keys and camera: never both */ }
   else if (isDowned()) { myState.q=undefined;myState.locomotion=undefined;const me=getMe();if(me)me.locomotion=null;stepRagdoll(dt); }     // the controller yields while limp
   else if (avatarMounts.has(CONFIG.name)) updateMountedMe(dt);  // seated: derived, not driven
   else updateMe(dt, getMe());

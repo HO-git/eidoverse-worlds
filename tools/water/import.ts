@@ -64,7 +64,9 @@ try{
     v.verb==='spawn'&&entity?.lib===a.lib||
     v.verb==='comp'&&JSON.stringify(entity?.comp?.[a.type])===JSON.stringify(a.data)){skipped++;continue;}
   if(v.verb==='spawn'&&entity&&!replace)throw Error(`refusing to overwrite existing entity ${a.id}`);
-  const m=await next(m=>m.type==='log'&&m.entry?.verb===v.verb&&JSON.stringify(m.entry.args)===JSON.stringify(a),
+  // The authoritative echo carries server-stamped fields (placer); compare what we sent, not what it added.
+  const echoed=(args:any)=>{if(!args||typeof args!=='object')return args;const{placer,...rest}=args;return rest;};
+  const m=await next(m=>m.type==='log'&&m.entry?.verb===v.verb&&JSON.stringify(echoed(m.entry.args))===JSON.stringify(echoed(a)),
    ()=>ws.send(JSON.stringify({type:'verb',...v})));
   foldEntry(st,m.entry);applied++;
   // Stay below the ordinary verb-rate budget, including first-world imports.

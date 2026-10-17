@@ -174,7 +174,8 @@ export function renderScene(c: Client, msg: any, now = Date.now()): object | nul
       const previous = new Map(cached?.entities.map(e => [e.id, e]) ?? []);
       let geometryNumbers = 0, parts = 0;
       const entities = entries.map(([id, e]: [string, any]) => {
-        const source = hash([e.lib, e.kind, e.comp, e.parent, e.color, e.intensity, e.range, e.collide]);
+        // every field projectEntity reads: a light's keep/day or new attribution must re-project
+        const source = hash([e.lib, e.kind, e.comp, e.parent, e.color, e.intensity, e.range, e.collide, e.keep, e.day, e.actor, e.placer]);
         const projected = previous.get(id)?.source === source ? previous.get(id) : { ...projectEntity(id, e), source };
         geometryNumbers += projected.structure?.sweeps.reduce((n: number, s: any) => n + s.positions.length + s.indices.length, 0) ?? 0;
         parts += (projected.structure?.parts.length ?? 0) + (projected.structure?.boxes.length ?? 0);
@@ -190,8 +191,11 @@ export function renderScene(c: Client, msg: any, now = Date.now()): object | nul
     const sim = w.sim?.epoch ? structuredClone(simSnapshot(w.sim)) : null;
     if (sim && !sim.epoch?.foreign) advanceSim(sim, tickOf(sim, now));
     const activeBodies = sim && !sim.epoch?.foreign ? Object.values(sim.bodies).filter(b => !b.resting).length : 0;
+    // The pose each entity is at NOW: a live lease (a piloted vessel) beats the sim beats the fold — resolved
+    // through the whole mount chain, so cargo and riders ride where the leased carrier actually is.
     const view = { entity: (id: string) => {
-      const e = w.state.entities[id], b = sim?.bodies[id];
+      const e = w.state.entities[id], s = w.leases?.get(id)?.lastState, b = sim?.bodies[id];
+      if (e && s && Array.isArray(s.p)) return { ...e, pos: s.p, yaw: s.yaw ?? 0, livePose: { q: s.q }, comp: { ...e.comp, motion: null } };
       return e && b ? { ...e, pos: b.p, yaw: b.yaw, comp: { ...e.comp, motion: null } } : e;
     }, mount: (id: string) => w.state.entities[id]?.parent };
     const transforms: any[] = []; const warnings: string[] = [];
@@ -226,7 +230,7 @@ export function renderScene(c: Client, msg: any, now = Date.now()): object | nul
           const p = [pt.pos[0] + ix * qw + iw * -qx + iy * -qz - iz * -qy, pt.pos[1] + iy * qw + iw * -qy + iz * -qx - ix * -qz, pt.pos[2] + iz * qw + iw * -qz + ix * -qy - iy * -qx];
           const h = (mount.yaw as number) / 2, yq = [0, Math.sin(h), 0, Math.cos(h)];
           const q = [qw * yq[0] + qx * yq[3] + qy * yq[2] - qz * yq[1], qw * yq[1] - qx * yq[2] + qy * yq[3] + qz * yq[0], qw * yq[2] + qx * yq[1] - qy * yq[0] + qz * yq[3], qw * yq[3] - qx * yq[0] - qy * yq[1] - qz * yq[2]];
-          transforms.push({ id: e.id, p, q, scale: raw.scale ?? 1, mount, ...(partMotions ? { parts: partMotions } : {}) });
+          transforms.push({ id: e.id, p, q, scale: (pt.scale ?? 1) * (raw.scale ?? 1), mount, ...(partMotions ? { parts: partMotions } : {}) });
           moving = true;
         } else warnings.push(`${e.id}: ${t.why}`);
       }

@@ -7,7 +7,7 @@ import { createNativeLogin } from "../server/native-login.ts";
 import { captureCapability } from "../server/snapshots.ts";
 import { effectiveClock, effectiveSky } from '../shared/forecast.js';
 import { projectFlora } from '../server/render-flora.ts';
-import { placeInstances, resetFloraOccupancy } from '../shared/flora-placement.js';
+import { placeInstances, placeExplicit, resetFloraOccupancy } from '../shared/flora-placement.js';
 import grassSpec from '../defs/flora/grass.json';
 import { emptySim, simEntry, advanceSim, tickOf } from '../shared/sim.js';
 
@@ -216,4 +216,37 @@ test("inspector attribution: placer, last actor, lock and guard reach native ren
   const u=f.request(1000).upserts.find((x:any)=>x.id==="lamp1");
   expect(u.interact.placer).toBe("ada");expect(u.interact.placerSub).toBe("discord:1");
   expect(u.interact.guarded).toBe(true);expect(u.interact.locked).toBe(true);expect(u.interact.lastActor).toBe("builder");
+});
+
+// ---- review #248 ----
+test("a light's keep/day edit re-projects (the reuse key covers every projected field)",()=>{
+  const f=fixture();f.write("light",{id:"lamp",pos:[1,2,3],keep:true,day:false});
+  expect(f.request(1000).upserts.find((e:any)=>e.id==="lamp")).toMatchObject({keep:true,day:false});
+  f.write("light",{id:"lamp",pos:[1,2,3],keep:false,day:true});
+  expect(f.request(1300).upserts.find((e:any)=>e.id==="lamp")).toMatchObject({keep:false,day:true});
+});
+test("cargo rides a leased carrier where the lease puts it, pitch included",()=>{
+  const f=fixture();f.write("spawn",{id:"boat",lib:"b.glb",pos:[0,0,0]});f.write("spawn",{id:"crate",lib:"c.glb"});
+  f.write("mount",{id:"crate",to:"boat",offset:[0,1,0]});f.request(1000);
+  f.world.leases=new Map([["boat",{lastState:{p:[10,0,0],yaw:0}}]]);
+  const crate=(r:any)=>r.transforms.find((t:any)=>t.id==="crate").p.map((v:number)=>Math.round(v*1e6)/1e6);
+  expect(crate(f.request(1300))).toEqual([10,1,0]);
+  const h=Math.PI/4;f.world.leases.set("boat",{lastState:{p:[10,0,0],q:[Math.sin(h),0,0,Math.cos(h)]}});   // pitched 90° about x
+  expect(crate(f.request(1600))).toEqual([10,0,1]);
+  f.world.leases.clear();expect(crate(f.request(1900))).toEqual([0,1,0]);
+});
+test("a rider on a part socket inherits the carrier's scale, like any mount",()=>{
+  const f=fixture();f.write("spawn",{id:"swing",lib:"s.glb",pos:[0,0,0],scale:2});f.write("spawn",{id:"doll",lib:"d.glb"});
+  f.write("comp",{id:"swing",type:"sockets",data:{seat:{pos:[0,0.5,0],part:"seat"}}});
+  f.write("mount",{id:"doll",to:"swing",slot:"seat"});
+  expect(f.request(1000).transforms.find((t:any)=>t.id==="doll").scale).toBe(2);
+});
+test("authored flora placements reach native renderers as the exact plants the browser draws",()=>{
+  const placements=[[1,2,1],[3,4,.5],[-2,5]];
+  const out=projectFlora({species:"grass",seed:9,placements},()=>0.25);
+  expect(out.warnings).toEqual([]);
+  const got=out.strokes[0].placements;expect(got).toHaveLength(3);
+  resetFloraOccupancy();const want=placeExplicit({seed:9,placements,heightFn:()=>0.25},grassSpec);
+  expect(got.map((p:any)=>[p.x,p.z,p.scale,p.y,p.yaw])).toEqual(want.map((p:any)=>[p.x,p.z,p.scale,p.y,p.yaw]));
+  expect(got.map((p:any)=>[p.x,p.z])).toEqual([[1,2],[3,4],[-2,5]]);
 });

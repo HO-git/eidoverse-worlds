@@ -554,13 +554,14 @@ function updateSwimming(dt, me, fwd, strafe) {
   const floor = resolveColliders(_swimProbe,heightAt);
   const rise=keys.has('Space'), dive=keys.has('KeyC')||keys.has('ControlLeft')||keys.has('ControlRight');
   // Wading is still walking. At a deep shoreline gravity hands over to swim.
-  if(floor >= waveHeight(water,myState.pos.x,myState.pos.z,waterTime())-1.1 && !rise) return false;
+  const stature=deskEyeY(me?.userScale)/deskEyeY(1);   // this body's size: float depth, handover and head sweep follow it
+  if(floor >= waveHeight(water,myState.pos.x,myState.pos.z,waterTime())-1.1*stature && !rise) return false;
   if(flight){flight=null;releaseWings();}
   if(!myState.locomotion)flashHint('swimming — WASD move, Space rise, C / Ctrl dive, Shift faster');
   mantle=null;posture=null;grounded=false;vy=0;airborneFor=0;
   _dir.set(strafe,0,-fwd).applyAxisAngle(UP,camYaw);
   _dir.y = Number(rise)-Number(dive)-fwd*Math.sin(camPitch-.32);
-  const input={direction:_dir.toArray(),rise,dive,fast:keys.has('ShiftLeft')||keys.has('ShiftRight')};
+  const input={direction:_dir.toArray(),rise,dive,fast:keys.has('ShiftLeft')||keys.has('ShiftRight'),stature};
   let mode='swim';const steps=Math.max(1,Math.ceil(dt/(1/60)));
   for(let i=0;i<steps;i++){
     _swimOld.copy(myState.pos);
@@ -570,7 +571,7 @@ function updateSwimming(dt, me, fwd, strafe) {
     // swimming through a habitat ceiling, which walking's floor probe cannot.
     _dir.copy(myState.pos).sub(_swimOld);const distance=_dir.length();
     if(distance>.00001){_dir.divideScalar(distance);
-      for(const h of [.3,1.1]){
+      for(const h of [.3*stature,1.1*stature]){
         _swimProbe.copy(_swimOld);_swimProbe.y+=h;
         const hit=raySegment(_swimProbe,_dir,distance+.3);
         if(hit!==null){myState.pos.copy(_swimOld).addScaledVector(_dir,Math.max(0,hit-.3));swimVelocity=[0,0,0];break;}

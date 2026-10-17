@@ -6,7 +6,7 @@
 // colour) while above it is not; no shader errors on WebGPU or WebGL. SHOT_DIR=<dir> saves the frames.
 import { chromium } from 'playwright';
 import { strict as assert } from 'node:assert';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 const base = process.env.WATER_PREVIEW_URL ?? 'http://127.0.0.1:19347/?world=level-underwater&spectate=1&name=lvl';
 const shots = process.env.SHOT_DIR; if (shots) mkdirSync(shots, { recursive: true });
 const browser = await chromium.launch({ headless: true, channel: 'chrome', args: ['--enable-unsafe-webgpu', '--use-angle=metal'] });
@@ -18,16 +18,23 @@ try {
     // The ground builder is upstream's engine module (/library/eidoverse/terrain.js), not in this repo; a test
     // preview's library may not carry it. Stand in with this repo's own height law (shared/terrainmath.js — the
     // law the server and agents use), so the water fills real lows; never fetched from any other server.
-    await page.route('**/library/eidoverse/terrain.js', (route) => route.fulfill({ status: 200, contentType: 'text/javascript', body: '// stand-in: makeTerrain is defined by the test' }));
+    // ENGINE_LIB=<dir of upstream eidoverse/*.js> runs the REAL engine modules (terrain, sky, weather — the weather
+    // system wraps transparent materials, which a stand-in would never exercise); otherwise a stand-in ground.
+    const engine = process.env.ENGINE_LIB;
+    if (engine) await page.route('**/library/eidoverse/*.js', (route) => {
+      const f = `${engine}/${new URL(route.request().url()).pathname.split('/').pop()}`;
+      return existsSync(f) ? route.fulfill({ status: 200, contentType: 'text/javascript', body: readFileSync(f, 'utf8') }) : route.continue();
+    });
+    else await page.route('**/library/eidoverse/terrain.js', (route) => route.fulfill({ status: 200, contentType: 'text/javascript', body: '// stand-in: makeTerrain is defined by the test' }));
     await page.goto(`${base}&${backend}=1`);
     await page.waitForFunction(() => !!globalThis.__waterDebug);
     await page.evaluate(async () => { const st = await import('/lib/state.js'); for (let i = 0; i < 200 && !st.state.hydrated; i++) await new Promise((r) => setTimeout(r, 50)); });
-    const r = await page.evaluate(async () => {
+    const r = await page.evaluate(async (realEngine: boolean) => {
       const { camera, renderer, scene } = await import('/lib/core.js');
       const { CONFIG } = await import('/lib/base.js'); CONFIG.renderer = true;   // we drive the camera
       const { applyTerrainState } = await import('/lib/world.js');
       const { THREE } = await import('/lib/core.js'), tm = await import('/shared/terrainmath.js');
-      (globalThis as any).makeTerrain = (args: any) => {
+      if (!realEngine) (globalThis as any).makeTerrain = (args: any) => {
         const p = tm.terrainParams(args), h = tm.makeHeightField(p), geo = new THREE.PlaneGeometry(p.size, p.size, 128, 128).rotateX(-Math.PI / 2);
         const pos = geo.attributes.position; for (let i = 0; i < pos.count; i++) pos.setY(i, h(pos.getX(i), pos.getZ(i)));
         geo.computeVertexNormals();
@@ -80,6 +87,11 @@ try {
       const camY = surf - Math.min(1.2, best.depth * 0.5);
       out.up = await frame([best.x, camY, best.z], [best.x + 10, camY + 10 * Math.tan(50 * Math.PI / 180), best.z]);
       out.backend = renderer.backend?.isWebGLBackend ? 'webgl' : 'webgpu';
+      // the full sky's weather system wets every material: vec4(colorNode) → rgb × k, alpha kept. The sheet's colour
+      // must survive that wrap (a select() colour compiled to invalid WGSL and no water drew at all on staging)
+      { const sheet: any = scene.getObjectByName('water'); const { TSL } = await import('/lib/core.js');
+        const base4 = TSL.vec4(sheet.material.colorNode); sheet.material.colorNode = TSL.vec4(base4.rgb.mul(TSL.float(0.9)), base4.a); sheet.material.needsUpdate = true;
+        out.wrapped = await frame([best.x - 6, surf + 3, best.z - 6], [best.x + 6, surf - 1, best.z + 6]); await new Promise((r) => setTimeout(r, 1200)); }
       // four authored volumes AND the level: every one keeps a fog slot (the level has its own)
       const st2 = await import('/lib/state.js');
       let seq = 2e9; const fold = (verb: string, args: any) => st2.foldLive({ seq: ++seq, ts: Date.now(), actor: 'test', verb, args });
@@ -90,7 +102,7 @@ try {
       out.afterReset = { level: lw.levelWaterInfo(), debug: wv.waterDebug(), backgroundNode: scene.backgroundNode ? 'set' : null };
       out.debug = (globalThis as any).__lvlDebug;
       return out;
-    });
+    }, !!engine);
     assert.ok(!r.error, r.error);
     // pixel statistics from the PNGs, in the page (mean colour and spread)
     const stats = await page.evaluate(async (urls: string[]) => Promise.all(urls.map(async (u) => {

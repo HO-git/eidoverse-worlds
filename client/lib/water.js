@@ -16,7 +16,7 @@
 //
 // Nothing here moves bodies — wading is the controller's (and the agents') rule, from the same level.
 import { THREE, scene } from './core.js';
-import { attribute, mix, smoothstep, vec3, float, positionGeometry, uniform, sin, cos, max, normalize, color, transformNormalToView, frontFacing, positionWorld, cameraPosition, select } from 'three/tsl';
+import { attribute, mix, smoothstep, vec3, float, positionGeometry, uniform, sin, cos, max, normalize, color, transformNormalToView, faceDirection, positionWorld, cameraPosition } from 'three/tsl';
 import { OCEAN, RIVER, STILL, waveClock, cyc, surfaceOffset } from '../../shared/waves.js';
 import { setWaterField } from './terrain.js';
 import { onWorldChange } from './state.js';
@@ -206,8 +206,13 @@ export function applyWater(args, heightAt) {
   const snell = smoothstep(0.6, 0.72, up);
   const belowCol = mix(deepCol.mul(0.35), base.mul(1.15).add(vec3(0.08, 0.1, 0.1)), snell);
   const belowOpacity = mix(float(0.92), float(0.5), snell).mul(smoothstep(-0.02, 0.04, wet));   // the window still tints the sky
-  mat.colorNode = select(frontFacing, aboveCol, belowCol);
-  mat.opacityNode = select(frontFacing, aboveOpacity, belowOpacity);
+  // front (from above) = 1, back (from below) = 0, as plain arithmetic: a select() here typed the colour as a vec3
+  // while generating a vec4 variable, and the weather system's wetness wrap — vec4(colorNode).rgb … .a — then
+  // produced invalid WGSL (`vec4(<vec4>, 1.0)`) on worlds with the full sky: the sheet's pipeline failed and no
+  // water drew at all. The colour stays a vec3, as upstream's always was.
+  const front = faceDirection.mul(0.5).add(0.5);
+  mat.colorNode = mix(belowCol, aboveCol, front);
+  mat.opacityNode = mix(belowOpacity, aboveOpacity, front);
 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.name = 'water';

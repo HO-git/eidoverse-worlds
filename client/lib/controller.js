@@ -566,7 +566,7 @@ function updateSwimming(dt, me, fwd, strafe) {
   _dir.y = Number(rise)-Number(dive)-fwd*Math.sin(xr?xrIntent.pitchDown:camPitch-.32);
   // a headset heading down (looking down, pushing forward) is diving: it releases the surface latch, which
   // otherwise snaps a swimmer with no dive button straight back up (its direction stays where it looks)
-  const headsetDive=xr&&fwd*Math.sin(xrIntent.pitchDown)>.3;
+  const headsetDive=xr&&!rise&&fwd*Math.sin(xrIntent.pitchDown)>.3;   // an explicit rise (A/X) wins
   const input={direction:_dir.toArray(),rise,dive:dive||headsetDive,fast:keys.has('ShiftLeft')||keys.has('ShiftRight'),stature};
   let mode='swim';const steps=Math.max(1,Math.ceil(dt/(1/60)));
   for(let i=0;i<steps;i++){

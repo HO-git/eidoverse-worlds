@@ -304,6 +304,19 @@ try {
     const AI = keep(await open(IW, {}, alice));
     check("…who gets in", AI.snap()?.yourRights?.role === "owner", `code=${AI.closedWith} ${AI.errors.join("|")}`);
     AI.close();
+    // #7 a SUBJECT string is a subject: a visitor whose display name is set to
+    // look like someone's subject does not receive that person's grant
+    const SW = `${W}-subj`;
+    const AS = keep(await open(SW, {}, alice));
+    check("alice founds an open world for this", AS.snap()?.yourRights?.role === "owner", `code=${AS.closedWith}`);
+    await login("human:discord:8001", "Tamsin");
+    const mimic = await login("human:discord:8002", "human:discord:8001");
+    const M = keep(await open(SW, {}, mimic));
+    check("a visitor named \"human:discord:8001\" is standing here", Boolean(M.snap()), `code=${M.closedWith} ${M.errors.join("|")}`);
+    check("alice adds subject human:discord:8001 as builder", (await ask(AS, "grant", { id: "human:discord:8001", role: "builder" })) === null);
+    const g7 = lastLog(AS, (e) => e.verb === "grant" && e.args.sub && e.args.role === "builder");
+    check("…the grant goes to that subject (Tamsin), not to the namesake", g7?.args?.sub === "human:discord:8001" && g7?.args?.id === "Tamsin", JSON.stringify(g7?.args));
+    M.close(); AS.close();
   }
 
   console.log("10. who can come in — the listing");

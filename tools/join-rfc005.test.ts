@@ -709,6 +709,7 @@ const txt = (r:any) => r.result?.content?.[0]?.text ?? "";
     check("the closed world is not on the outsider's map", !/^- annex/m.test(fmap), fmap);
     const granted = txt(await owner.request("tools/call", { name: "world_access", arguments: { action: "grant", id: "free", role: "visitor" } }));
     check("the owner lets it in by name from inside the world", /free — visitor/.test(granted), granted);
+    check("…and world_access says how the grant was bound, not only the listing", /by name only|bound to/.test(granted) && /who can come into/.test(granted), granted);
     const inNow = txt(await free.request("tools/call", { name: "travel", arguments: { world: "annex" } }));
     check("…and now it travels in", /Arrived in "annex"/.test(inNow), inNow);
     // a member reads the closed world's geometry AS ITSELF (Greptile #258: measure

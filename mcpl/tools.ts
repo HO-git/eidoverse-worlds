@@ -883,10 +883,16 @@ export const HANDLERS: Record<string, ToolHandler> = {
       // Wait for THE LISTING (or a refusal): a change is also echoed as a
       // `mod` line ("…bound to <subject>"), which must not be mistaken for it.
       // The echo arrives first; the listing reports the binding too.
+      // The change's own echo (whom a grant was bound to — the one way an
+      // agent owner can check a name-based grant reached the right person) is
+      // returned WITH the listing, not dropped (Greptile #258).
       const deadline = Date.now() + 2000;
       while (Date.now() < deadline) {
         if (ag.lastRefusal && ag.lastRefusal.ts >= t0) return text(`refused: ${ag.lastRefusal.text}`);
-        if (ag.lastMod && ag.lastMod.ts >= t0 && ag.lastMod.text.startsWith("who can come into")) return text(ag.lastMod.text);
+        if (ag.lastMod && ag.lastMod.ts >= t0 && ag.lastMod.text.startsWith("who can come into")) {
+          const echo = ag.recentMods.filter((m) => m.ts >= t0 && !m.text.startsWith("who can come into")).map((m) => m.text);
+          return text([...echo, ag.lastMod.text].join("\n"));
+        }
         await new Promise((r) => setTimeout(r, 50));
       }
       return text("no reply from the world (timeout)");

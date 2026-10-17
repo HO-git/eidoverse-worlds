@@ -183,9 +183,20 @@ function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
   //     seen (one match binds; several are refused; none stays by name).
   let sub: string | undefined;
   const named = id;   // what the owner typed, before a subject string is re-filed under its name below
-  const rec = id !== "*" ? roles[id] : undefined;
-  const present = id !== "*" ? [...w.clients].find((o) => o.id === id && o.sub) : undefined;
+  // A SUBJECT STRING IS A SUBJECT, before anything else: the owner panel adds
+  // a directory pick by its sub, and a display name can be set to look exactly
+  // like one — so name lookups (a present namesake, a record under that name)
+  // must never get the first say over it (Greptile #258: a visitor named
+  // "human:discord:…" would have received the pick's grant, owner included).
+  const explicit = id !== "*" && SUB_RE.test(id);
+  const rec = id !== "*" && !explicit ? roles[id] : undefined;
+  const present = id !== "*" && !explicit ? [...w.clients].find((o) => o.id === id && o.sub) : undefined;
   if (id === "*") sub = undefined;
+  else if (explicit) {
+    sub = id;
+    const p = principalOf(id);
+    if (p) id = p.name.slice(0, 64);
+  }
   else if (rec) {
     // …unless someone ELSE stands here under that name: the owner may mean
     // the person in front of them or the one the record names, so neither
@@ -196,11 +207,7 @@ function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
     sub = rec.sub ?? present?.sub;
   }
   else if (present?.sub) sub = present.sub;
-  else if (SUB_RE.test(id)) {
-    sub = id;
-    const p = principalOf(id);
-    if (p) id = p.name.slice(0, 64);
-  } else {
+  else {
     const known = resolveName(id);
     if (known.length === 1) sub = known[0]!.sub;
     else if (known.length > 1) {

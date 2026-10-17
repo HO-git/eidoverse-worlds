@@ -793,6 +793,11 @@ export class WorldAgent {
           case "mod":
             // Moderation replies (ban lists, global-ban confirmations).
             this.lastMod = { ts: Date.now(), text: String(msg.text ?? "") };
+            // …kept briefly as a short list too: one change can answer in more
+            // than one line (a grant's "bound to <subject>" echo, then the
+            // listing), and a tool must be able to hand back all of them
+            this.recentMods.push(this.lastMod);
+            if (this.recentMods.length > 20) this.recentMods.shift();
             break;
           case "notice":
             // The world telling this identity something that is not a refusal
@@ -3394,6 +3399,8 @@ export class WorldAgent {
   /** The world's most recent mid-life refusal / moderation reply. */
   lastRefusal: { ts: number; text: string } | null = null;
   lastMod: { ts: number; text: string } | null = null;
+  /** The last few `mod` replies, oldest first (see the "mod" case). */
+  recentMods: { ts: number; text: string }[] = [];
 
   /** Moderation messages that are not world verbs: 'world-bans' (list this
    *  world's bans — anyone present), 'global-ban' / 'global-unban' /

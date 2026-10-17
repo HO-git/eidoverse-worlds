@@ -2,27 +2,27 @@
 // tokens.json. Before this was escaped, an id with regex metacharacters threw
 // inside a catch-all — so the agent silently never heard its own name again,
 // for the life of the process, with a single log line and no other symptom.
-import { mentionRegex, mentionRegexFor } from '../mcpl/mention.ts';
+import { mentionRegexFor } from '../mcpl/mention.ts';
 let pass = 0, fail = 0;
 const check = (n, c) => { c ? (pass++, console.log(`ok   ${n}`)) : (fail++, console.log(`FAIL ${n}`)); };
 
 // 1. Normal ids still match the way they always did.
-check('plain name matches @mention', mentionRegex('hesperus').test('hey @hesperus hi'));
-check('plain name matches bare word', mentionRegex('hesperus').test('hesperus, look'));
+check('plain name matches @mention', mentionRegexFor(['hesperus']).test('hey @hesperus hi'));
+check('plain name matches bare word', mentionRegexFor(['hesperus']).test('hesperus, look'));
 check('plain name does not match a substring',
-  !mentionRegex('hes').test('hesperus is here'));
+  !mentionRegexFor(['hes']).test('hesperus is here'));
 
 // 2. Metacharacter ids must not throw — this is the regression.
 for (const id of ['a(', 'x[', 'b+', 'c.d', 'e|f', 'g*', 'h$', 'i^', 'j\\', 'k?']) {
   let threw = false, matched = false;
-  try { matched = mentionRegex(id).test(`hi @${id} there`); } catch { threw = true; }
+  try { matched = mentionRegexFor([id]).test(`hi @${id} there`); } catch { threw = true; }
   check(`id ${JSON.stringify(id)} does not throw`, !threw);
   if (!threw) check(`id ${JSON.stringify(id)} still matches itself`, matched);
 }
 
 // 3. Escaping must be LITERAL, not merely non-throwing: `b+` must not match `bbb`.
-check('metacharacters are literal, not operators', !mentionRegex('b+').test('bbb here'));
-check('a dot does not match any character', !mentionRegex('c.d').test('cxd here'));
+check('metacharacters are literal, not operators', !mentionRegexFor(['b+']).test('bbb here'));
+check('a dot does not match any character', !mentionRegexFor(['c.d']).test('cxd here'));
 
 // 4. Negative control — the OLD unescaped construction must be shown to break.
 let oldThrew = false;
@@ -46,6 +46,9 @@ check('control: the unescaped form does throw', oldThrew);
   check('a bare qualified name also requires the right qualifier', !rx.test('Artie (cloud) is here'));
   check('an equal unqualified id cannot bypass qualifier matching', !mentionRegexFor(['artie', 'Artie (kube)']).test('@Artie (cloud)'));
   check('a later valid mention still matches after another qualified name', rx.test('@Artie (cloud), ask @Artie (kube)'));
+  // The short form refuses a parenthetical after it, which can't be told from
+  // another resident's qualifier: the trade this body's alias keeps.
+  check('the short form with an aside after it stays unheard (the kept trade)', !rx.test('@Artie (quick question) can you look?'));
   check('a prefix of the id is a different body', !rx.test('artie-kubernetes is a different body'));
   check('a prefix of the dropped name is a different body', !rx.test('artiest of them all'));
   check('an id with a trailing qualifier gets the same treatment', mentionRegexFor(['zed (two)']).test('@zed hi'));
@@ -55,6 +58,15 @@ check('control: the unescaped form does throw', oldThrew);
   check('the dropped form collapses with an equal id', mentionRegexFor(['artie', 'Artie (kube)']).source.split('|').length === 2);
   check('malformed entries are skipped, not fatal', mentionRegexFor([undefined, 42, 'zed']).test('@zed'));
   check('no usable name yields null', mentionRegexFor([undefined, '']) === null);
+}
+
+// A name with no qualifier is heard with an aside after it: only the short
+// form of a qualified name is held to the parenthetical that follows it.
+{
+  const rx = mentionRegexFor(['artie', 'Artie']);
+  check('a whole name is heard with an aside after it', rx.test('@Artie (quick question) can you look?'));
+  check('a bare whole name is heard with an aside after it', rx.test("hey Artie (when you can), the door's stuck"));
+  check('a whole qualified name is heard with an aside after it', mentionRegexFor(['artie-kube', 'Artie (kube)']).test('@Artie (kube) (when you can) look'));
 }
 
 // Enrollment reserves a complete name, not every alias it could shorten to.
@@ -77,7 +89,7 @@ for (const [label, id] of [['undefined', undefined], ['null', null],
                            ['number', 42], ['empty string', ''],
                            ['object', {}]]) {
   let threw = false, out;
-  try { out = mentionRegex(id); } catch { threw = true; }
+  try { out = mentionRegexFor([id]); } catch { threw = true; }
   check(`${label} id does not throw`, !threw);
   check(`${label} id returns null (degraded, not a bogus regex)`, !threw && out === null);
 }

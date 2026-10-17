@@ -1,4 +1,4 @@
-/** The "was I named?" pattern, built from an id.
+/** The "was I named?" pattern, built from the names a body answers to.
  *
  *  🔴 ESCAPE THE NAME. This was built inline in three places from an id that
  *  arrives UNVALIDATED in tokens.json, so an id containing regex metacharacters
@@ -25,9 +25,6 @@
  *  symptom. That is the identical failure the escaping fixed, arriving through a
  *  different door. Returns null so callers can decide; a thrown regex was never
  *  a useful answer to "was I named?". */
-export function mentionRegex(id: unknown): RegExp | null {
-  return mentionRegexFor([id]);
-}
 
 /** A trailing ` (qualifier)` on a name, the house label convention
  *  (`#name (Guild)`, `Artie (kube)`): the part people drop when they address
@@ -45,24 +42,25 @@ const TRAILING_QUALIFIER = /\s*\([^()]*\)\s*$/u;
  *  of one (`artie-kube` handles exist), so neither `artie` nor `artie-kube`
  *  matches inside `artie-kubernetes`. Malformed or empty entries are skipped,
  *  duplicates collapse case-insensitively, and a list with no usable name
- *  returns null exactly like `mentionRegex`. Self-enrolled names must pass
- *  dropQualifiers:false: ownership of a full name does not grant its alias.
- *  An explicit qualifier in the text must match too; a short form cannot
- *  consume the start of a different resident's qualified name. */
+ *  returns null. Self-enrolled names must pass dropQualifiers:false: ownership
+ *  of a full name does not grant its alias. The short form of a qualified
+ *  name, whether it is the dropped alias or the body's own id, refuses a
+ *  parenthetical after it, since "@Artie (cloud)" names a different resident;
+ *  every other name is heard with an aside after it ("@Artie (quick
+ *  question) can you look?" reaches a body named "Artie"). */
 export function mentionRegexFor(names: readonly unknown[], { dropQualifiers = true }: { dropQualifiers?: boolean } = {}): RegExp | null {
-  const seen = new Set<string>();
-  const parts: string[] = [];
-  const add = (form: string) => {
-    const key = form.toLowerCase();
-    if (!form || seen.has(key)) return;
-    seen.add(key);
-    parts.push(form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  };
+  const forms = new Map<string, string>();   // lower-cased form -> the form
+  const shorts = new Set<string>();          // short forms of the qualified names
   for (const candidate of names) {
     if (typeof candidate !== "string" || !candidate) continue;
-    add(candidate);
-    if (dropQualifiers) add(candidate.replace(TRAILING_QUALIFIER, ""));
+    if (!forms.has(candidate.toLowerCase())) forms.set(candidate.toLowerCase(), candidate);
+    const short = candidate.replace(TRAILING_QUALIFIER, "");
+    if (!short || short === candidate) continue;
+    shorts.add(short.toLowerCase());
+    if (dropQualifiers && !forms.has(short.toLowerCase())) forms.set(short.toLowerCase(), short);
   }
-  if (parts.length === 0) return null;
-  return new RegExp(`(?<![\\w@-])@?(?:${parts.join("|")})(?![\\w-])(?!\\s*\\([^()]*\\))`, "i");
+  if (forms.size === 0) return null;
+  const parts = [...forms].map(([key, form]) => form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    + (shorts.has(key) ? "(?!\\s*\\([^()]*\\))" : ""));
+  return new RegExp(`(?<![\\w@-])@?(?:${parts.join("|")})(?![\\w-])`, "i");
 }

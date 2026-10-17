@@ -26,16 +26,21 @@ USER_="${PROJECTOR_PUBLISH_USER:-publisher}"
 KEY="${PROJECTOR_PUBLISH_KEY:-}"
 STREAM_PATH="${PROJECTOR_PATH:-screen}"
 case "$STREAM_PATH" in *[!A-Za-z0-9_-]*|"") echo "mkconfig: PROJECTOR_PATH must be [A-Za-z0-9_-]+ (got '$STREAM_PATH')" >&2; exit 2;; esac
-# Every value below is spliced into YAML by sed, unquoted. sed's replacement
-# side reads `&` (the match), `\` (an escape) and the `|` delimiter as
-# syntax, and YAML reads `#`, `:`, quotes and newlines as structure — so a
-# key like `p&ss|word` would render silently wrong (the `&` becomes the
-# literal text `${PUBLISH_KEY}`) or truncate the file. Rather than escape
-# our way through two grammars, each value is checked against the set of
-# characters that is inert in both, and anything else is refused by name
-# (Mica, #187 round-two follow-up). A minted key is hex and always passes.
-#   user:  [A-Za-z0-9_.-]              key:  [A-Za-z0-9_.+/=-]  (hex, base64, urlsafe)
+# Every value below is spliced into YAML by sed. sed's replacement side
+# reads `&` (the match), `\` (an escape) and the `|` delimiter as syntax, so
+# a key like `p&ss|word` would render silently wrong (the `&` becomes the
+# literal text `${PUBLISH_KEY}`) or truncate the file. The template quotes
+# every spliced value, because YAML types a plain scalar by its whole value
+# (`true` is a boolean, `123` a number, `-` a list), but a quote or `\`
+# inside a quoted value would still end it or start an escape. Rather than
+# escape our way through two grammars, each value is checked against the
+# set of characters that is inert in both, and anything else is refused by
+# name (Mica, #187 round-two follow-up). A minted key is hex and always
+# passes.
+#   user:  [A-Za-z0-9_.-]              key:  [A-Za-z0-9_./=-]  (hex, base64 without +, urlsafe)
 #   bind:  [A-Za-z0-9.:-]  (IPv4, IPv6, or a hostname)   ports: 1–65535
+# A key has no `+`: the RTMP publish URL carries the key as a query value,
+# and MediaMTX reads a `+` there as a space, so that key would never match.
 inert() { # $1 = name, $2 = value, $3 = allowed class (a case pattern body), $4 = "secret" keeps the value out of stderr
   case "$2" in "") echo "mkconfig: $1 must not be empty" >&2; exit 2;; esac
   case "$2" in *[!$3]*)
@@ -59,7 +64,13 @@ port() { # $1 = name, $2 = value
 }
 inert PROJECTOR_PUBLISH_USER "$USER_" 'A-Za-z0-9_.-'
 inert PROJECTOR_BIND "$BIND" 'A-Za-z0-9.:-'
-[ -n "$KEY" ] && inert PROJECTOR_PUBLISH_KEY "$KEY" 'A-Za-z0-9_.+/=-' secret
+if [ -n "$KEY" ]; then
+  case "$KEY" in *+*)
+    echo "mkconfig: PROJECTOR_PUBLISH_KEY may not contain '+': the RTMP publish URL carries the key as a query value, where '+' reads as a space, so it would never match (the value is a secret and is not shown)" >&2
+    exit 2;;
+  esac
+  inert PROJECTOR_PUBLISH_KEY "$KEY" 'A-Za-z0-9_./=-' secret
+fi
 port PROJECTOR_RTSP_PORT "${PROJECTOR_RTSP_PORT:-8554}"
 port PROJECTOR_RTMP_PORT "${PROJECTOR_RTMP_PORT:-1935}"
 port PROJECTOR_HLS_PORT "${PROJECTOR_HLS_PORT:-8888}"
@@ -84,6 +95,10 @@ else
   WEBRTC_HOSTS='[]'
   echo "mkconfig: NETWORK appliance on $BIND — publishing needs the key you set; readers need nothing" >&2
 fi
+# An IPv6 bind takes brackets, as it must beside a port (`[fe80::1]:1935`);
+# the template's quotes keep YAML from reading them as a list. `::1` became
+# 127.0.0.1 above.
+case "$BIND" in *:*) BIND="[$BIND]";; esac
 # every substitution is explicit; an unset name would leave a literal ${…}
 # in the config, so we check for that after rendering
 sed \

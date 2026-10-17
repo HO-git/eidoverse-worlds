@@ -3,20 +3,14 @@
 //
 //   bun tools/name-snowball-test.ts
 //
-// Three places decide a client's stored name, and each is pinned here:
-//   1. base.js at load — heals a poisoned ew-name (any leading prefix on a
-//      renderer/spectator, only a stacked one for a person).
-//   2. nameFromJoinAck (net.js onSnapshot) — strips the prefix sendJoin put
-//      on the wire id, but never from a verified identity.
-//   3. index.html's early socket — must not join with a poisoned name (it
-//      runs before base.js heals, and on a new world would make the poisoned
-//      name the owner).
-// Plus the loop itself: five reloads of a renderer and a spectator, wire id
-// out and ack back, must leave the stored name where it started. And
-// section 4 drives the real net.js onSnapshot → sendJoin, so reverting the
-// nameFromJoinAck call there fails by name (2 alone would not notice).
+// The join ack is where a client's stored name came to grow: nameFromJoinAck
+// (net.js onSnapshot) strips the prefix sendJoin put on the wire id, but
+// never from a verified identity. Pinned here: the function itself; the loop,
+// five reloads of a renderer and a spectator, wire id out and ack back,
+// leaving the stored name where it started; and the real net.js onSnapshot →
+// sendJoin, so reverting the nameFromJoinAck call there fails by name (the
+// function's own checks would not notice).
 
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 let pass = 0, fail = 0;
@@ -26,32 +20,7 @@ function check(name: string, cond: boolean, detail = "") {
 }
 const ROOT = join(import.meta.dir, "..");
 
-// ---- 1. base.js load-time heal (fresh process per case: base.js reads its globals once) ----
-console.log("base.js heal at load");
-function loadBase(search: string, stored: string | null) {
-  const code = `
-    const mem = new Map(${JSON.stringify(stored === null ? [] : [["ew-name", stored]])});
-    globalThis.location = { search: ${JSON.stringify(search)}, host: "x", pathname: "/" };
-    globalThis.localStorage = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k) };
-    const b = await import(${JSON.stringify(join(ROOT, "client/lib/base.js"))});
-    console.log(JSON.stringify({ name: b.CONFIG.name, stored: mem.get("ew-name") }));`;
-  const r = Bun.spawnSync(["bun", "-e", code], { stdout: "pipe", stderr: "pipe" });
-  try { return JSON.parse(r.stdout.toString().trim().split("\n").pop()!); }
-  catch { return { name: `ERROR ${r.stderr.toString().slice(0, 200)}`, stored: null }; }
-}
-for (const [mode, search, stored, want] of [
-  ["renderer", "?renderer", "renderer-renderer-helen", "helen"],
-  ["renderer", "?renderer", "renderer-helen", "helen"],
-  ["spectate", "?spectate", "retina-retina-retina-helen", "helen"],
-  ["person", "", "retina-retina-helen", "helen"],
-  ["person", "", "renderer-fan", "renderer-fan"],   // one prefix on a person is a real name
-  ["renderer", "?renderer", "helen", "helen"],
-] as const) {
-  const got = loadBase(search, stored);
-  check(`${mode}: stored ${stored} → ${want}`, got.name === want && got.stored === want, JSON.stringify(got));
-}
-
-// ---- 2. the join ack ----------------------------------------------------------------
+// ---- the join ack -------------------------------------------------------------------
 console.log("nameFromJoinAck");
 const { nameFromJoinAck } = await import("../client/lib/base.js");
 check("renderer ack strips renderer-", nameFromJoinAck("renderer-helen", { renderer: true }) === "helen");
@@ -74,38 +43,13 @@ for (const [mode, prefix] of [["renderer", "renderer-"], ["spectate", "retina-"]
   check(`${mode}: the stored name is still "helen" after 5 reloads`, stored === "helen", stored);
 }
 
-// ---- 3. index.html's early socket -------------------------------------------------------
-console.log("early socket");
-const html = readFileSync(join(ROOT, "client/index.html"), "utf8");
-const scriptBody = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).find((s) => s.includes("__ewEarlySocket = stash"));
-check("the early-socket script is found", !!scriptBody);
-function earlyJoin(stored: string) {
-  const mem = new Map<string, string>([["ew-name-set", "1"], ["ew-name", stored]]);
-  const fakeGlobal: Record<string, unknown> = {};
-  let joinedAs: string | null = null;
-  class FakeWS { onopen: any; onmessage: any; onclose: any; onerror: any; readyState = 0;
-    constructor() { setTimeout(() => this.onopen?.(), 0); }
-    send(s: string) { joinedAs = JSON.parse(s).id; } close() {} addEventListener() {} }
-  new Function("location", "localStorage", "WebSocket", "globalThis", scriptBody!)(
-    { search: "?world=brand-new", protocol: "http:", host: "x" },
-    { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => mem.set(k, v) },
-    FakeWS, fakeGlobal);
-  return new Promise<{ opened: boolean; joinedAs: string | null }>((res) => setTimeout(() => res({ opened: !!fakeGlobal.__ewEarlySocket, joinedAs }), 20));
-}
-let e = await earlyJoin("helen");
-check("a clean saved name still joins early", e.opened && e.joinedAs === "helen", JSON.stringify(e));
-e = await earlyJoin("retina-retina-helen");
-check("a poisoned saved name does NOT join early (base.js heals it first)", !e.opened && e.joinedAs === null, JSON.stringify(e));
-e = await earlyJoin("renderer-fan");
-check("a single-prefix person name still joins early", e.opened && e.joinedAs === "renderer-fan", JSON.stringify(e));
-
-// ---- 4. net.js onSnapshot, the call itself -------------------------------------------------
-// Section 2 pins nameFromJoinAck as a function; this pins that onSnapshot USES it.
-// base.js heals only at page load, so the ack is the one place that stops a
-// spectator storing "retina-helen" (and joining under it on their next visit as a
-// person) or a renderer that reconnects without reloading from joining as
-// "renderer-renderer-helen". Real net.js + base.js, fresh process per page load;
-// only the DOM-touching UI modules are stubbed.
+// ---- net.js onSnapshot, the call itself ----------------------------------------------------
+// The checks above pin nameFromJoinAck as a function; this pins that onSnapshot
+// USES it, the one place that stops a spectator storing "retina-helen" (and
+// joining under it on their next visit as a person) or a renderer that
+// reconnects without reloading from joining as "renderer-renderer-helen".
+// Real net.js + base.js, fresh process per page load; only the DOM-touching UI
+// modules are stubbed.
 console.log("net.js onSnapshot");
 type Step = { ack: string; sub?: string } | "join";
 function pageLoad(search: string, stored: string, steps: Step[]) {
@@ -117,7 +61,7 @@ function pageLoad(search: string, stored: string, steps: Step[]) {
     const { mock } = await import("bun:test");
     const L = ${JSON.stringify(L)};
     mock.module(L + "presence.js", () => ({ presence: {} }));
-    mock.module(L + "chat.js", () => ({ logChat() {}, logWhisper() {}, noteTyping() {}, noteHistoryContext() {} }));
+    mock.module(L + "chat.js", () => ({ logChat() {}, logWhisper() {}, noteTyping() {}, noteHistoryContext() {}, resyncChatAfter() {} }));
     mock.module(L + "boot.js", () => ({ markPhase() {} }));
     const net = await import(L + "net.js");
     const { CONFIG } = await import(L + "base.js");
@@ -141,11 +85,17 @@ function pageLoad(search: string, stored: string, steps: Step[]) {
   const back = pageLoad("", spec.stored, ["join"]);
   check("…and the next visit, as a person, joins as helen", back.joins[0] === "helen", JSON.stringify(back));
 
-  // the renderer case: reconnect without a reload (base.js's heal never runs)
+  // the renderer case: reconnect without a reload
   const rend = pageLoad("?renderer", "helen", ["join", { ack: "renderer-helen" }, "join", { ack: "renderer-helen" }, "join"]);
   check("renderer: reconnects keep joining as renderer-helen",
     rend.joins.length === 3 && rend.joins.every((j) => j === "renderer-helen"), JSON.stringify(rend));
   check("renderer: CONFIG.name and ew-name stay helen", rend.name === "helen" && rend.stored === "helen", JSON.stringify(rend));
+
+  // a name poisoned before the fix stops growing: it stays as stored, for its owner to rename
+  const old = pageLoad("?renderer", "renderer-renderer-helen", ["join", { ack: "renderer-renderer-renderer-helen" }, "join"]);
+  check("a renderer stored as renderer-renderer-helen keeps that name across a rejoin",
+    old.name === "renderer-renderer-helen" && old.stored === "renderer-renderer-helen"
+      && old.joins.every((j) => j === "renderer-renderer-renderer-helen"), JSON.stringify(old));
 
   // and the exemption reaches the call: a verified identity is taken whole
   const ver = pageLoad("?spectate", "x", ["join", { ack: "retina-helen", sub: "agent:retina-helen@guest" }]);

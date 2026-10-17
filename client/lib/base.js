@@ -48,20 +48,6 @@ export const CONFIG = {
     `guest-${Math.random().toString(36).slice(2, 6)}`,
 };
 if (params.get('key')) store?.setItem('ew-key', CONFIG.token);
-// Heal names poisoned by the join-ack bug fixed in net.js onSnapshot, which
-// folded the transport prefix ("renderer-" / "retina-", see sendJoin) back into
-// ew-name on every reload. On a renderer/spectator any leading prefix is
-// poison; elsewhere only a stacked one is unambiguous, so a person who really
-// is called "renderer-fan" keeps their name. (index.html's early socket uses
-// the same stacked rule to stay out of the way — see STACKED_PREFIX there.)
-export const STACKED_PREFIX = /^(renderer-|retina-){2,}/;
-{
-  const poison = (CONFIG.renderer || CONFIG.spectate)
-    ? /^(renderer-|retina-)+/ : STACKED_PREFIX;
-  if (poison.test(CONFIG.name)) {
-    CONFIG.name = CONFIG.name.replace(poison, '') || `guest-${Math.random().toString(36).slice(2, 6)}`;
-  }
-}
 store?.setItem('ew-name', CONFIG.name);
 
 /** The name a join ack says we have, minus the transport prefix sendJoin put

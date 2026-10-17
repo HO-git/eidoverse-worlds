@@ -58,6 +58,9 @@ check('control: the unescaped form does throw', oldThrew);
   check('a name that is only a qualifier contributes no empty alternative', mentionRegexFor(['(kube)']).source.split('|').length === 1 && !mentionRegexFor(['(kube)']).test('anything at all'));
   check('a parenthetical inside the name is not a qualifier', !mentionRegexFor(['a (b) c']).test('a is here') && mentionRegexFor(['a (b) c']).test('@a (b) c is here'));
   check('duplicate names collapse', mentionRegexFor(['nova', 'Nova']).source.split('|').length === 1);
+  // toLowerCase() folds the Kelvin sign into k, but the pattern's i flag
+  // doesn't equate them: the first spelling listed, the id, is the one kept.
+  check('a name folded into an earlier one keeps the earlier spelling', mentionRegexFor(['k', '\u212A']).test('@k'));
   check('the dropped form collapses with an equal id', mentionRegexFor(['artie', 'Artie (kube)']).source.split('|').length === 2);
   check('malformed entries are skipped, not fatal', mentionRegexFor([undefined, 42, 'zed']).test('@zed'));
   check('no usable name yields null', mentionRegexFor([undefined, '']) === null);

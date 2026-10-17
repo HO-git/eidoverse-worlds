@@ -56,15 +56,19 @@ const TRAILING_QUALIFIER = /\s*\([^()]*\)\s*$/u;
  *  from an aside, and two bodies that answer to one first name are both
  *  addressed, as above. */
 export function mentionRegexFor(names: readonly unknown[], { dropQualifiers = true }: { dropQualifiers?: boolean } = {}): RegExp | null {
+  // A name's lower case keys it, and the first spelling listed is the one
+  // kept: the `i` flag (without `u`) doesn't equate every pair toLowerCase()
+  // folds together, such as the Kelvin sign and `k`, so the kept spelling is
+  // the one the pattern matches, and the id, listed first, is kept.
   const forms = new Map<string, string>();   // lower-cased form -> the form
   const shorts = new Set<string>();          // short forms of the qualified names
   for (const candidate of names) {
     if (typeof candidate !== "string" || !candidate) continue;
-    forms.set(candidate.toLowerCase(), candidate);
+    if (!forms.has(candidate.toLowerCase())) forms.set(candidate.toLowerCase(), candidate);
     const short = candidate.replace(TRAILING_QUALIFIER, "");
     if (!short || short === candidate) continue;
     shorts.add(short.toLowerCase());
-    if (dropQualifiers) forms.set(short.toLowerCase(), short);
+    if (dropQualifiers && !forms.has(short.toLowerCase())) forms.set(short.toLowerCase(), short);
   }
   if (forms.size === 0) return null;
   const parts = [...forms].map(([key, form]) => form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")

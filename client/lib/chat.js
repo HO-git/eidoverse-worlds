@@ -6,9 +6,10 @@
 // no highlight when one arrived, and no unread state. That asymmetry is the
 // same one build mode fixed, in a different place.
 //
-// The mention pattern here is deliberately IDENTICAL to mcpl/agent.ts's — what
-// a person sees highlighted must be exactly what pings the agent, or the two
-// species are reading different rooms.
+// The mention pattern here is a simpler one than the agent's (mcpl/mention.ts):
+// @name, or the bare name as a whole word. The agent's rule also handles a
+// qualified display name such as `Artie (kube)` and treats a hyphen as part
+// of a name, so a person's highlight and an agent's ping can differ.
 
 import { CONFIG, bus, colorFor, assignColors } from './base.js';
 // NOT importing xrpanels.js: it reaches the engine through domquad -> htmlmesh, and
@@ -47,7 +48,8 @@ let historyIdx = -1;
 
 // ---------------------------------------------------------------- mentions
 
-/** Same rule as the agent side: @name, or the bare name as a whole word. */
+/** @name, or the bare name as a whole word: simpler than the agent side's
+ *  rule (mcpl/mention.ts), which handles qualified names. */
 export function mentionRx(name) {
   const safe = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(@${safe}\\b|\\b${safe}\\b)`, 'i');

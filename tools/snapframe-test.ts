@@ -73,8 +73,10 @@ let up2 = false;
 for (let i = 0; i < 60 && !up2; i++) { try { await fetch(`http://127.0.0.1:${PORT}/worlds`); up2 = true; } catch { await Bun.sleep(200); } }
 if (!up2) { console.error("FATAL: scratch sequencer never came up (bun install in the repo root?)"); process.exit(2); }
 
-// fake renderer leg: answer every snap with a 1×1 PNG, and remember its view
-// and framing, which is all this test is about (a sender may add other fields)
+// fake renderer leg: answer every snap with a 1×1 PNG. It records each snap's
+// view and frame, and any framing value also copied to the message's top level,
+// where it could be read as framing or collide with a field such as an image
+// size. Other fields aren't compared, so a sender can add its own.
 const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 const asked: Record<string, unknown>[] = [];
 const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
@@ -82,7 +84,8 @@ await new Promise<void>((res) => { ws.onopen = () => { ws.send(JSON.stringify({ 
 ws.onmessage = (ev) => {
   const m = JSON.parse(String(ev.data));
   if (m.type === "snap") {
-    asked.push(m.frame === undefined ? { view: m.view } : { view: m.view, frame: m.frame });
+    const flat = m.frame ? Object.keys(m.frame).filter((k) => m[k] === m.frame[k]) : [];
+    asked.push({ view: m.view, ...(m.frame === undefined ? {} : { frame: m.frame }), ...(flat.length ? { flat } : {}) });
     ws.send(JSON.stringify({ type: "snap-result", id: m.id, dataUrl: PNG }));
   }
 };
@@ -104,8 +107,10 @@ const rpc = (method: string, params?: unknown) => new Promise<any>((res, rej) =>
   stdin.write(JSON.stringify({ jsonrpc: "2.0", id: i, method, ...(params !== undefined ? { params } : {}) }) + "\n"); stdin.flush(); });
 await rpc("initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "snapframe-test", version: "0" } });
 stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n"); stdin.flush();
+let joined = false;
 for (let i = 0; i < 50; i++) { const r = await fetch(`http://127.0.0.1:${PORT}/worlds`).then((r) => r.json()).catch(() => null);
-  if (JSON.stringify(r ?? "").includes("framer")) break; await Bun.sleep(200); }
+  if (JSON.stringify(r ?? "").includes("framer")) { joined = true; break; } await Bun.sleep(200); }
+check("the door's agent joined the world", joined);
 
 const schema = (await rpc("tools/list")).result.tools.find((t: any) => t.name === "snapshot")?.inputSchema?.properties ?? {};
 check("snapshot tool advertises pitch, dist and height", ["pitch", "dist", "height"].every((k) => k in schema), Object.keys(schema).join(","));

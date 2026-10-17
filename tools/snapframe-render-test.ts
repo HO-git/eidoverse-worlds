@@ -89,6 +89,8 @@ for (const dist of [2, 1, 0.5]) {
 }
 t = await shoot({ view: "third", frame: { dist: 0.5 } });
 check("dist 0.5 at default height: in frame from 0.92 m up", !!t.shot && lowestInFrame(t.shot) === 0.92, `lowest ${t.shot && lowestInFrame(t.shot)}`);
+t = await shoot({ view: "third", frame: { height: 0 } });
+check("height 0 puts the eye at the feet, not the default", !!t.shot && near(t.shot.eye, at(0, -3.4)), t.shot ? fmt(t.shot.eye) : "");
 
 // ---- selfie -----------------------------------------------------------------
 console.log("selfie");
@@ -98,6 +100,10 @@ check("aim at the body, 1.25 m up", !!t.shot && near(t.shot.at, at(1.25, 0)), t.
 t = await shoot({ view: "selfie", frame: { dist: 1.2, height: 0.8 } });
 check("dist+height move the eye", !!t.shot && near(t.shot.eye, at(0.8, 1.2)), t.shot ? fmt(t.shot.eye) : "");
 check("aim stays on the body", !!t.shot && near(t.shot.at, at(1.25, 0)), t.shot ? fmt(t.shot.at) : "");
+t = await shoot({ view: "selfie", frame: { height: 0 } });
+check("height 0 puts the eye at the feet, not the default", !!t.shot && near(t.shot.eye, at(0, 2.6)), t.shot ? fmt(t.shot.eye) : "");
+t = await shoot({ view: "selfie", frame: { dist: 500, height: 99 } });
+check("dist and height are clamped to 30 m", !!t.shot && near(t.shot.eye, at(30, 30)), t.shot ? fmt(t.shot.eye) : "");
 
 // ---- first ------------------------------------------------------------------
 console.log("first");
@@ -116,6 +122,10 @@ console.log("fields on the message itself");
 // A snap that also carries an image size (width, height) asks for no framing.
 t = await shoot({ view: "selfie", width: 960, height: 540 });
 check("selfie with an image size: the default eye, 1.6 m up", !!t.shot && near(t.shot.eye, at(1.6, 2.6)), t.shot ? fmt(t.shot.eye) : String(t.r));
+t = await shoot({ view: "third", width: 960, height: 540, dist: 1 });
+check("third with an image size and a dist: the default eye and aim", !!t.shot && near(t.shot.eye, at(2.1, -3.4)) && near(t.shot.at, at(1.2, 4)), t.shot ? `${fmt(t.shot.eye)} → ${fmt(t.shot.at)}` : String(t.r));
+t = await shoot({ view: "selfie", dist: 1 });
+check("selfie with a dist: the default eye, 2.6 m in front", !!t.shot && near(t.shot.eye, at(1.6, 2.6)), t.shot ? fmt(t.shot.eye) : String(t.r));
 n = composed.length;
 await shoot({ view: "first", pitch: -60 });
 check("first with a pitch outside frame: the default gaze", composed.length === n + 1 && composed.at(-1)!.pitch === undefined, JSON.stringify(composed.at(-1)?.pitch));

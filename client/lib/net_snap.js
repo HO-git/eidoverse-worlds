@@ -35,7 +35,7 @@ export async function snapshot(msg) {
     if (msg.view === 'third') {
       // The aim's look-ahead scales with the camera's distance: 4 m ahead at
       // the default 3.4 m, proportionally less closer in, so a near camera
-      // still tilts down far enough to keep the body in frame.
+      // still tilts down far enough to keep the body in frame from below 1 m up.
       const dist = frame.dist ?? 3.4;
       const eye = root.position.clone().add(new THREE.Vector3(0, frame.height ?? 2.1, 0)).addScaledVector(fwd, -dist);
       dataUrl = captureFrom(eye,

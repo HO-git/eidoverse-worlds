@@ -210,9 +210,18 @@ function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
     // could be mistaken for something else (`*`, a reserved actor, another
     // subject string): then under the subject itself (a member named "*"
     // once made a revoke-by-subject hit the wildcard).
-    const own = Object.keys(roles).find((k) => roles[k]?.sub === sub);
-    if (own) id = own;
-    else {
+    // …exactly one, though: a world written before the one-record migration
+    // can hold several for a subject, and rightsIn deliberately reads that
+    // ambiguity as the wildcard. Continuing any ONE of them would resurrect
+    // its fields (an old owner role, say — Greptile #258), so a grant asks
+    // for a clean slate; a revoke removes them all (the fold drops every
+    // record carrying the subject).
+    const owns = Object.keys(roles).filter((k) => roles[k]?.sub === sub);
+    if (owns.length > 1 && !revoke) {
+      return { error: `${sub} has more than one grant here from older history (${owns.join(", ")}) — revoke it, then grant again` };
+    }
+    if (owns.length === 1) id = owns[0]!;
+    else if (!owns.length) {
       const p = principalOf(id);
       if (p && fileableName(p.name)) id = p.name.slice(0, 64);
     }
@@ -228,7 +237,9 @@ function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
     // already has their OWN record under another name: the fold would merge
     // the two, carrying the name-only record's role over theirs. Which one
     // the owner means is not guessed.
-    if (!rec.sub && present?.sub) {
+    // (A revoke is never ambiguous here: it removes only the name-only record,
+    // and the person's own grant is untouched — Greptile #258.)
+    if (!rec.sub && present?.sub && !revoke) {
       const own = Object.keys(roles).find((k) => k !== id && roles[k]?.sub === present.sub);
       if (own) return { error: `"${id}" is listed by name only, and the ${id} standing here already has their own grant (as "${own}") — revoke one of the two first` };
     }

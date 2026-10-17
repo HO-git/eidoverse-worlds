@@ -367,8 +367,40 @@ try {
     const PK = keep(await open(SW, {}, pellAsKai));
     check("Pell, signed in as Kai, is here (as Pell's visitor grant)", PK.snap()?.yourRights?.role === "visitor", `code=${PK.closedWith} ${JSON.stringify(PK.snap()?.yourRights)}`);
     check("granting \"Kai\" +gen now is refused as ambiguous", /listed by name only, and the Kai standing here already has their own grant/.test((await ask(AS, "grant", { id: "Kai", gen: true })) ?? ""));
+    // …but REVOKING the stale name-only record is not ambiguous: only it goes
+    check("revoking the name-only \"Kai\" while Pell-as-Kai is here is accepted", (await ask(AS, "grant", { id: "Kai", revoke: true })) === null);
+    const s13 = await stateOf(AS);
+    check("…it removes only that record; Pell's grant stands", !s13?.members?.some((m: any) => m.id === "Kai") && s13?.members?.some((m: any) => m.sub === "human:discord:6101" && m.role === "visitor"), JSON.stringify(s13?.members));
     PK.close();
     M.close(); AS.close();
+  }
+
+  console.log("9c. a world from older history: several records for one subject");
+  {
+    // A snapshot written before the one-record-per-subject migration can carry
+    // duplicates; rightsIn reads them as ambiguous (the wildcard). A grant by
+    // subject must not continue one of them (it would resurrect its role).
+    const HW = `${W}-hist`;
+    mkdirSync(join(worldsDir, HW), { recursive: true });
+    const t = Date.now();
+    const log = JSON.stringify({ seq: 0, ts: t, actor: "world", verb: "genesis", args: { v: 2, dialect: "eidoverse-log" } }) + "\n";
+    writeFileSync(join(worldsDir, HW, "log.jsonl"), log);
+    writeFileSync(join(worldsDir, HW, "snapshot.json"), JSON.stringify({ seq: 0, bytes: Buffer.byteLength(log), state: {
+      entities: {}, terrain: null, grass: null, sky: null, assets: [], recentChat: [], chatTotal: 0, bans: {},
+      roles: {
+        Alice: { role: "owner", gen: true, sub: "human:discord:1001" },
+        OldMira: { role: "owner", gen: true, sub: "human:discord:6201" },
+        Mira: { role: "visitor", sub: "human:discord:6201" },
+      } } }));
+    const AH = keep(await open(HW, {}, alice));
+    check("alice enters the historical world as its owner", AH.snap()?.yourRights?.role === "owner", `code=${AH.closedWith} ${AH.errors.join("|")}`);
+    check("a grant by subject to a subject with two records is refused", /more than one grant here from older history/.test((await ask(AH, "grant", { id: "human:discord:6201", fly: true })) ?? ""));
+    check("…a revoke by subject clears them all", (await ask(AH, "grant", { id: "human:discord:6201", revoke: true })) === null);
+    check("…after which a fresh grant works", (await ask(AH, "grant", { id: "human:discord:6201", role: "visitor", fly: true })) === null);
+    const hs = await new Promise<any>(async (res) => { const n = AH.msgs.length; AH.send({ type: "access-state" }); await until(() => AH.msgs.slice(n).some((m) => m.type === "access-state")); res(AH.msgs.slice(n).find((m) => m.type === "access-state")); });
+    const mira = hs?.members?.filter((m: any) => m.sub === "human:discord:6201");
+    check("…one record, a visitor with fly — no resurrected owner", mira?.length === 1 && mira[0].role === "visitor" && mira[0].fly === true, JSON.stringify(hs?.members));
+    AH.close();
   }
 
   console.log("10. who can come in — the listing");

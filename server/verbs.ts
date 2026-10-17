@@ -202,12 +202,20 @@ function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
   if (id === "*") sub = undefined;
   else if (explicit) {
     sub = id;
-    // filed under the person's last-seen name — unless that name could be
-    // mistaken for something else (`*`, a reserved actor, another subject
-    // string): then under the subject itself (Greptile #258: a member named
-    // "*" made a revoke-by-subject hit the wildcard and open the world)
-    const p = principalOf(id);
-    if (p && fileableName(p.name)) id = p.name.slice(0, 64);
+    // A subject that already HAS a record keeps it where it is: re-filing it
+    // under the person's newest name could merge it into a name-only record
+    // already there — whose role (owner, say) the fold would carry over
+    // (Greptile #258: a time edit made a renamed member an owner). A NEW
+    // record is filed under the person's last-seen name, unless that name
+    // could be mistaken for something else (`*`, a reserved actor, another
+    // subject string): then under the subject itself (a member named "*"
+    // once made a revoke-by-subject hit the wildcard).
+    const own = Object.keys(roles).find((k) => roles[k]?.sub === sub);
+    if (own) id = own;
+    else {
+      const p = principalOf(id);
+      if (p && fileableName(p.name)) id = p.name.slice(0, 64);
+    }
   }
   else if (rec) {
     // …unless someone ELSE stands here under that name: the owner may mean
@@ -215,6 +223,14 @@ function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
     // is guessed — refused, and the refusal says whose record it is.
     if (rec.sub && present?.sub && present.sub !== rec.sub) {
       return { error: `"${id}" already carries a grant bound to another subject (${rec.sub}) — revoke or move that record before granting ${id} anew` };
+    }
+    // …or a name-only record would be bound to someone standing here who
+    // already has their OWN record under another name: the fold would merge
+    // the two, carrying the name-only record's role over theirs. Which one
+    // the owner means is not guessed.
+    if (!rec.sub && present?.sub) {
+      const own = Object.keys(roles).find((k) => k !== id && roles[k]?.sub === present.sub);
+      if (own) return { error: `"${id}" is listed by name only, and the ${id} standing here already has their own grant (as "${own}") — revoke one of the two first` };
     }
     sub = rec.sub ?? present?.sub;
   }

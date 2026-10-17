@@ -349,6 +349,25 @@ try {
     check("alice closes the subject-test world", (await ask(AS, "grant", { id: "*", role: "none" })) === null);
     check("…and revoking * is accepted", (await ask(AS, "grant", { id: "*", revoke: true })) === null);
     check("…which opens it again (anonymous callers see it, door open)", (await worldsAs()).some((w) => w.name === SW && w.access === "open"));
+    // #11 an edit by subject keeps the subject's record where it is — it is
+    // never merged into a name-only record under the person's newest name
+    check("alice grants Kai, never seen, as owner (name-only)", (await ask(AS, "grant", { id: "Kai", role: "owner" })) === null
+      && !lastLog(AS, (e) => e.verb === "grant" && e.args.id === "Kai")?.args?.sub);
+    const pell = await login("human:discord:6101", "Pell");
+    check("alice grants Pell visitor (bound to 6101)", (await ask(AS, "grant", { id: "Pell", role: "visitor" })) === null
+      && lastLog(AS, (e) => e.verb === "grant" && e.args.id === "Pell")?.args?.sub === "human:discord:6101");
+    const pellAsKai = await login("human:discord:6101", "Kai");   // Pell now goes by Kai
+    check("giving Pell an hour BY SUBJECT (as the panel does) is accepted", (await ask(AS, "grant", { id: "human:discord:6101", for: "1h" })) === null);
+    const s11 = await stateOf(AS);
+    const p11 = s11?.members?.find((m: any) => m.sub === "human:discord:6101"), k11 = s11?.members?.find((m: any) => m.id === "Kai");
+    check("…Pell's record stays visitor, now with an end, and is not merged into the name-only owner record",
+      p11?.id === "Pell" && p11?.role === "visitor" && typeof p11?.until === "number" && k11?.role === "owner" && !k11?.sub, JSON.stringify(s11?.members));
+    // …and binding the name-only "Kai" to the Kai standing here, who already
+    // has their own record, is refused rather than merged
+    const PK = keep(await open(SW, {}, pellAsKai));
+    check("Pell, signed in as Kai, is here (as Pell's visitor grant)", PK.snap()?.yourRights?.role === "visitor", `code=${PK.closedWith} ${JSON.stringify(PK.snap()?.yourRights)}`);
+    check("granting \"Kai\" +gen now is refused as ambiguous", /listed by name only, and the Kai standing here already has their own grant/.test((await ask(AS, "grant", { id: "Kai", gen: true })) ?? ""));
+    PK.close();
     M.close(); AS.close();
   }
 

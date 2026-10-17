@@ -12,7 +12,7 @@
 // closed, the agent's durable sub, and the daily founding cap.
 import { generateKeyPairSync, createPublicKey, sign as cryptoSign, randomUUID } from "node:crypto";
 import { createServer } from "node:net";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -59,9 +59,9 @@ async function until(pred: () => boolean, ms = 4000) {
   return pred();
 }
 
-async function login(sub: string, name: string): Promise<string> {
+async function login(sub: string, name: string, scopes?: string[]): Promise<string> {
   const r = await fetch(`${HTTP}/auth`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: mint({ sub, name }) }),
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: mint({ sub, name, ...(scopes ? { scopes } : {}) }) }),
   });
   return /ew_sess=[a-f0-9]{64}/.exec(r.headers.get("set-cookie") ?? "")?.[0] ?? "";
 }
@@ -266,6 +266,45 @@ try {
   check("alice revokes bob", (await ask(A, "grant", { id: "Bob", revoke: true })) === null);
   await until(() => B4.closedWith != null);
   check("bob is removed (4010)", B4.closedWith === 4010, `code=${B4.closedWith}`);
+
+  console.log("9b. Greptile #258 regressions");
+  {
+    // #1 a revoke by SUBJECT touches only that subject's record, even when the
+    // subject's newest name is filed for someone else
+    await login("human:discord:6001", "Kit");
+    check("alice grants Kit (bound to 6001)", (await ask(A, "grant", { id: "Kit", role: "visitor" })) === null
+      && lastLog(A, (e) => e.verb === "grant" && e.args.id === "Kit")?.args?.sub === "human:discord:6001");
+    await login("human:discord:6002", "Rowan");
+    check("alice grants Rowan (bound to 6002)", (await ask(A, "grant", { id: "Rowan", role: "builder" })) === null
+      && lastLog(A, (e) => e.verb === "grant" && e.args.id === "Rowan")?.args?.sub === "human:discord:6002");
+    await login("human:discord:6002", "Kit");   // Rowan now goes by Kit too
+    check("revoking subject 6002 is accepted", (await ask(A, "grant", { id: "human:discord:6002", revoke: true })) === null);
+    const rv = lastLog(A, (e) => e.verb === "grant" && e.args.revoke);
+    check("…and revokes ROWAN's record (6002), not Kit's (6001)", rv?.args?.id === "Rowan" && rv?.args?.sub === "human:discord:6002", JSON.stringify(rv?.args));
+    // #2 a sign-in with no Eidoverse scope is not an identity for private reads,
+    // and a watch-only sign-in is told it may watch, not enter
+    const kitNoScope = await login("human:discord:6001", "Kit", ["music:upload"]);
+    check("a session without worlds:join/spectate doesn't see the closed world", !(await worldsAs({ cookie: kitNoScope })).some((w) => w.name === W));
+    check("…nor read it", (await fetch(`${HTTP}/geom?world=${W}`, { headers: { cookie: kitNoScope } })).status === 404);
+    const kitWatch = await login("human:discord:6001", "Kit", ["worlds:spectate"]);
+    const acc = await (await fetch(`${HTTP}/access?world=${W}`, { headers: { cookie: kitWatch } })).json() as any;
+    check("a watch-only session of a member: /access says watch, not enter", acc.you === "watch", JSON.stringify(acc));
+    // #3 an idle closed world with a CORRUPT snapshot still admits its owner and stays hidden
+    const IW = `${W}-idle`;
+    mkdirSync(join(worldsDir, IW), { recursive: true });
+    const t = Date.now();
+    writeFileSync(join(worldsDir, IW, "log.jsonl"), [
+      { seq: 0, ts: t, actor: "world", verb: "genesis", args: { v: 2, dialect: "eidoverse-log" } },
+      { seq: 1, ts: t, actor: "world", verb: "grant", args: { id: "Alice", role: "owner", gen: true, sub: "human:discord:1001" } },
+      { seq: 2, ts: t, actor: "Alice", verb: "grant", args: { id: "*", role: "none" } },
+    ].map((e) => JSON.stringify(e)).join("\n") + "\n");
+    writeFileSync(join(worldsDir, IW, "snapshot.json"), "{ this is not json");
+    check("the idle closed world (corrupt snapshot) is hidden from anonymous callers", !(await worldsAs()).some((w) => w.name === IW));
+    check("…and listed for its owner", (await worldsAs({ cookie: alice })).some((w) => w.name === IW && w.you === "enter"));
+    const AI = keep(await open(IW, {}, alice));
+    check("…who gets in", AI.snap()?.yourRights?.role === "owner", `code=${AI.closedWith} ${AI.errors.join("|")}`);
+    AI.close();
+  }
 
   console.log("10. who can come in — the listing");
   const n0 = A.msgs.length;

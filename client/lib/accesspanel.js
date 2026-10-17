@@ -24,7 +24,10 @@ const DOORS = [
   ['spectator', 'watch only', 'anyone may watch; only those listed may come in'],
   ['none', 'members only', 'invisible to everyone not listed'],
 ];
-const ROLES = [['owner', 'owner'], ['builder', 'builder'], ['visitor', 'visitor'], ['spectator', 'watch only']];
+// `none` is a real grant too (made by chat, an agent, or here): an explicit
+// "not this person", which matters in an open world
+const ROLES = [['owner', 'owner'], ['builder', 'builder'], ['visitor', 'visitor'], ['spectator', 'watch only'], ['none', 'no access']];
+const roleLabel = (r) => ROLES.find(([v]) => v === r)?.[1] ?? r;
 const SPANS = [['', 'no end'], ['1h', '1 hour'], ['1d', '1 day'], ['1w', '1 week']];
 
 let body = null;            // the section body, once opened
@@ -164,7 +167,7 @@ function paint() {
     if (m.kind === 'agent') bits.push('agent');
     if (m.here) bits.push('here now');
     if (m.until) bits.push(left(m.until, now));
-    if (!edit) bits.unshift(m.role === 'spectator' ? 'watch only' : m.role);
+    if (!edit) bits.unshift(roleLabel(m.role));
     if (bits.length) txt.append(mk('div', 'mod-note', bits.join(' · ')));
     if (m.kind === 'name' && state.door !== 'builder' && state.door !== 'visitor') {
       // a name-keyed record does not admit a person to a closed world

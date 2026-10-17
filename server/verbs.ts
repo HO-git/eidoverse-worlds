@@ -182,6 +182,7 @@ function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
   //     typed directly, else the directory of identities this instance has
   //     seen (one match binds; several are refused; none stays by name).
   let sub: string | undefined;
+  const named = id;   // what the owner typed, before a subject string is re-filed under its name below
   const rec = id !== "*" ? roles[id] : undefined;
   const present = id !== "*" ? [...w.clients].find((o) => o.id === id && o.sub) : undefined;
   if (id === "*") sub = undefined;
@@ -215,9 +216,12 @@ function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
       return { error: `"${id}" already carries a grant bound to another subject (${occupant.sub}) — revoke or move that record before granting ${id} anew` };
     }
   }
-  // The record this grant touches: filed under the name, or (for a subject
-  // found by the directory) under an older name of the same subject.
-  const key = roles[id] ? id : sub ? Object.keys(roles).find((k) => roles[k]?.sub === sub) : undefined;
+  // The record this grant touches: the one filed under exactly the name the
+  // owner typed; otherwise the one CARRYING the subject (an older name of the
+  // same person). Never a record that merely sits under the subject's current
+  // display name — that can be another person's (Greptile #258: a revoke by
+  // subject once took a different member's record whose name collided).
+  const key = rec ? named : sub ? Object.keys(roles).find((k) => roles[k]?.sub === sub) : undefined;
   const target = key ? roles[key] : undefined;
   if (until != null && (role === "owner" || (role == null && target?.role === "owner"))) {
     return { error: "ownership doesn't expire — grant builder for a time, or revoke ownership later" };

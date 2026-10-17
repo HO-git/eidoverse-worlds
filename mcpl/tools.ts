@@ -781,7 +781,8 @@ export const HANDLERS: Record<string, ToolHandler> = {
       // What the world server did, as far as the door can see it: no answer,
       // an answer that isn't geometry, or its own error.
       let r: Response;
-      try { r = await fetch(`${base}/geom?${q}`); } catch (e) { return text(`measure: the world server didn't answer (${String(e)}), so nothing was measured; try again in a moment`); }
+      // as this identity: a members-only world's geometry answers only its members
+      try { r = await fetch(`${base}/geom?${q}`, ag.agentToken ? { headers: { authorization: `Bearer ${ag.agentToken}` } } : undefined); } catch (e) { return text(`measure: the world server didn't answer (${String(e)}), so nothing was measured; try again in a moment`); }
       let d: any;
       try { d = await r.json(); } catch { return text(`measure: the world server answered ${r.status} with something that isn't geometry, so nothing was measured`); }
       if (d.error) return text(`measure: the world server answered "${d.error}" (${r.status}), so nothing was measured`);

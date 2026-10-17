@@ -711,6 +711,12 @@ const txt = (r:any) => r.result?.content?.[0]?.text ?? "";
     check("the owner lets it in by name from inside the world", /free — visitor/.test(granted), granted);
     const inNow = txt(await free.request("tools/call", { name: "travel", arguments: { world: "annex" } }));
     check("…and now it travels in", /Arrived in "annex"/.test(inNow), inNow);
+    // a member reads the closed world's geometry AS ITSELF (Greptile #258: measure
+    // fetched /geom anonymously, and a closed world answers that as nonexistent)
+    await owner.request("tools/call", { name: "world_verb", arguments: { verb: "spawn", args: { id: "accbox", lib: "eidoverse/assets/models/crate_large_red.glb", pos: [2, 0, 2] } } });
+    await sleep(600);
+    const meas = txt(await free.request("tools/call", { name: "measure", arguments: { id: "accbox" } }));
+    check("measure works for a member of a closed world", !/no such world/.test(meas) && /accbox|geometry/.test(meas), meas);
     const reopened = txt(await owner.request("tools/call", { name: "world_access", arguments: { action: "mode", mode: "open" } }));
     check("the owner opens it again (the rest of the suite expects it open)", /open/.test(reopened), reopened);
     free.ws.close(); owner.ws.close();

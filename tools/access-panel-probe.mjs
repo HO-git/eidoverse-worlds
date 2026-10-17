@@ -105,6 +105,7 @@ try {
     const sel = row?.querySelectorAll('select')[i]; if (!sel) return false;
     sel.value = v; sel.dispatchEvent(new Event('change')); return true;
   }, [name, idx, value]);
+  check('the role select offers "no access" too (Greptile #258)', await pg.evaluate(() => [...([...document.querySelectorAll('#sec-access .mod-row')].find((r) => r.querySelector('.mod-nm')?.textContent === 'Bob')?.querySelector('select')?.options ?? [])].some((o) => o.value === 'none' && o.textContent === 'no access')));
   check('bob\'s role select is there', await setRow('Bob', 0, 'builder'));
   await pg.waitForTimeout(800);
   await pg.waitForFunction(() => [...document.querySelectorAll('#sec-access .mod-row')].find((r) => r.querySelector('.mod-nm')?.textContent === 'Bob')?.querySelector('select')?.value === 'builder', null, { timeout: 5000 }).catch(() => {});

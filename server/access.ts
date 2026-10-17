@@ -45,7 +45,7 @@ export const NOT_YET_CLOSE = 4011;
  *  name at the JOIN_TOKEN door never is.
  *  `onlyWorld` — credential narrowing (a native device session limited to one
  *  world). It can only refuse. */
-export type Who = { id: string; sub?: string; nameReserved?: boolean; onlyWorld?: string };
+export type Who = { id: string; sub?: string; nameReserved?: boolean; onlyWorld?: string; watchOnly?: boolean };
 export type EntryMode = "embody" | "watch";
 type WorldLike = { name: string; state: WorldState };
 
@@ -79,6 +79,14 @@ export function canEnter(w: WorldLike, who: Who, mode: EntryMode, now = Date.now
   if (who.onlyWorld && who.onlyWorld !== "*" && who.onlyWorld !== w.name && !isAdminId(who.id, who.sub)) {
     return { ok: false, code: ACCESS_CLOSE, reason: "no-access", why: `this sign-in is limited to "${who.onlyWorld}"` };
   }
+  // a sign-in that carries only worlds:spectate may watch, never be embodied
+  // (the ws join refuses it on scope; the HTTP answers must agree)
+  if (mode === "embody" && who.watchOnly && !isAdminId(who.id, who.sub)) {
+    const watch = entryOf(entryRightsOf(w.state, who, now));
+    return watch === "none"
+      ? { ok: false, code: ACCESS_CLOSE, reason: "no-access", why: `"${w.name}" isn't open to you` }
+      : { ok: false, code: ACCESS_CLOSE, reason: "watch-only", why: `your sign-in lets you watch "${w.name}", not join it in a body` };
+  }
   const entry = entryOf(entryRightsOf(w.state, who, now));
   if (entry === "embody" || (mode === "watch" && entry === "watch")) return { ok: true };
   if (entry === "watch") {
@@ -103,8 +111,16 @@ export function visibleTo(w: WorldLike, who: Who | null, now = Date.now()): bool
  *  bearer — what the MCPL door holds). Null = anonymous. Never the URL:
  *  credentials in query strings end up in logs. */
 export function httpCaller(req: Request): Who | null {
+  // A session is an identity for these reads only if it carries Eidoverse
+  // access at all (worlds:join, or worlds:spectate to watch) — the same scopes
+  // the ws join demands. Otherwise a login with neither, whose subject still
+  // held a grant somewhere, could read a private world the door would refuse
+  // it (Greptile #258).
   const s = sessionFromCookie(req.headers.get("cookie"));
-  if (s) return { id: s.name, sub: s.sub, ...(s.nativeWorld ? { onlyWorld: s.nativeWorld } : {}) };
+  if (s && (s.scopes.includes("worlds:join") || s.scopes.includes("worlds:spectate"))) {
+    return { id: s.name, sub: s.sub, ...(s.nativeWorld ? { onlyWorld: s.nativeWorld } : {}),
+      ...(!s.scopes.includes("worlds:join") ? { watchOnly: true } : {}) };
+  }
   const m = /^Bearer\s+(\S+)$/i.exec(req.headers.get("authorization") ?? "");
   if (m) {
     const tok = m[1]!;
@@ -143,15 +159,21 @@ export function worldForAccess(name: string, loaded: Map<string, WorldLike>): Wo
   if (hit && hit.key === key) return { name, state: hit.state };
   const state = { roles: {}, bans: {} } as unknown as WorldState;
   let from = 0;
-  try {
-    if (snapStat) {
+  // A corrupt snapshot is a corrupt CACHE, not a corrupt world — the loader
+  // ignores it and replays the log, and so does this: read the access entries
+  // from byte zero (Greptile #258: a bad snapshot once locked an idle world's
+  // own owners out). Only an unreadable LOG fails closed, below.
+  if (snapStat) {
+    try {
       const snap = JSON.parse(readFileSync(snapPath, "utf8"));
       if (snap?.state && typeof snap.seq === "number" && typeof snap.bytes === "number" && snap.bytes > 0 && snap.bytes <= logStat.size) {
         (state as any).roles = snap.state.roles ?? {};
         (state as any).bans = snap.state.bans ?? {};
         from = snap.bytes;
       }
-    }
+    } catch { (state as any).roles = {}; (state as any).bans = {}; from = 0; }
+  }
+  try {
     const len = logStat.size - from;
     const buf = Buffer.alloc(len);
     const fd = openSync(logPath, "r");

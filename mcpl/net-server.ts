@@ -1511,6 +1511,14 @@ wss.on("connection", (ws, req) => {
   }
 
   function admit() {
+    // The access check above is async: a socket that CLOSED while it was in
+    // flight must not be admitted — its late admit would take over (and kill)
+    // the newer session its replacement already opened (Greptile #258).
+    // 1 = WebSocket.OPEN.
+    if (ws.readyState !== 1) {
+      console.log(`[${ts()}] [mcpl] ${auth!.id}: connection closed during admission — dropped`);
+      return;
+    }
     // session takeover: one body per identity — a half-open predecessor gets
     // cleanly killed instead of rubberbanding against its successor
     const prev = sessions.get(auth!.id);

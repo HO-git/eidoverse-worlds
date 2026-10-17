@@ -24,6 +24,8 @@ import { hnSessions, hnJti, sessionFromCookie, saveSessions, SESSION_TTL_MS, HN_
 import { verifyToken } from "./aid1.ts";
 import { resolveLibFile, libraryPath, onLadder } from "./lint.ts";
 import { summarizeGlb } from "./geometry.ts";
+import { vrmHeightFor } from "./vrmheight.ts";
+import { checkFile, checkScale } from "./buildcheck-queue.ts";
 import { worlds, getWorld, type World } from "./world.ts";
 import { handleUpload, optStatus, rebuildAsset } from "./upload.ts";
 import { serveHeightmapExport, heightRange } from "./heightmap.ts";
@@ -141,8 +143,8 @@ export function avatarRoster(): { name: string; path: string; height: number | n
     const v = String(Math.round(Bun.file(file).lastModified));
     seen.set(name, { url: `${d.vrm}?v=${v}`, file, v });
   }
-  // stature metadata, contributed alongside portraits (see POST /thumb);
-  // a def's declared height wins over the measured sidecar
+  // what wearers' browsers posted with their portraits (see POST /thumb): the
+  // portrait's framing height, which stands in only when the file gives none
   let hmeta: Record<string, { h?: number; perf?: AvatarPerf }> = {};
   try {
     const mp = join(OPT_DIR, "thumbs", "meta.json");
@@ -153,11 +155,19 @@ export function avatarRoster(): { name: string; path: string; height: number | n
   // never rehash a VRM and can never read a stale value as fresh). The sha
   // work behind judge() is mtime-cached, so a roster read costs hashing only
   // when a body's bytes actually changed.
-  return [...seen].map(([name, { url, file, v }]) => ({ name, path: url,
-    height: defs[name]?.height ?? hmeta[name.replace(/[^a-zA-Z0-9_-]/g, "_")]?.h ?? null,
-    // the loupe's rank of THIS version only (the v its URL carries): a stamp from an older export is withheld until a wearer re-measures
-    perf: ((p) => p && p.v === v ? p : null)(hmeta[name.replace(/[^a-zA-Z0-9_-]/g, "_")]?.perf),
-    seat: seatStore.judge(name, file) }));
+  return [...seen].map(([name, { url, file, v }]) => {
+    const safe = name.replace(/[^a-zA-Z0-9_-]/g, "_");
+    return { name, path: url,
+      // A def's declared height, else the file's own stature (vrmheight.ts, a
+      // lookup but for once per version). A wearer's posted height is the
+      // portrait's framing height (avatar.js), raised toward the bounding box,
+      // so it stands in only when the file gives no stature: no humanoid head,
+      // a head out of range, or a file the server can't read.
+      height: defs[name]?.height ?? vrmHeightFor(file, v) ?? hmeta[safe]?.h ?? null,
+      // the loupe's rank of THIS version only (the v its URL carries): a stamp from an older export is withheld until a wearer re-measures
+      perf: ((p) => p && p.v === v ? p : null)(hmeta[safe]?.perf),
+      seat: seatStore.judge(name, file) };
+  });
 }
 
 /** The animation clips, each at a path stamped with its mtime — the same
@@ -533,6 +543,25 @@ const ROUTES: Route[] = [
       return new Response(JSON.stringify({ ok: true }), {
         headers: { "content-type": "application/json", "set-cookie": "ew_sess=; Path=/; HttpOnly; Max-Age=0" },
       });
+    },
+  },
+  {
+    match: (u) => u.pathname === "/check",
+    handler: async ({ url }) => {
+      // The build check (server/buildcheck.ts): what a model will be like to
+      // walk into — walk-in or solid, its floors and what's reachable, why
+      // anything isn't, suggested rooms/doors/stairs, the render budget.
+      // Advisory and public, like /geom. Computed once per model, in its own
+      // process (buildcheck-queue.ts); the first ask can take a few seconds.
+      const j = (o: unknown, status = 200) =>
+        new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json" } });
+      const lib = url.searchParams.get("lib") ?? "";
+      const file = resolveLibFile(lib);
+      if (!file) return j({ error: `no such asset: ${lib}` }, 404);
+      // ?scale= checks it as a thing placed at that scale (0.05–20, to 2 places)
+      const scale = checkScale(url.searchParams.get("scale") ?? 1);
+      try { return j({ lib, ...(await checkFile(file, scale) as object) }); }
+      catch (err) { return j({ lib, error: String((err as Error)?.message ?? err) }, 500); }
     },
   },
   {

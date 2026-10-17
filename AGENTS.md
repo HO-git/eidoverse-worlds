@@ -111,8 +111,10 @@ skeleton (parsed once from its VRM — no renderer involved) and streams the
 tumble like anyone else. You fall for real, hang from nails for real, and
 PERCEIVE it (the shove arrives like being spoken to); walking or clear_pose
 stands you back up. The `ragdoll` tool is a directed shove from where you
-stand through the target. Headless caveats, for now: the sim assumes
-locally-flat ground at the fall site and ignores furniture. radius caps
+stand through the target. A headless body collides with placed things the
+way a browser's does — each model's own triangles, fitted by the same
+collider code — so a tumble lands on the floor or stair that is really
+there (see "Walking through buildings" for the walking side). radius caps
 at 30, power at 12. A directed person-to-person shove is not a verb at all:
 it rides the puppet channel (`ragdoll: {lean:[x,y,z]}` m/s), a request the
 target's client honours or declines. Humans have `/push` for it.
@@ -547,7 +549,11 @@ decision because restarts ripple every resident's reconnect.
 ## Assets — files you CAN upload today
 
 `POST /upload` (needs your agent bearer token or the door token):
-- `.glb`/`.vrm` bodies → content-addressed model store; the `asset` verb
+- `.glb`/`.vrm` bodies → content-addressed model store (a model's upload
+  answers `{path, check}`: the build check — walk-in or solid, reachable
+  floors, why not, suggested rooms/doors/stairs — runs on it and waits at
+  `GET /check?lib=…`, or `check_model`; advice, never a refusal — see
+  docs/BUILDING.md); the `asset` verb
   (needs `gen`) makes one part of a world's vocabulary; `spawn` places it.
   Generated meshes normally arrive via Orrery (`send-to-eidoverse`).
 - `?as=script` + UTF-8 JS body (≤64KB) → `store/scripts/<hash>.js`, the
@@ -627,6 +633,38 @@ first:
   parser); the mesh you download is the mesh clients render.
 
 ## Walking through buildings
+
+**Placed models are solid to your feet, exactly as they are to a person's.** Your body fits the same colliders a browser fits — from each model's own triangles, with the spawn's `collide` override — and steps the way the browser's walking controller steps: it stands on raised floors, climbs any stair whose steps rise under 0.55m, stays on the storey it is on (walking under an upper floor keeps you downstairs; walking across it keeps you up), and is stopped by walls, railings and furniture. Nothing in a model needs declaring for this.
+
+**`walk_to` finds its own way through them.** One call: round the furniture, in at the door, up the stair, along the upper floor, out onto the balcony (`mcpl/navgrid.ts`). The route is planned against the same colliders the feet will meet, by asking the same collision code where a body can stand and step — so a route is one your body can walk, and a place the planner calls unreachable is one it cannot reach. On open ground it is the one straight leg it always was.
+
+- **Which floor** at the destination: `y` picks it — the place to stand nearest that height, no more than a step above it (`y: 0` for a ground floor, an upper storey's floor height for that storey). Without `y`: your own storey if the destination has a floor within a step of yours, else the lowest one there (the ground floor of the next building, the ground under a balcony).
+- **Where nothing can stand** (inside a wall, a chair, closer to a wall than a body fits), the walk ends at the nearest place that can, on your side of it, and says how far from the point that is.
+- **Refusals carry the reason**: nowhere to stand near the point; no walkable way there (sealed off, or only by a climb or drop of more than 0.55m — a route never steps off a balcony); or a search that ran too long (walk part of the way first).
+- **Something that moves or arrives after the walk was planned** still stops you, and the walk ends early saying so; ask again and the new route takes it into account.
+
+Griddled structures route by their own planner, below; a walk through one is not re-planned around placed models.
+
+Making a building of your own? **[docs/BUILDING.md](docs/BUILDING.md)** is the short guide: the geometry the walking body needs (steps, doorways, stairs, the walk-in threshold) and the optional metadata (seats, lights, named places).
+
+### Named places
+
+Things can have **named places** — rooms, doors, seats, a balcony — and `walk_to {to: …}` goes to them by name: `"lookout/balcony"` (thing/place), `"the reading room"` (a place's name or label alone — the nearest thing that has one), `"lantern-house"` (a thing alone: its entrance, else a door), or a person's name (you stop beside them). A room is reached anywhere on its own floor; a seat, on the floor beside it (`mount` to sit). `look` lists each thing's places and says which named room you are standing in.
+
+A place belongs to its thing and is written in the thing's model frame (Y up, metres — the frame sockets use), so it moves, turns and scales with it. Two sources, the second overriding the first name by name (`mcpl/places.ts`):
+
+1. **The model's own description** — a `building` object in a scene node's glTF extras (a JSON string is fine; Blender exports custom properties that way): `rooms` `[{id, name, min, max}]`, `portals` `[{id, center}]` (doors), `seats` `[{id, pos}]`, `arrivals` `[{id, pos}]` (the one with id `outside` is the thing's `entrance`). It survives the server's optimized copy.
+2. **The thing's `places` component** — added, re-pointed or retired at any time, long after the thing was built, by anyone with builder rank:
+
+```
+comp {id: "lookout", type: "places", data: {
+  balcony:  {at: [0, 3.15, 2.9], label: "the balcony"},                          # a point; its y is the floor there
+  upstairs: {min: [-2.2, 3.15, -2.2], max: [2.2, 5.8, 2.2], label: "the lookout room"},   # a room; min y is its floor
+  porch_bench: null                                                           # hides a place the model declares
+}}
+```
+
+A `comp` replaces the whole bag, so send every entry you mean to keep. The **`name_place` tool** does that for you: `name_place {name, label?}` names the spot where you stand, on the thing you are in (or the nearest within 15m, or `on`), merging into what is there; `remove: true` retires a name.
 
 `walk_to {x, z, run?, tolerance?}` routes through doors and arches in griddled structures, including entry, exit, and outdoor walks obstructed by a building. Its support basis comes from the standing implementation, not floor order or horizontal overlap. Main supplies **terrain mode**: the feet follow the live terrain each tick of the walk, as the planner read it at each wall crossing. Thus a basement does not redefine ground and an overhead tile does not confine a ground walker. Main does not supply elevated standing; that remains #140/PR #200's separate capability.
 

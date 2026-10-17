@@ -1,7 +1,7 @@
 // net — the wire. One socket carrying two planes: the world log (ordered,
 // persisted, replayed on join) and presence (batched, lossy, never persisted).
 
-import { CONFIG, report, bus } from './base.js';
+import { CONFIG, report, bus, nameFromJoinAck } from './base.js';
 // The world as data (TEL0S_NOTES §11.2): every snapshot and live entry
 // folds here — synchronously, through the same shared/fold.js the
 // sequencer runs — and the realizers project it into the scene.
@@ -17,7 +17,7 @@ import { pending, P } from './scheduler.js';
 import { wingFoldPresence } from '../../shared/wingpresence.js';
 import { presenceWire, voiceWire, bodyWire } from '../../shared/presencewire.js';
 import { presence } from './presence.js';
-import { logChat, logWhisper, noteTyping, noteHistoryContext } from './chat.js';
+import { logChat, logWhisper, noteTyping, noteHistoryContext, resyncChatAfter } from './chat.js';
 import { markPhase } from './boot.js';
 // ui.js is the desktop shell and reaches the engine through its panels (videopanel,
 // profile). The wire only ever wanted to SAY something to the user, so it takes a
@@ -777,11 +777,22 @@ async function onSnapshot(msg) {
   // The server's `you` is authoritative (verified identity, or a suffixed name
   // when two people share a nick). If it differs from what this client thinks,
   // adopt it — and say so, a silently different nameplate is confusing.
-  if (msg.you && msg.you !== CONFIG.name) {
-    CONFIG.name = msg.you;
-    localStorage.setItem('ew-name', msg.you);
+  // Renderer/spectator clients join under a transport prefix ("renderer-" /
+  // "retina-", see sendJoin) that is part of the wire id, not the name. Strip
+  // it before comparing and storing, or ew-name grows one prefix per reload
+  // (renderer-renderer-…) — unless the ack is a verified identity, which the
+  // server named itself (base.js nameFromJoinAck).
+  const you = nameFromJoinAck(msg.you, { renderer: CONFIG.renderer, spectate: CONFIG.spectate, verified: !!msg.yourSub });
+  if (you && you !== CONFIG.name) {
+    CONFIG.name = you;
+    localStorage.setItem('ew-name', you);
     toast(`you're appearing as “${msg.you}”`, 'info', 8000);
   }
+  // a RE-join: lastSeq is still the last entry the old socket delivered, and
+  // what was said after it may be trimmed out of this snapshot's chat window
+  // (fair, not contiguous — shared/fold.js trimRecentChat). Fetch it before
+  // lastSeq moves on. A first join has rendered nothing and is a no-op.
+  if (lastSeq >= 0) void resyncChatAfter(lastSeq);
   if (typeof msg.throughSeq === 'number' && msg.throughSeq > lastSeq) lastSeq = msg.throughSeq;
   bus.emit('net', net);
   // #57 matrix 7: who has which aux legs live NOW (surface-transition keeps it

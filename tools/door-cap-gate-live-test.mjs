@@ -14,7 +14,7 @@
 //      (observer sees it) — allowed operations still work.
 //   5. live mention routing: the observer says "@claude …" in-world and the
 //      granted host receives channels/incoming tagged chat:mention with
-//      metadata.mentioned — the mentionRegex path end to end.
+//      metadata.mentioned — the mentionRegexFor path end to end.
 //
 // 🔴 THE HARNESS OWNS ITS PORTS, ITS STATE, AND ITS CHILDREN (#129 re-review:
 // "the owned-scratch harness is neither owned nor scratch-clean"). The first
@@ -317,16 +317,23 @@ try {
 
   r = await gated.request("channels/publish", {
     channelId: "world:commons", content: [{ type: "text", text: "LEAK-postpolicy" }] });
-  check("incoming-only: channels/publish -32003", r.error?.code === -32003, JSON.stringify(r).slice(0, 120));
+  check("incoming-only: channels/publish -32003, saying posting again won't help",
+    r.error?.code === -32003 && r.error?.message === "your host hasn't granted this door channels.publish, so nothing was posted, and posting again won't change that; if you need it, ask whoever runs your host",
+    JSON.stringify(r).slice(0, 200));
+  const lifecycleRefusal = "your host hasn't granted this door channels.lifecycle, so no channel was opened or closed, and calling again won't change that; if you need it, ask whoever runs your host";
   r = await gated.request("channels/open", { channelId: "world:commons" });
-  check("incoming-only: channels/open -32003", r.error?.code === -32003, JSON.stringify(r).slice(0, 120));
+  check("incoming-only: channels/open -32003, naming the grant and whom to ask",
+    r.error?.code === -32003 && r.error?.message === lifecycleRefusal, JSON.stringify(r).slice(0, 260));
   r = await gated.request("channels/close", { channelId: "world:commons" });
-  check("incoming-only: channels/close -32003", r.error?.code === -32003, JSON.stringify(r).slice(0, 120));
+  check("incoming-only: channels/close -32003, naming the grant and whom to ask",
+    r.error?.code === -32003 && r.error?.message === lifecycleRefusal, JSON.stringify(r).slice(0, 260));
   r = await gated.request("tools/list", {});
   check("incoming-only: tools/list is EMPTY (denied ⇒ as if never advertised)",
     Array.isArray(r.result?.tools) && r.result.tools.length === 0, JSON.stringify(r).slice(0, 120));
   r = await gated.request("tools/call", { name: "say", arguments: { text: "LEAK-tool" } });
-  check("incoming-only: tools/call -32601", r.error?.code === -32601, JSON.stringify(r).slice(0, 120));
+  check("incoming-only: tools/call -32601, saying who can grant the tools",
+    r.error?.code === -32601 && r.error?.message === "your host hasn't granted this door the tools capability, so the call didn't run, and calling it again won't change that; if you need it, ask whoever runs your host",
+    JSON.stringify(r).slice(0, 200));
   gated.close();
   await new Promise((s) => setTimeout(s, 1500));
   check("nothing leaked: the observer saw NO say from the gated session",

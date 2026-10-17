@@ -6,6 +6,7 @@ import { report } from './base.js';
 import { state, onWorldChange } from './state.js';
 import { MAX_WATER, MAX_AIR, waterParams, mediumAt, vector } from '../../shared/water.js';
 import { setEnvironmentFloor } from './terrain.js';
+import { levelWaterInfo, surfaceHeightAt, waterAt as levelWaterAt } from './water.js';
 const { uniform, uniformArray, positionWorld, cameraPosition, output, Fn, Loop, If, Break, Continue, float, int, bool, vec2, vec3, vec4,
   array, select, min, max, exp, distance, all } = TSL;
 let objects = () => new Map();
@@ -154,12 +155,63 @@ function makeSurface(w) {
   o.userData.skyExempt=true;o.userData.noWet=true;o.userData.noCloudShadow=true;o.userData.centre=centre;
   o.frustumCulled=false;scene.add(o);surfaces.push(o);return o;
 }
+// ---- under the world's water LEVEL (water.js: lakes, rivers, the sea) -------------------------------------
+// The level is not a volume here — its wading, floating and swimming are water.js's and the controller's — but
+// seen from under its surface it needs the same optics. While the camera is below the surface (the wave there,
+// over wet ground) it takes fog slot 0: a box across the terrain square from far down up to the surface at the
+// camera. Slot 0 is the lowest priority, so authored volumes and dry boxes inside it still win. Above the
+// surface nothing changes: the sheet's own depth shading is the look from above.
+// Per kind (shared/waterkind.js): visibility in metres (Koschmieder: σ = 3.9 / visibility, red absorbed most)
+// and a tint mixed into the world's water colour — still water green-clear, rivers murky, the sea blue and far.
+const LEVEL_OPTICS = { still: { vis: 14, tint: [0.42, 0.6, 0.52] }, river: { vis: 6, tint: [0.4, 0.42, 0.28] }, ocean: { vis: 26, tint: [0.1, 0.36, 0.55] } };
+const _cam = new THREE.Vector3(), _lc = new THREE.Color();
+let underLevelNow = false;
+export const underLevel = () => underLevelNow;   // for probes and tests
+function levelSlot() {
+  const info = levelWaterInfo(); if (!info) return null;
+  camera.getWorldPosition(_cam);
+  const top = surfaceHeightAt(_cam.x, _cam.z); if (top == null || !(_cam.y < top)) return null;
+  const o = LEVEL_OPTICS[levelWaterAt(_cam.x, _cam.z)?.kind] ?? LEVEL_OPTICS.still;
+  const sigma = 3.9 / o.vis, half = info.size / 2;
+  // what the water scatters back is daylight: dim with the sun (and its night stand-in), never quite black
+  const day = Math.min(1, Math.max(0.06, sun.intensity / 2.6));
+  _lc.set(info.color);
+  const scatterRGB = [0, 1, 2].map((i) => (_lc.toArray()[i] * 0.5 + o.tint[i] * 0.5) * day * 0.9);
+  return { min: [-half, top - 2000, -half], max: [half, top, half], absorption: [sigma * 1.5, sigma, sigma * 0.75], scatter: scatterRGB, day };
+}
+// The far water while under the level: what the fog fades everything into, on a dome around the camera, so the
+// world sky (it draws unfogged, and ignores depth) cannot show through the water past the shore or the edge of
+// the terrain square. The dome sits INSIDE the sky (120 m; a SkyMesh box is ±140 m) and writes depth, so the sky
+// is hidden behind it — nothing is lost: at 120 m even the clearest sea has absorbed all but ~1e-8 of the view.
+// Inside Snell's window (~48.6° from straight up) it glows with the daylight coming down through the surface — a
+// bright, water-coloured light rather than the sky itself (the sky draws after the sheet and would show untinted).
+const underColor = uniform(new THREE.Color(0, 0, 0)), underDay = uniform(0);
+let underDome = null;
+function placeUnderDome(lvl) {
+  if (!lvl) { if (underDome) underDome.visible = false; return; }
+  if (!underDome) {
+    const mat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide, depthWrite: true, fog: false });
+    const up = TSL.positionLocal.normalize().y, c = vec3(underColor);
+    // far water → brighter toward the surface → the window's glow (cos 48.6° ≈ 0.66), all with the daylight
+    const glow = c.mul(3.2).add(vec3(0.16, 0.2, 0.2).mul(underDay));
+    mat.colorNode = TSL.mix(TSL.mix(c, c.mul(1.8), TSL.smoothstep(0.0, 0.6, up)), glow, TSL.smoothstep(0.6, 0.72, up));
+    underDome = new THREE.Mesh(new THREE.SphereGeometry(120, 32, 16), mat);
+    underDome.renderOrder = -90; underDome.frustumCulled = false;   // drawn first: its depth hides the sky behind it
+    underDome.userData.skyExempt = true; underDome.userData.noWet = true; underDome.userData.noCloudShadow = true;
+    scene.add(underDome);
+  }
+  underColor.value.setRGB(lvl.scatter[0], lvl.scatter[1], lvl.scatter[2]); underDay.value = lvl.day;
+  underDome.position.copy(_cam); underDome.visible = true;
+}
 export function updateWater() {
   // Epoch wrapped for float precision; same clock on every peer.
   clock.value=(serverNow()%3600000)/1000;
   const rebuild=dirty;dirty=false;
   if(rebuild){rebuilds++;clearSurfaces();volumeIds.clear();if(particles){scene.remove(particles);particles.geometry.dispose();particles.material.dispose();particles=null;}}
   waters.length=0;airs.length=0;
+  const lvl=levelSlot(),off=lvl?1:0;underLevelNow=!!lvl;
+  if(lvl){mins.array[0].set(...lvl.min,0);maxs.array[0].set(...lvl.max,0);absorption.array[0].set(...lvl.absorption,0);scatter.array[0].set(...lvl.scatter,0);}
+  placeUnderDome(lvl);
   for(const [id,e] of entries()) {
     const comp=e.comp??{}, matrix=matrixFor(id,e);
     if(rebuild&&(comp.water||comp.environment))volumeIds.add(id);
@@ -170,9 +222,12 @@ export function updateWater() {
       const s=new THREE.Vector3();matrix.decompose(_p,_q,s);w.size=w.size.map((v,i)=>v*Math.abs(s.getComponent(i)));
       w.top=w.center[1]+w.size[1]/2;w.bottom=w.center[1]-w.size[1]/2;
       const i=waters.length;waters.push(w);
-      mins.array[i].set(w.center[0]-w.size[0]/2,w.bottom,w.center[2]-w.size[2]/2,0);
-      maxs.array[i].set(w.center[0]+w.size[0]/2,w.top,w.center[2]+w.size[2]/2,0);
-      absorption.array[i].set(...w.absorption,0);scatter.array[i].set(...w.scatter,0);
+      const slot=i+off;   // fog slots: the level (when under it) is 0, the volumes follow, higher = priority
+      if(slot<MAX_WATER){
+        mins.array[slot].set(w.center[0]-w.size[0]/2,w.bottom,w.center[2]-w.size[2]/2,0);
+        maxs.array[slot].set(w.center[0]+w.size[0]/2,w.top,w.center[2]+w.size[2]/2,0);
+        absorption.array[slot].set(...w.absorption,0);scatter.array[slot].set(...w.scatter,0);
+      } else warn(`Under the world water level, ${MAX_WATER-1} water volumes can show; extra volumes lose their fog`);
       if(rebuild)makeSurface(w);
       else if(surfaces[i]){surfaces[i].position.set(w.center[0],w.top,w.center[2]);surfaces[i].userData.centre?.value.set(w.center[0],w.center[2]);}
     }
@@ -186,9 +241,10 @@ export function updateWater() {
       airs.push({size,toLocal:p=>new THREE.Vector3(...p).applyMatrix4(inv).toArray()});
     }
   }
-  waterCount.value=waters.length;airCount.value=airs.length;
-  if(waters.length&&!installed){previousFog=scene.fogNode;scene.fogNode=fogNode;installed=true;}
-  if(!waters.length&&installed){scene.fogNode=previousFog;installed=false;}
+  const slots=Math.min(MAX_WATER,waters.length+off);
+  waterCount.value=slots;airCount.value=airs.length;
+  if(slots&&!installed){previousFog=scene.fogNode;scene.fogNode=fogNode;installed=true;}
+  if(!slots&&installed){scene.fogNode=previousFog;installed=false;}
   if(rebuild){const env=environmentSettings();setEnvironmentFloor(Number.isFinite(env?.floor)?env.floor:null);updateEnvironmentSky(env);makeParticles(env?.particles);}
   if(skyDome)skyDome.position.copy(camera.position);
 }

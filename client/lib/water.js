@@ -19,6 +19,7 @@ import { THREE, scene } from './core.js';
 import { attribute, mix, smoothstep, vec3, float, positionGeometry, uniform, sin, cos, max, normalize, color, transformNormalToView, frontFacing, positionWorld, cameraPosition, select } from 'three/tsl';
 import { OCEAN, RIVER, STILL, waveClock, cyc, surfaceOffset } from '../../shared/waves.js';
 import { setWaterField } from './terrain.js';
+import { onWorldChange } from './state.js';
 import { waterParams } from '../../shared/terrainshape.js';
 import { analyzeWater, waterGridSeg } from '../../shared/waterkind.js';
 
@@ -223,6 +224,10 @@ export function applyWater(args, heightAt) {
   scene.add(mesh);
   current.mesh = mesh;
 }
+
+// Travel resets the world; a destination with no terrain never rebuilds the water, so the old level (its sheet,
+// its fog and the under-water background) would follow. Clear it with the world.
+onWorldChange((ev) => { if (ev.type === 'reset') applyWater(null); });
 
 /** What kind of water is at a point, for the HUD and probes (shared/waterkind.js sample). */
 export const waterAt = (x, z) => current?.analysis?.sample(x, z) ?? null;

@@ -70,6 +70,13 @@ export const skyImpl = () => impl;
 /** §22m diag: the sky-owned scene roots, for cost-attribution phases that
  *  hide the sky's DRAW without touching its state. Read-only. */
 export const skyOwnedObjects = () => skyOwned ?? [];
+/** Under the world's water (watervolumes.js): the sky draws unfogged, so it is hidden while the camera is below the
+ *  surface and the scene background paints the far water instead. Each object goes back to the visibility it had. */
+const hiddenForWater = new Map();
+export function hideSkyForWater(hide) {
+  if (hide) { for (const o of [skyMesh, ...(skyOwned ?? [])]) if (o && !hiddenForWater.has(o)) { hiddenForWater.set(o, o.visible); o.visible = false; } }
+  else { for (const [o, v] of hiddenForWater) o.visible = v; hiddenForWater.clear(); }
+}
 /** 0 at night → 1 at noon. Lamps and other night-aware things read this. */
 export let dayness = 1;
 

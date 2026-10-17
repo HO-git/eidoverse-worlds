@@ -268,7 +268,7 @@ test("a heightmap whose grid has not loaded is refused (no noise ground cached),
   const b=f.request(1300);expect(b.error).toBeUndefined();
   // the shaped ground with the grid in it — and not what the same seed's noise fallback gives
   const t={seed:3,size:40,heightmap:{grid,min:-10,max:10}},n=b.environment.terrain.segments;
-  const law=shapedHeightAt(makeHeightField(terrainParams(t)),t),noise=makeHeightField(terrainParams({seed:3,size:40}));
+  const law=makeHeightField(terrainParams(t)),noise=makeHeightField(terrainParams({seed:3,size:40}));   // terrainParams carries the shape
   const h=b.environment.terrain.heights,at=(i:number)=>[((i%(n+1))/n-.5)*40,(Math.floor(i/(n+1))/n-.5)*40];
   for(const i of [0,n,(n+1)*(n+1)>>1,(n+1)*(n+1)-1]){const [x,z]=at(i);expect(h[i]).toBeCloseTo(law(x,z),6);}
   expect(h.some((v:number,i:number)=>{const [x,z]=at(i);return Math.abs(v-noise(x,z))>.5;})).toBe(true);
@@ -285,4 +285,11 @@ test("a chain riding a part socket (bag on a seat on a swing) gets poses and mou
   const bag=get("bag");expect(bag).toBeDefined();expect(bag.mount).toMatchObject({to:"seat"});
   expect(bag.p.map((v:number)=>Math.round(v*1e6)/1e6)).toEqual([0,3,0]);expect(bag.scale).toBe(2);   // offset .5 scaled by the carrier's 2
   expect(r.warnings.filter((x:string)=>x.startsWith("bag:")||x.startsWith("seat:"))).toEqual([]);
+});
+test("placed features shape the projected ground ONCE — the same ground the browser builds",()=>{
+  const f=fixture();f.write("terrain",{seed:7,size:80,amplitude:0,features:[{type:"hill",x:0,z:0,radius:10,height:-4},{type:"hill",x:20,z:20,radius:8,height:3}],water:{level:-1}});
+  const r=f.request(1000),t=r.environment.terrain,n=t.segments,at=(x:number,z:number)=>t.heights[Math.round((z/80+.5)*n)*(n+1)+Math.round((x/80+.5)*n)];
+  expect(at(0,0)).toBeCloseTo(-4,6);expect(at(20,20)).toBeCloseTo(3,6);expect(at(-30,-30)).toBeCloseTo(0,6);
+  const cells=r.environment.water.cells;let deepest=0;for(let i=0;i<cells.length;i+=8)deepest=Math.max(deepest,-1-t.heights[cells[i]]);
+  expect(deepest).toBeCloseTo(3,1);   // a 3 m pit under the -1 m level, not 7
 });

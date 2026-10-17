@@ -75,7 +75,19 @@ try {
       const out: any = { best, surf };
       out.above = await frame([best.x - 6, surf + 3, best.z - 6], [best.x + 6, surf - 1, best.z + 6]);
       out.below = await frame([best.x, surf - Math.min(1.2, best.depth * 0.5), best.z], [best.x + 10, surf - Math.min(1.2, best.depth * 0.5), best.z]);
-      out.up = await frame([best.x, surf - Math.min(1.2, best.depth * 0.5), best.z], [best.x + 1, surf + 10, best.z + 0.5]);
+      // looking up at 50°: Snell's window (inside ~41.4° elevation and up) fills the top of the frame, the
+      // darker water outside it the bottom
+      const camY = surf - Math.min(1.2, best.depth * 0.5);
+      out.up = await frame([best.x, camY, best.z], [best.x + 10, camY + 10 * Math.tan(50 * Math.PI / 180), best.z]);
+      out.backend = renderer.backend?.isWebGLBackend ? 'webgl' : 'webgpu';
+      // four authored volumes AND the level: every one keeps a fog slot (the level has its own)
+      const st2 = await import('/lib/state.js');
+      let seq = 2e9; const fold = (verb: string, args: any) => st2.foldLive({ seq: ++seq, ts: Date.now(), actor: 'test', verb, args });
+      for (let i = 0; i < 4; i++) { fold('spawn', { id: `vol${i}`, lib: 'x.glb', pos: [best.x + 200 + i * 20, 0, best.z] }); fold('comp', { id: `vol${i}`, type: 'water', data: { center: [0, 0, 0], size: [4, 4, 4] } }); }
+      wv.updateWater(); wv.updateWaterView(); out.fourVolumes = wv.waterDebug();
+      // travel: a world reset clears the level — no level fog, background or sky hiding follows to the next world
+      st2.reset(); wv.updateWater(); wv.updateWaterView();
+      out.afterReset = { level: lw.levelWaterInfo(), debug: wv.waterDebug(), backgroundNode: scene.backgroundNode ? 'set' : null };
       out.debug = (globalThis as any).__lvlDebug;
       return out;
     });
@@ -86,17 +98,28 @@ try {
       const c = new OffscreenCanvas(img.width, img.height), g = c.getContext('2d')!; g.drawImage(img, 0, 0);
       const d = g.getImageData(0, 0, img.width, img.height).data; let n = 0, s = [0, 0, 0], q = 0;
       for (let i = 0; i < d.length; i += 16) { n++; for (let k = 0; k < 3; k++) s[k] += d[i + k]; q += (d[i] + d[i + 1] + d[i + 2]) ** 2; }
-      const m = s.map((v) => v / n), lum = (m[0] + m[1] + m[2]); return { mean: m.map((v) => Math.round(v)), spread: Math.round(Math.sqrt(Math.max(0, q / n - lum * lum))) };
+      const m = s.map((v) => v / n), lum = (m[0] + m[1] + m[2]);
+      // the centre's and the corners' brightness (Snell's window: a bright centre, darker water around it)
+      const region = (x0: number, y0: number, w: number, h: number) => { const r = g.getImageData(x0, y0, w, h).data; let t = 0; for (let i = 0; i < r.length; i += 4) t += r[i] + r[i + 1] + r[i + 2]; return t / (r.length / 4); };
+      const W = img.width, H = img.height, cw = W >> 3, ch = H >> 3;
+      const centre = region((W - cw) >> 1, (H - ch) >> 1, cw, ch), corners = (region(0, 0, cw, ch) + region(W - cw, 0, cw, ch) + region(0, H - ch, cw, ch) + region(W - cw, H - ch, cw, ch)) / 4;
+      const top = region(0, 0, W, ch), bottom = region(0, H - ch, W, ch);
+      return { mean: m.map((v) => Math.round(v)), spread: Math.round(Math.sqrt(Math.max(0, q / n - lum * lum))), centre: Math.round(centre), corners: Math.round(corners), top: Math.round(top), bottom: Math.round(bottom) };
     })), [r.above.url, r.below.url, r.up.url]);
     if (shots) for (const [k, v] of Object.entries({ above: r.above.url, below: r.below.url, up: r.up.url })) writeFileSync(`${shots}/${backend}-${k}.png`, Buffer.from((v as string).split(',')[1], 'base64'));
-    console.log(backend, JSON.stringify({ spot: r.best, under: [r.above.under, r.below.under, r.up.under], stats }));
+    console.log(backend, JSON.stringify({ ran: r.backend, spot: r.best, under: [r.above.under, r.below.under, r.up.under], stats, fourVolumes: r.fourVolumes, afterReset: r.afterReset }));
     if (process.env.LVL_DEBUG) console.log(JSON.stringify(r.debug, null, 1));
+    assert.equal(r.backend, backend, `asked for ${backend}, the renderer ran ${r.backend}`);
     assert.equal(r.above.under, false, 'above the surface is not underwater');
     assert.equal(r.below.under, true, 'below the surface is underwater');
     assert.equal(r.up.under, true);
     assert.ok(stats[1].spread < stats[0].spread * 0.5, 'under water the view is fogged (well under half the contrast above)');
+    assert.ok(stats[2].top > stats[2].bottom * 1.3, `looking up, Snell's window (top) is brighter than the water outside it (bottom): ${stats[2].top} vs ${stats[2].bottom}`);
+    assert.equal(r.fourVolumes.waters, 4); assert.equal(r.fourVolumes.slots, 5, 'four volumes and the level: five fog slots');
+    assert.equal(r.afterReset.level, null, 'a world reset clears the level');
+    assert.deepEqual([r.afterReset.debug.under, r.afterReset.debug.background, r.afterReset.debug.enabled, r.afterReset.backgroundNode], [false, false, false, null], 'nothing of the old water follows to the next world');
     assert.deepEqual(errors.filter((e) => /shader|WGSL|GLSL|compile|TSL/i.test(e)), [], `${backend}: shader errors`);
-    console.log(`PASS (${backend}): underwater only under the surface, fogged below, clear above, no shader errors`);
+    console.log(`PASS (${backend}): underwater only under the surface, fogged below, window bright overhead, clear above; four volumes + the level keep their fog; travel clears the level; no shader errors`);
     await page.close();
   }
 } finally { await browser.close(); }

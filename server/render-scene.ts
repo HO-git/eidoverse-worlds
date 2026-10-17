@@ -4,7 +4,7 @@
 import { createHash } from "node:crypto";
 import { planStructure } from "../shared/structure.js";
 import { terrainParams, makeHeightField } from "../shared/terrainmath.js";
-import { shapedHeightAt, waterParams as levelParams, shapeReady, shapeParams } from "../shared/terrainshape.js";
+import { waterParams as levelParams, shapeReady, shapeParams } from "../shared/terrainshape.js";
 import { analyzeWater } from "../shared/waterkind.js";
 import "./heightmap.ts";   // registers the heightmap grid loader the shaped terrain reads
 import { effectiveWorldTransform } from "../mcpl/effective.ts";
@@ -51,7 +51,9 @@ export function projectEnvironment(state: any) {
   const p = terrainParams(state.terrain ?? { size: 200, amplitude: 0 });
   if (!(p.size > 0 && p.size <= 10000)) throw Error("terrain size unsupported");
   // The shaped ground (placed features, heightmaps) over the base law — what the browser and agents stand on.
-  const n = Math.min(128,Math.max(64,Math.round(Number(state.terrain?.segments)||64))), height = shapedHeightAt(makeHeightField(p), state.terrain ?? {}), heights: number[] = [];
+  // makeHeightField already applies terrainParams' shape: shaping it again doubled every feature (a −4 m pit
+  // projected at −8 m), so native clients got different ground and water than browsers.
+  const n = Math.min(128,Math.max(64,Math.round(Number(state.terrain?.segments)||64))), height = makeHeightField(p), heights: number[] = [];
   for (let z = 0; z <= n; z++) for (let x = 0; x <= n; x++)
     heights.push(height((x / n - .5) * p.size, (z / n - .5) * p.size));
   const tint=state.terrain?.color??state.terrain?.layers?.[0]?.color??0x70815a;

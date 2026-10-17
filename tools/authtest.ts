@@ -150,6 +150,26 @@ try {
   check("spectate-only scope at /upload → 401",
     (await up(mint({ kind: "agent", scopes: ["worlds:spectate"], jti: undefined }))).status === 401);
 
+  // ---- /upload gate: a person signed in through the home node (session cookie, no door key) ----
+  const png = (() => {   // a 2×2 grayscale PNG — the smallest thing the heightmap door takes
+    const { PNG } = require("pngjs");
+    const p = new PNG({ width: 2, height: 2, colorType: 0, inputColorType: 0, inputHasAlpha: false });
+    p.data = Buffer.from([0, 85, 170, 255]);
+    return PNG.sync.write(p, { colorType: 0, inputColorType: 0, inputHasAlpha: false });
+  })();
+  const upAs = (headers: Record<string, string>, q = "") =>
+    fetch(`${HTTP}/upload?as=heightmap&name=h.png${q}`, { method: "POST", body: png, headers });
+  const hm1 = await upAs({ cookie: a1.cookie, "sec-fetch-site": "same-origin" }, "&by=someone-else");
+  const hm1body = hm1.status === 200 ? await hm1.json() : null;
+  check("signed-in session (same-origin) uploads a heightmap with no door key", hm1.status === 200 && typeof hm1body?.grid === "string",
+    `status=${hm1.status} ${hm1.status !== 200 ? await hm1.text() : ""}`);
+  check("...the cookie from another site's page is not taken", (await upAs({ cookie: a1.cookie, "sec-fetch-site": "same-site" })).status === 401);
+  check("...nor a cookie with no fetch-site at all", (await upAs({ cookie: a1.cookie })).status === 401);
+  check("no session, no key → 401", (await upAs({ "sec-fetch-site": "same-origin" })).status === 401);
+  const spectOnly = await auth(mint({ sub: "human:discord:7770001", name: "Watcher", scopes: ["worlds:spectate"] }));
+  check("a spectate-only login cannot upload", spectOnly.cookie.length > 0
+    && (await upAs({ cookie: spectOnly.cookie, "sec-fetch-site": "same-origin" })).status === 401);
+
   // ---- agent-door verifier (the same copy net-server.ts uses) ----
   const agentTok = mint({ sub: "agent:ferro@guest", kind: "agent", name: "Ferro", scopes: ["worlds:join"], jti: undefined });
   const v = verifyToken(agentTok, { issuerId: ISSUER_ID, iss: ISS, aud: "eidoverse", requireScopes: ["worlds:join"] });

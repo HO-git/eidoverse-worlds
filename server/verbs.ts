@@ -109,6 +109,14 @@ export function parseGrantDuration(s: string): number | null {
   return ms > 0 && ms <= MAX_GRANT_MS ? ms : null;
 }
 
+/** May a display name be a record's KEY? Not when it could be read as
+ *  something else: the wildcard, a reserved actor, or a subject string (a
+ *  record under "human:discord:1" belonging to someone else would make every
+ *  later edit of it look like a request about that subject). */
+function fileableName(n: string): boolean {
+  return !!n && n !== "*" && !/^world$/i.test(n) && !/^bhv:/i.test(n) && !SUB_RE.test(n) && !/[\u0000-\u001f\u007f]/.test(n);
+}
+
 function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
   const { w } = ctx;
   const now = Date.now();
@@ -194,8 +202,12 @@ function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
   if (id === "*") sub = undefined;
   else if (explicit) {
     sub = id;
+    // filed under the person's last-seen name — unless that name could be
+    // mistaken for something else (`*`, a reserved actor, another subject
+    // string): then under the subject itself (Greptile #258: a member named
+    // "*" made a revoke-by-subject hit the wildcard and open the world)
     const p = principalOf(id);
-    if (p) id = p.name.slice(0, 64);
+    if (p && fileableName(p.name)) id = p.name.slice(0, 64);
   }
   else if (rec) {
     // …unless someone ELSE stands here under that name: the owner may mean
@@ -231,7 +243,7 @@ function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
   // The wildcard is its own record: `revoke *` takes the door back to the
   // world's default (Greptile #258 caught this lookup skipping it). A subject
   // string never matches by key — a display name can be made to look like one.
-  const key = id === "*" ? (roles["*"] ? "*" : undefined)
+  const key = named === "*" ? (roles["*"] ? "*" : undefined)
     : rec ? named : sub ? Object.keys(roles).find((k) => roles[k]?.sub === sub) : undefined;
   const target = key ? roles[key] : undefined;
   if (until != null && (role === "owner" || (role == null && target?.role === "owner"))) {

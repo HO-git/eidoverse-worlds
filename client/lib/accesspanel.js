@@ -175,17 +175,20 @@ function paint() {
     }
     row.append(txt);
     if (edit) {
+      // edit BY SUBJECT when the record has one: the row's name is a display
+      // name, and a display name can be made to look like something else
+      const who = m.sub ?? m.id;
       const ctl = mk('div', null, null, 'display:flex;gap:4px;align-items:center;flex:none');
-      ctl.append(select(ROLES, m.role, (role) => grant({ id: m.id, role }), 'role'));
+      ctl.append(select(ROLES, m.role, (role) => grant({ id: who, role }), 'role'));
       if (m.role !== 'owner') {
         // the span select shows "no end" when there is none; picking a span
         // restarts it from now
         ctl.append(select([['keep', m.until ? left(m.until, now) : 'no end'], ...SPANS.map(([v, t]) => [v || 'none', t])], 'keep',
-          (v) => { if (v !== 'keep') grant({ id: m.id, ...(v === 'none' ? { until: null } : { for: v }) }); }, 'how long'));
+          (v) => { if (v !== 'keep') grant({ id: who, ...(v === 'none' ? { until: null } : { for: v }) }); }, 'how long'));
       }
       const rm = mk('button', null, '✕', 'padding:2px 7px');
       rm.title = `take ${m.id} off the list`;
-      rm.onclick = () => grant({ id: m.id, revoke: true });
+      rm.onclick = () => grant({ id: who, revoke: true });
       ctl.append(rm);
       row.append(ctl);
     }
@@ -249,13 +252,13 @@ function paint() {
         const b = mk('button', null, `+ ${p.id}`);
         b.title = p.verified ? `add ${p.id} as ${search.role}` : `${p.id} came in with a typed name — they can't be let into a closed world until they sign in`;
         if (!p.verified) b.disabled = true;
-        b.onclick = () => grant({ id: p.id, role: search.role, ...(search.span ? { for: search.span } : {}) });
+        b.onclick = () => grant({ id: p.sub ?? p.id, role: search.role, ...(search.span ? { for: search.span } : {}) });
         chips.append(b);
       }
       const verified = here.filter((p) => p.verified);
       if (verified.length > 1) {
         const all = mk('button', null, `add all ${verified.length}`);
-        all.onclick = () => { for (const p of verified) grant({ id: p.id, role: search.role, ...(search.span ? { for: search.span } : {}) }); };
+        all.onclick = () => { for (const p of verified) grant({ id: p.sub ?? p.id, role: search.role, ...(search.span ? { for: search.span } : {}) }); };
         chips.append(all);
       }
       body.append(chips);

@@ -601,8 +601,11 @@ export const MESSAGES: Record<string, (ctx: MsgCtx, msg: any) => void> = {
     const mayEdit = ROLE_RANK[mine.role] >= 2 || isAdminId(c.id, c.sub);
     const live = Object.entries(roles).filter(([k, r]) => k !== "*" && r && !(typeof r.until === "number" && r.until <= now2));
     const presentNames = new Set([...w.clients].filter((o) => !o.spectator && !o.superseded).map((o) => o.id));
+    // An editor's panel edits a member BY SUBJECT when the record has one —
+    // the record's key is a display name, and a display name can look like
+    // something else (Greptile #258). Subjects go to editors only.
     const members = live.map(([id, r]) => ({
-      id, role: r.role, ...(r.gen ? { gen: true } : {}), ...(r.fly ? { fly: true } : {}),
+      id, ...(mayEdit && r.sub ? { sub: r.sub } : {}), role: r.role, ...(r.gen ? { gen: true } : {}), ...(r.fly ? { fly: true } : {}),
       ...(typeof r.until === "number" ? { until: r.until } : {}),
       kind: r.sub ? (principalOf(r.sub)?.kind ?? (r.sub.startsWith("agent:") ? "agent" : "human")) : "name",
       here: presentNames.has(id) || (r.sub ? [...w.clients].some((o) => o.sub === r.sub && !o.spectator) : false),
@@ -612,7 +615,7 @@ export const MESSAGES: Record<string, (ctx: MsgCtx, msg: any) => void> = {
     const listed = (o: { id: string; sub?: string }) => live.some(([k, r]) => k === o.id || (r.sub && r.sub === o.sub));
     const here = [...w.clients]
       .filter((o) => !o.spectator && !o.superseded && o !== c && !listed(o))
-      .map((o) => ({ id: o.id, kind: o.agent ? "agent" : "human", verified: Boolean(o.sub || o.nameReserved) }));
+      .map((o) => ({ id: o.id, ...(mayEdit && o.sub ? { sub: o.sub } : {}), kind: o.agent ? "agent" : "human", verified: Boolean(o.sub || o.nameReserved) }));
     ws.send(JSON.stringify({ type: "access-state", world: w.name, owned, door: owned ? wildcardRoleIn(w.state as any) : "builder",
       mayEdit, you: { role: mine.role, ...(mine.until ? { until: mine.until } : {}) }, members, here, now: now2 }));
   },

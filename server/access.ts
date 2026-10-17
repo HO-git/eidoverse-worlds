@@ -315,6 +315,9 @@ function savePrincipalsSoon() {
 /** A door vouched for `sub` under `name` just now. */
 export function notePrincipal(sub: string | undefined, name: string, kind: "human" | "agent", now = Date.now()) {
   if (!sub || !name) return;
+  // names the world reserves for itself never enter the directory — nobody can
+  // join under them, and a grant must never be filed under one
+  if (name === "*" || /^world$/i.test(name) || /^bhv:/i.test(name)) return;
   const p = principals[sub];
   if (p && p.name === name && p.kind === kind && now - p.last < 10 * 60_000) return;
   principals[sub] = { name, kind, first: p?.first ?? now, last: now };

@@ -316,6 +316,35 @@ try {
     check("alice adds subject human:discord:8001 as builder", (await ask(AS, "grant", { id: "human:discord:8001", role: "builder" })) === null);
     const g7 = lastLog(AS, (e) => e.verb === "grant" && e.args.sub && e.args.role === "builder");
     check("…the grant goes to that subject (Tamsin), not to the namesake", g7?.args?.sub === "human:discord:8001" && g7?.args?.id === "Tamsin", JSON.stringify(g7?.args));
+    // #9 a member whose display name mimics another subject: their grant is
+    // filed under THEIR subject, so later edits of it can't reach the mimicked
+    // person; and the panel data carries subjects to editors only
+    const stateOf = async (s: Sock) => {
+      const n = s.msgs.length; s.send({ type: "access-state" });
+      await until(() => s.msgs.slice(n).some((m) => m.type === "access-state"));
+      return s.msgs.slice(n).find((m) => m.type === "access-state");
+    };
+    check("alice adds the mimic by subject (8002)", (await ask(AS, "grant", { id: "human:discord:8002", role: "visitor" })) === null);
+    const g9 = lastLog(AS, (e) => e.verb === "grant" && e.args.sub === "human:discord:8002");
+    check("…filed under its own subject, not its subject-shaped name", g9?.args?.id === "human:discord:8002", JSON.stringify(g9?.args));
+    const ms = await stateOf(M);
+    check("a non-owner's panel data carries no subjects", Array.isArray(ms?.members) && ms.members.length > 0 && !ms.members.some((m: any) => m.sub), JSON.stringify(ms?.members));
+    const as = await stateOf(AS);
+    check("an owner's panel data carries them", as?.members?.some((m: any) => m.sub === "human:discord:8002"), JSON.stringify(as?.members));
+    check("promoting the mimic BY ITS SUBJECT (as the panel does) is accepted", (await ask(AS, "grant", { id: "human:discord:8002", role: "builder" })) === null);
+    const after9 = await stateOf(AS);
+    const r8001 = after9?.members?.find((m: any) => m.sub === "human:discord:8001"), r8002 = after9?.members?.find((m: any) => m.sub === "human:discord:8002");
+    check("…the mimic is builder and Tamsin (8001) is untouched", r8002?.role === "builder" && r8001?.role === "builder" && after9.members.filter((m: any) => m.sub === "human:discord:8002").length === 1, JSON.stringify(after9?.members));
+    // #10 a person whose display name is "*": granting and revoking them by
+    // subject never touches the wildcard
+    await login("human:discord:9001", "*");
+    check("alice closes the world, then adds subject 9001 (display name \"*\")",
+      (await ask(AS, "grant", { id: "*", role: "none" })) === null && (await ask(AS, "grant", { id: "human:discord:9001", role: "visitor" })) === null);
+    check("revoking subject 9001 is accepted", (await ask(AS, "grant", { id: "human:discord:9001", revoke: true })) === null);
+    const rv10 = lastLog(AS, (e) => e.verb === "grant" && e.args.revoke);
+    check("…and revokes 9001's record, not the wildcard", rv10?.args?.id === "human:discord:9001" && rv10?.args?.sub === "human:discord:9001", JSON.stringify(rv10?.args));
+    check("…so the world stays closed", !(await worldsAs()).some((w) => w.name === SW));
+    check("alice opens it again for the next check", (await ask(AS, "grant", { id: "*", role: "builder" })) === null);
     // #8 `revoke *` takes the door back to the default (a closed world opens)
     check("alice closes the subject-test world", (await ask(AS, "grant", { id: "*", role: "none" })) === null);
     check("…and revoking * is accepted", (await ask(AS, "grant", { id: "*", revoke: true })) === null);

@@ -142,3 +142,25 @@ test("prewarm: an agent arriving where no renderer serves sends one roamer, once
   broker.prewarm(served); expect(roamer.messages.length).toBe(1);
   await Bun.sleep(450);   // the unanswered summons expires
 });
+test("rotation: a parked roamer goes before one an agent is using; pre-warm never takes a world's roamer from it", async () => {
+  const { broker, worldOf, join, leave } = roamSetup();
+  const busyWorld = worldOf("busy"), parked = worldOf("parked"), fresh = worldOf("fresh"), fresh2 = worldOf("fresh2");
+  // a roamer an agent is actively using (it asked a snapshot just now) — and one parked where nobody is
+  const inUse = join(busyWorld, "roam-a", { renderer: true, roam: true, spectator: true });
+  join(busyWorld, "agentBusy", { agent: true });
+  const shot = broker.request(busyWorld, "agentBusy");
+  broker.receive(inUse.c, { id: inUse.messages.find((m) => m.type === "snap").id, dataUrl: png }); await shot;
+  const free = join(parked, "roam-b", { renderer: true, roam: true, spectator: true });
+  // a new agent elsewhere: the PARKED roamer is sent, not the one in use
+  join(fresh, "agentFresh", { agent: true }); broker.prewarm(fresh);
+  expect(free.messages.at(-1)).toEqual({ type: "renderer-travel", world: "fresh" });
+  expect(inUse.messages.some((m) => m.type === "renderer-travel")).toBe(false);
+  // with only the in-use roamer left: a pre-warm does NOT take it…
+  leave(free.c); join(fresh2, "agentFresh2", { agent: true }); broker.prewarm(fresh2);
+  expect(inUse.messages.some((m) => m.type === "renderer-travel")).toBe(false);
+  // …but a snapshot actually asked does (never refused while a roamer exists)
+  await Bun.sleep(450);   // the unanswered pre-warm summons for fresh expires
+  void broker.request(fresh2, "agentFresh2"); await Bun.sleep(30);
+  expect(inUse.messages.at(-1)).toEqual({ type: "renderer-travel", world: "fresh2" });
+  await Bun.sleep(450);
+});

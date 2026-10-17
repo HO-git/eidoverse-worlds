@@ -1,6 +1,6 @@
 import { setTraversalObjects } from './lib/traversal.js';
 import { updateVehicle, piloting } from './lib/vehicles.js';
-import { updateWater, setWaterObjects, setWaterClock, environmentSettings, waterDebug, applyEnvLight } from './lib/watervolumes.js';
+import { updateWater, updateWaterView, setWaterObjects, setWaterClock, environmentSettings, waterDebug, applyEnvLight } from './lib/watervolumes.js';
 // eidoverse-worlds browser client.
 //
 // Two planes: the world log (verbs, ordered, replayed on join) and presence
@@ -614,6 +614,7 @@ registerSystem('debug', (dt, t, now) => updateDebug(now));       // F3 wireframe
 registerSystem('send-pose', (dt, t, now) => sendPose(now));
 // XR: read hands → fill intent (updateMe already moved the body) → rig follows
 registerSystem('xr', (dt) => updateXR(dt));
+registerSystem('water-view', () => updateWaterView());   // after the camera's last move this frame (movement, XR): the level's fog and background
 registerSystem('xrvignette', (dt) => tickXRVignette(dt));   // comfort tunnel, on the XR camera (Settings › VR)
 registerSystem('pixel-ratio', () => applyPendingPixelRatio());   // a resize clears the canvas: before the draw, never after
 registerSystem('render', renderWorld);

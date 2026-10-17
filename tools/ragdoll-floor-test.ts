@@ -116,7 +116,10 @@ console.log('\na wide hall:');
 }
 
 console.log('\na dense interior (a million triangles in reach):');
+const warns: string[] = [];
 {
+  const realWarn = console.warn;
+  console.warn = (...a: unknown[]) => { warns.push(a.map(String).join(' ')); };
   // 20×20m hall, its floor 1m up and tessellated into ~1M triangles —
   // lawful for exact collision, far past what one fall may hand Bullet
   const H = 1.0, X = -100, N = 707;   // N×N quads × 2 ≈ 1.0M
@@ -137,8 +140,18 @@ console.log('\na dense interior (a million triangles in reach):');
   // anyway — the dense interior may add only its bounded handoff to it
   const base = Math.min(...[0, 1, 2].map(() => drop(100, 1.0, 0).ctorMs));
   const d = drop(X, H, 0);
+  drop(X, H, 0);                                         // a second fall in the same room
+  console.warn = realWarn;
   check('a body that goes limp in it builds its world without running out of memory, and the interior adds under 60ms',
     d.ctorMs - base < 60, `constructor ${d.ctorMs.toFixed(0)}ms vs ${base.toFixed(0)}ms in the plain hall`);
+  // the fallback is observable where it ships: the `ragdoll` debuglog topic
+  // (entity, cap, floor) and one console warning per thing — not per fall
+  const { lastWhy } = await import('../client/lib/debuglog.js');
+  const said = lastWhy('ragdoll');
+  check('the fallback is reported where it ships: the ragdoll debug topic names the thing, the cap and the floor',
+    /interior fallback — dense: over 20000 triangles .* floor slab at 1\.00m/.test(said), said);
+  check('...with one console warning for that thing, not one per fall', warns.filter((w) => /interior fallback — dense/.test(w)).length === 1,
+    `${warns.length} warning(s): ${warns.join(' | ').slice(0, 160)}`);
   check('...says it fell back, and lands on the floor, not the terrain 1m beneath',
     /floor slab at 1\.00m/.test(d.fallback ?? '') && d.rest > H - 0.05 && d.low > H - 0.2, `${d.fallback} — lowest ${d.low.toFixed(2)}, rests ${d.rest.toFixed(2)}`);
 }

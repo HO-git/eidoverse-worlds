@@ -70,6 +70,7 @@ import { heightAt, waterField } from './terrain.js';
 import { surfaceOffset } from '../../shared/waves.js';
 import { partWaterForce, waterCurrent, swellRise, WATER_ANG_DRAG } from '../../shared/buoyancy.js';
 import { nearColliders, surfaceUnder } from './colliders.js';
+import { why } from './debuglog.js';
 import { SEGMENTS, segDistance, rigFrameOf, snapshotPacker, seedJoints } from './rigmeasure.js';
 import { BodyEngineBase } from './bodyengine.js';
 
@@ -135,6 +136,16 @@ const INTERIOR_REACH = 8;
  *  exhaust Ammo's heap. Past it, nearer (INTERIOR_NEAR), then a floor slab. */
 export const INTERIOR_MAX_TRIS = 20_000;
 const INTERIOR_NEAR = 3;
+/** Things already warned about on the console (bounded): a fallback is said
+ *  once per thing there, and always to the `ragdoll` debuglog topic, which
+ *  keeps the last few. Constructor-time only — never per frame. */
+const fallbackWarned = new Set();
+function reportInteriorFallback(id, msg) {
+  why('ragdoll', `interior fallback — ${msg}; its walls are left out of this fall`);
+  if (fallbackWarned.has(id) || fallbackWarned.size >= 64) return;
+  fallbackWarned.add(id);
+  console.warn(`[ammodoll] interior fallback — ${msg}; its walls are left out of the fall (further ones: lastWhy('ragdoll'))`);
+}
 
 /** An interior collider's triangles within `reach` of `at` (horizontally), in
  *  world space, flat [x,y,z, x,y,z, x,y,z, ...]. The collider's geometry is
@@ -910,6 +921,7 @@ export class AmmoRagdoll extends BodyEngineBase {
         const floor = surfaceUnder(hips.x, hips.z, heightAt, hips.y + 0.3).y;
         addStatic(INTERIOR_NEAR, 0.25, INTERIOR_NEAR, { x: hips.x, y: floor - 0.25, z: hips.z }, null, 0.8);
         this.interiorFallback = `${id}: over ${INTERIOR_MAX_TRIS} triangles within ${INTERIOR_NEAR}m — a floor slab at ${floor.toFixed(2)}m stands in`;
+        reportInteriorFallback(id, this.interiorFallback);
         continue;
       }
       const tri = got.tris;

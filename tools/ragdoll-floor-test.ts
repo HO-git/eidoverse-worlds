@@ -16,7 +16,7 @@ plugin({ name: 'core-stub', setup(b) { b.onResolve({ filter: /^\.\/core\.js$/ },
 const { THREE } = await import('./core-stub.mjs');
 const { mergeGeometries } = await import('../client/node_modules/three/examples/jsm/utils/BufferGeometryUtils.js');
 const C: any = await import('../client/lib/colliders.js');
-const { AmmoRagdoll, ensureAmmo, interiorTriangles } = await import('../client/lib/ammodoll.js');
+const { AmmoRagdoll, ensureAmmo, interiorTriangles, INTERIOR_MAX_TRIS } = await import('../client/lib/ammodoll.js');
 const { makeAvatar, toppleLean } = await import('./rig-load.mjs');
 const { wingRig } = await import('./doll-fixture.mjs');
 
@@ -47,7 +47,7 @@ const entry = C.colliders?.get?.('house') ?? [...C.nearColliders(0, 0, 1)].find(
 check('the building is fitted as an exact interior (the case the ragdoll used to skip)',
   !!entry?.exact && entry.interior === true, `exact=${!!entry?.exact} interior=${entry?.interior}`);
 check('interiorTriangles hands over triangles near a point, in world space',
-  interiorTriangles(entry, { x: -2, z: 0 }, 8).length > 0 && interiorTriangles(entry, { x: 40, z: 40 }, 8).length === 0);
+  interiorTriangles(entry, { x: -2, z: 0 }, 8).tris.length > 0 && interiorTriangles(entry, { x: 40, z: 40 }, 8).tris.length === 0);
 
 check('wasm door opens', await ensureAmmo());
 
@@ -57,7 +57,9 @@ function drop(x: number, y: number, z: number) {
   const av: any = makeAvatar(wingRig.P, { realParent: wingRig.realParent });
   av.root.position.set(x, y, z);
   av.root.updateMatrixWorld(true);
+  const t0 = performance.now();
   const rd: any = new AmmoRagdoll(av, toppleLean(), av.restBonePositions());
+  const ctorMs = performance.now() - t0, fallback = rd.interiorFallback ?? null;
   let low = Infinity, rest = Infinity, steps = 0;
   while (!rd.done && steps < 900) {
     rd.step(1 / 60); steps++;
@@ -67,13 +69,13 @@ function drop(x: number, y: number, z: number) {
     low = Math.min(low, m); rest = m;
   }
   rd.dispose?.();
-  return { low, rest, steps };
+  return { low, rest, steps, ctorMs, fallback };
 }
 
 console.log('\nlimp indoors:');
 {
   const up = drop(-2, UPPER, 0);
-  check('upstairs, the body comes to rest on the upper floor — not through it to the ground',
+    check('upstairs, the body comes to rest on the upper floor — not through it to the ground',
     up.rest > UPPER - 0.05 && up.low > UPPER - 0.2, `lowest ${up.low.toFixed(2)}, rests ${up.rest.toFixed(2)} (floor ${UPPER})`);
   const down = drop(2, FLOOR, 0);
   check('on the raised ground floor, it rests on the floor — not 0.3m down on the terrain',
@@ -104,13 +106,41 @@ console.log('\na wide hall:');
   const m = new THREE.Mesh(g, undefined); m.updateMatrixWorld(true);
   C.fitCollider('hall', m, { collide: 'exact' });
   const e = [...C.nearColliders(X, 0, 1)].find(([id]: any) => id === 'hall')?.[1];
-  const tri = interiorTriangles(e, { x: X, z: 0 }, 8);
+  const tri = interiorTriangles(e, { x: X, z: 0 }, 8).tris;
   let top = false;
   for (let k = 0; k < tri.length; k += 9) if ([1, 4, 7].every((o) => Math.abs(tri[k + o] - H) < 1e-6)) top = true;
   check('interiorTriangles hands over a floor triangle whose corners are all out of reach', top, `${tri.length / 9} triangles`);
   const mid = drop(X, H, 0);
   check('in the middle of a wide hall, the body rests on its floor', mid.rest > H - 0.05 && mid.low > H - 0.2,
     `lowest ${mid.low.toFixed(2)}, rests ${mid.rest.toFixed(2)} (floor ${H})`);
+}
+
+console.log('\na dense interior (a million triangles in reach):');
+{
+  // 20×20m hall, its floor 1m up and tessellated into ~1M triangles —
+  // lawful for exact collision, far past what one fall may hand Bullet
+  const H = 1.0, X = -100, N = 707;   // N×N quads × 2 ≈ 1.0M
+  const floor = new THREE.PlaneGeometry(20, 20, N, N);
+  floor.rotateX(-Math.PI / 2); floor.translate(X, H, 0);
+  const walls = [[-10, 0, -10, 10, H, 10], [-10, H, -10, -9.8, 4, 10], [9.8, H, -10, 10, 4, 10], [-10, H, -10, 10, 4, -9.8], [-10, H, 9.8, 10, 4, 10]]
+    .map(([x0, y0, z0, x1, y1, z1]) => { const b = new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0); b.translate((x0 + x1) / 2 + X, (y0 + y1) / 2, (z0 + z1) / 2); return b.toNonIndexed(); });
+  const g = mergeGeometries([floor.toNonIndexed(), ...walls], false);
+  const m = new THREE.Mesh(g, undefined); m.updateMatrixWorld(true);
+  C.fitCollider('dense', m, { collide: 'exact' });
+  const tris = g.getAttribute('position').count / 3;
+  const t0 = performance.now();
+  const got = interiorTriangles([...C.nearColliders(X, 0, 1)].find(([id]: any) => id === 'dense')?.[1], { x: X, z: 0 }, 8);
+  const qMs = performance.now() - t0;
+  check(`asking a ${(tris / 1e6).toFixed(2)}M-triangle interior for what's near a fall stops at the budget, quickly`,
+    got.over && got.tris.length / 9 <= INTERIOR_MAX_TRIS && qMs < 200, `${got.tris.length / 9} triangles, over=${got.over}, ${qMs.toFixed(0)}ms`);
+  // the same body going limp in the plain hall (warm): what a fall costs
+  // anyway — the dense interior may add only its bounded handoff to it
+  const base = Math.min(...[0, 1, 2].map(() => drop(100, 1.0, 0).ctorMs));
+  const d = drop(X, H, 0);
+  check('a body that goes limp in it builds its world without running out of memory, and the interior adds under 60ms',
+    d.ctorMs - base < 60, `constructor ${d.ctorMs.toFixed(0)}ms vs ${base.toFixed(0)}ms in the plain hall`);
+  check('...says it fell back, and lands on the floor, not the terrain 1m beneath',
+    /floor slab at 1\.00m/.test(d.fallback ?? '') && d.rest > H - 0.05 && d.low > H - 0.2, `${d.fallback} — lowest ${d.low.toFixed(2)}, rests ${d.rest.toFixed(2)}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

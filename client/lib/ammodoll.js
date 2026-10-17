@@ -69,7 +69,7 @@ import { THREE } from './core.js';
 import { heightAt, waterField } from './terrain.js';
 import { surfaceOffset } from '../../shared/waves.js';
 import { partWaterForce, waterCurrent, swellRise, WATER_ANG_DRAG } from '../../shared/buoyancy.js';
-import { nearColliders } from './colliders.js';
+import { nearColliders, surfaceUnder } from './colliders.js';
 import { SEGMENTS, segDistance, rigFrameOf, snapshotPacker, seedJoints } from './rigmeasure.js';
 import { BodyEngineBase } from './bodyengine.js';
 
@@ -129,6 +129,12 @@ function boxesInertia(boxes, mass) {
 /** How far from a fall an interior's triangles are handed to Bullet: a
  *  tumble covers a few metres at most; a large building's far wings stay out. */
 const INTERIOR_REACH = 8;
+/** At most this many interior triangles go to Bullet for one fall, all
+ *  interiors together: building them into Bullet is synchronous, and a dense
+ *  model (exact collision admits up to a million) would hitch the frame or
+ *  exhaust Ammo's heap. Past it, nearer (INTERIOR_NEAR), then a floor slab. */
+export const INTERIOR_MAX_TRIS = 20_000;
+const INTERIOR_NEAR = 3;
 
 /** An interior collider's triangles within `reach` of `at` (horizontally), in
  *  world space, flat [x,y,z, x,y,z, x,y,z, ...]. The collider's geometry is
@@ -158,22 +164,33 @@ function overlapsSquare(v, at, reach) {
   return true;
 }
 
-export function interiorTriangles(c, at, reach) {
-  const g = c.exact.bvh.geometry, pos = g.getAttribute('position'), index = g.index;
+export function interiorTriangles(c, at, reach, max = INTERIOR_MAX_TRIS) {
+  // Asked of the collider's own BVH, not by scanning every triangle: only
+  // the nodes near the fall are visited, and the walk stops at `max` — a
+  // dense interior costs its budget, never its size.
   const o = c.obj, s = o.scale?.x || 1, q = o.quaternion, p = o.position;
-  const n = index ? index.count : pos.count;
+  // the reach square in the thing's own frame (it turns about Y only: a
+  // circle of reach·√2 holds the square however it is turned)
+  const l = new THREE.Vector3(at.x - p.x, 0, at.z - p.z);
+  if (q) l.applyQuaternion(q.clone().invert());
+  l.divideScalar(s);
+  const R = reach * Math.SQRT2 / s;
+  const qbox = new THREE.Box3(new THREE.Vector3(l.x - R, -1e9, l.z - R), new THREE.Vector3(l.x + R, 1e9, l.z + R));
   const out = [];
+  let over = false;
   const v = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
-  for (let t = 0; t + 2 < n; t += 3) {
-    for (let k = 0; k < 3; k++) {
-      const vi = index ? index.getX(t + k) : t + k;
-      v[k].fromBufferAttribute(pos, vi).multiplyScalar(s);
-      if (q) v[k].applyQuaternion(q);
-      v[k].add(p);
-    }
-    if (overlapsSquare(v, at, reach)) out.push(v[0].x, v[0].y, v[0].z, v[1].x, v[1].y, v[1].z, v[2].x, v[2].y, v[2].z);
-  }
-  return out;
+  c.exact.bvh.shapecast({
+    intersectsBounds: (box) => box.intersectsBox(qbox),
+    intersectsTriangle: (tri) => {
+      v[0].copy(tri.a); v[1].copy(tri.b); v[2].copy(tri.c);
+      for (const w of v) { w.multiplyScalar(s); if (q) w.applyQuaternion(q); w.add(p); }
+      if (!overlapsSquare(v, at, reach)) return false;
+      if (out.length / 9 >= max) { over = true; return true; }   // stops the walk
+      out.push(v[0].x, v[0].y, v[0].z, v[1].x, v[1].y, v[1].z, v[2].x, v[2].y, v[2].z);
+      return false;
+    },
+  });
+  return { tris: out, over };
 }
 
 export async function ensureAmmo() {
@@ -880,10 +897,24 @@ export class AmmoRagdoll extends BodyEngineBase {
     // already holds the merged root-local triangles the walking body uses
     // (entry.exact); the ones near the fall go to Bullet, in world space, as
     // one static triangle mesh per thing.
-    for (const [, c] of nearColliders(hips.x, hips.z, 8)) {
+    // Bounded (INTERIOR_MAX_TRIS across them all): too many within reach,
+    // and only those within INTERIOR_NEAR go; still too many, and the body
+    // gets the floor under it as a slab — no walls, but never no floor.
+    let budget = INTERIOR_MAX_TRIS;
+    this.interiorFallback = null;
+    for (const [id, c] of nearColliders(hips.x, hips.z, 8)) {
       if (!c.obj || !c.interior || !c.exact?.bvh) continue;
-      const tri = interiorTriangles(c, hips, INTERIOR_REACH);
+      let got = interiorTriangles(c, hips, INTERIOR_REACH, budget);
+      if (got.over) got = interiorTriangles(c, hips, INTERIOR_NEAR, budget);
+      if (got.over) {
+        const floor = surfaceUnder(hips.x, hips.z, heightAt, hips.y + 0.3).y;
+        addStatic(INTERIOR_NEAR, 0.25, INTERIOR_NEAR, { x: hips.x, y: floor - 0.25, z: hips.z }, null, 0.8);
+        this.interiorFallback = `${id}: over ${INTERIOR_MAX_TRIS} triangles within ${INTERIOR_NEAR}m — a floor slab at ${floor.toFixed(2)}m stands in`;
+        continue;
+      }
+      const tri = got.tris;
       if (!tri.length) continue;
+      budget -= tri.length / 9;
       const mesh = keep(new AMMO.btTriangleMesh());
       const a = keep(new AMMO.btVector3(0, 0, 0)), b = keep(new AMMO.btVector3(0, 0, 0)), d = keep(new AMMO.btVector3(0, 0, 0));
       for (let k = 0; k < tri.length; k += 9) {

@@ -365,6 +365,8 @@ try {
 let nextClientNum = 1;
 const clients = new Map<unknown, Client>();
 snapshots.setClients(() => clients.values());   // roaming renderers are found across worlds
+// …and sent only where they will be let in (a roamer with the renderers' credential goes anywhere — access.ts)
+snapshots.setAdmission((w, c) => canEnter(w, whoOf(c), "watch").ok);
 // #57 B2: transport-epoch source. Global (not per-world) so a generation number
 // never collides across worlds or after a world reload; never persisted — an
 // epoch outliving the process would defeat its purpose.

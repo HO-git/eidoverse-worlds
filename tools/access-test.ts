@@ -454,6 +454,16 @@ try {
     check("…and still never the plain one", !plainRoamer.msgs.some((m) => m.type === "renderer-travel"));
     ac.abort(); await pendingSnap;
     plainRoamer.close(); trustedRoamer.close();
+    await sleep(300);
+    // a WATCH-ONLY world admits ordinary renderers, so its no-renderer answer
+    // must not claim it is members-only (Greptile #259). (Another world: the
+    // summons above is still in flight for this one, by design, for travelMs.)
+    const SW2 = keep(await open(`${W}-subj`, {}, alice));
+    check("alice makes her other world watch-only", Boolean(SW2.snap()) && (await ask(SW2, "grant", { id: "*", role: "spectator" })) === null, `code=${SW2.closedWith}`);
+    const r3 = await fetch(`${HTTP}/snap?world=${W}-subj&follow=Alice`, { headers: { cookie: alice } });
+    const t3 = await r3.text();
+    check("…with no roamer free, the answer is the ordinary one, not \"members-only\"", r3.status === 503 && !/members-only/.test(t3) && /no renderer is currently serving/.test(t3), `${r3.status} ${t3}`);
+    SW2.close();
   }
 
   console.log("12. founding: every member may, a few per day");

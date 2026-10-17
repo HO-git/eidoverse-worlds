@@ -92,9 +92,18 @@ try {
       { const sheet: any = scene.getObjectByName('water'); const { TSL } = await import('/lib/core.js');
         const base4 = TSL.vec4(sheet.material.colorNode); sheet.material.colorNode = TSL.vec4(base4.rgb.mul(TSL.float(0.9)), base4.a); sheet.material.needsUpdate = true;
         out.wrapped = await frame([best.x - 6, surf + 3, best.z - 6], [best.x + 6, surf - 1, best.z + 6]); await new Promise((r) => setTimeout(r, 1200)); }
+      // back UNDER the surface for the checks that follow (review #254): they test underwater states
+      const under = await frame([best.x, camY, best.z], [best.x + 10, camY, best.z]); out.backUnder = under.under;
+      // a dry pocket below the level around the camera: the fog stays, the sky is not swapped for the far water
+      const st0 = await import('/lib/state.js'); let s0 = 3e9;
+      st0.foldLive({ seq: ++s0, ts: Date.now(), actor: 'test', verb: 'spawn', args: { id: 'shaft', lib: 'x.glb', pos: [best.x, camY - 1, best.z] } });
+      st0.foldLive({ seq: ++s0, ts: Date.now(), actor: 'test', verb: 'comp', args: { id: 'shaft', type: 'air', data: { boxes: [{ center: [0, 6, 0], size: [3, 14, 3] }] } } });
+      wv.updateWater(); wv.updateWaterView(); out.inShaft = wv.waterDebug();
+      st0.foldLive({ seq: ++s0, ts: Date.now(), actor: 'test', verb: 'remove', args: { id: 'shaft' } });
+      wv.updateWater(); wv.updateWaterView(); out.afterShaft = wv.waterDebug();
       // four authored volumes AND the level: every one keeps a fog slot (the level has its own)
       const st2 = await import('/lib/state.js');
-      let seq = 2e9; const fold = (verb: string, args: any) => st2.foldLive({ seq: ++seq, ts: Date.now(), actor: 'test', verb, args });
+      let seq = 4e9; const fold = (verb: string, args: any) => st2.foldLive({ seq: ++seq, ts: Date.now(), actor: 'test', verb, args });
       for (let i = 0; i < 4; i++) { fold('spawn', { id: `vol${i}`, lib: 'x.glb', pos: [best.x + 200 + i * 20, 0, best.z] }); fold('comp', { id: `vol${i}`, type: 'water', data: { center: [0, 0, 0], size: [4, 4, 4] } }); }
       wv.updateWater(); wv.updateWaterView(); out.fourVolumes = wv.waterDebug();
       // travel: a world reset clears the level — no level fog, background or sky hiding follows to the next world
@@ -127,7 +136,11 @@ try {
     assert.equal(r.up.under, true);
     assert.ok(stats[1].spread < stats[0].spread * 0.5, 'under water the view is fogged (well under half the contrast above)');
     assert.ok(stats[2].top > stats[2].bottom * 1.3, `looking up, Snell's window (top) is brighter than the water outside it (bottom): ${stats[2].top} vs ${stats[2].bottom}`);
+    assert.equal(r.backUnder, true, 'the checks below run under the surface');
+    assert.deepEqual([r.inShaft.under, r.inShaft.background, r.inShaft.enabled], [true, false, true], 'in a dry shaft below the level: fog on, no far-water background');
+    assert.deepEqual([r.afterShaft.under, r.afterShaft.background], [true, true], 'out of the shaft, under the water again');
     assert.equal(r.fourVolumes.waters, 4); assert.equal(r.fourVolumes.slots, 5, 'four volumes and the level: five fog slots');
+    assert.equal(r.fourVolumes.under, true, 'the four-volume check runs under the level');
     assert.equal(r.afterReset.level, null, 'a world reset clears the level');
     assert.deepEqual([r.afterReset.debug.under, r.afterReset.debug.background, r.afterReset.debug.enabled, r.afterReset.backgroundNode], [false, false, false, null], 'nothing of the old water follows to the next world');
     assert.deepEqual(errors.filter((e) => /shader|WGSL|GLSL|compile|TSL/i.test(e)), [], `${backend}: shader errors`);

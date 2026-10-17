@@ -201,7 +201,12 @@ function placeUnderBackground(lvl) {
     hideSkyForWater(true);   // every frame: the sky may rebuild its objects
   } else if (backgroundOn) { scene.backgroundNode = backgroundSaved; backgroundSaved = null; backgroundOn = false; hideSkyForWater(false); }
 }
-const NO_WATER = [1e7, 1e7, 1e7];   // an unreachable point: a segment never meets it (rayBox misses)
+const NO_WATER = [1e7, 1e7, 1e7];
+function cameraInDryAir() {
+  camera.getWorldPosition(_cam);
+  for (const a of airs) { const q = a.toLocal([_cam.x, _cam.y, _cam.z]); if (Math.abs(q[0]) <= a.size[0] / 2 && Math.abs(q[1]) <= a.size[1] / 2 && Math.abs(q[2]) <= a.size[2] / 2) return true; }
+  return false;
+}   // an unreachable point: a segment never meets it (rayBox misses)
 /** The camera-dependent half of the optics: the level's fog slot, the under-water background and sky, and the
  *  fog's install. main.js runs it AFTER this frame's movement (and XR), so crossing the surface never renders a
  *  frame with the previous position's water. */
@@ -209,7 +214,9 @@ export function updateWaterView() {
   const lvl = levelSlot(); underLevelNow = !!lvl;
   if (lvl) { mins.array[0].set(...lvl.min, 0); maxs.array[0].set(...lvl.max, 0); absorption.array[0].set(...lvl.absorption, 0); scatter.array[0].set(...lvl.scatter, 0); }
   else { mins.array[0].set(...NO_WATER, 0); maxs.array[0].set(...NO_WATER, 0); }
-  placeUnderBackground(lvl);
+  // In dry air below the level (a shaft, a habitat open to the sky) the sky is really there: keep the fog — every
+  // ray out of the pocket still crosses its water — but not the far-water background or the hidden sky.
+  placeUnderBackground(lvl && !cameraInDryAir() ? lvl : null);
   const on = waters.length > 0 || !!lvl;
   waterCount.value = on ? 1 + waters.length : 0;
   if (on && !installed) { previousFog = scene.fogNode; scene.fogNode = fogNode; installed = true; }

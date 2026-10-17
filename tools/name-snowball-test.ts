@@ -4,14 +4,16 @@
 //   bun tools/name-snowball-test.ts
 //
 // The join ack is where a client's stored name came to grow: nameFromJoinAck
-// (net.js onSnapshot) strips the prefix sendJoin put on the wire id, but
-// never from a verified identity. Pinned here: the function itself; the loop,
-// five reloads of a renderer and a spectator, wire id out and ack back,
-// leaving the stored name where it started; and the real net.js onSnapshot →
-// sendJoin, so reverting the nameFromJoinAck call there fails by name (the
-// function's own checks would not notice).
+// (base.js, called by net.js onSnapshot) strips the prefix sendJoin put on the
+// wire id, but never from a verified identity. Pinned here: the function
+// itself; the loop, five reloads of a renderer and a spectator, wire id out and
+// ack back, leaving the stored name where it started; and the real net.js
+// onSnapshot → sendJoin, so reverting the nameFromJoinAck call there fails by
+// name (the function's own checks would not notice). That section also pins
+// what the fix leaves for a name poisoned before it, on each kind of load.
 
 import { join } from "node:path";
+import { LIMITS } from "../server/limits.ts";
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail = "") {
@@ -26,7 +28,9 @@ const { nameFromJoinAck } = await import("../client/lib/base.js");
 check("renderer ack strips renderer-", nameFromJoinAck("renderer-helen", { renderer: true }) === "helen");
 check("spectator ack strips retina-", nameFromJoinAck("retina-helen", { spectate: true }) === "helen");
 check("a person's ack is taken whole", nameFromJoinAck("retina-fan", {}) === "retina-fan");
-check("a dedupe-suffixed ack keeps its suffix", nameFromJoinAck("retina-helen~2", { spectate: true }) === "helen~2");
+check("an ack without the client's prefix is taken whole", nameFromJoinAck("spectator-fan", { spectate: true }) === "spectator-fan");
+check("a renderer that also spectates strips renderer-, as sendJoin prefixes it",
+  nameFromJoinAck("renderer-helen", { renderer: true, spectate: true }) === "helen");
 check("a VERIFIED spectator called retina-helen keeps the name", nameFromJoinAck("retina-helen", { spectate: true, verified: true }) === "retina-helen");
 check("a verified renderer ack is taken whole", nameFromJoinAck("renderer-bot", { renderer: true, verified: true }) === "renderer-bot");
 check("empty / missing ack passes through", nameFromJoinAck("", { spectate: true }) === "" && nameFromJoinAck(undefined as unknown as string, {}) === undefined);
@@ -91,11 +95,33 @@ function pageLoad(search: string, stored: string, steps: Step[]) {
     rend.joins.length === 3 && rend.joins.every((j) => j === "renderer-helen"), JSON.stringify(rend));
   check("renderer: CONFIG.name and ew-name stay helen", rend.name === "helen" && rend.stored === "helen", JSON.stringify(rend));
 
-  // a name poisoned before the fix stops growing: it stays as stored, for its owner to rename
-  const old = pageLoad("?renderer", "renderer-renderer-helen", ["join", { ack: "renderer-renderer-renderer-helen" }, "join"]);
-  check("a renderer stored as renderer-renderer-helen keeps that name across a rejoin",
-    old.name === "renderer-renderer-helen" && old.stored === "renderer-renderer-helen"
-      && old.joins.every((j) => j === "renderer-renderer-renderer-helen"), JSON.stringify(old));
+  // a name poisoned before the fix stops growing: on every kind of load it stays as
+  // stored, for its owner to rename, and the server echoes the wire id it was sent
+  for (const [search, stored, wire] of [
+    ["", "retina-retina-helen", "retina-retina-helen"],
+    ["", "renderer-fan", "renderer-fan"],
+    ["?spectate", "retina-retina-helen", "retina-retina-retina-helen"],
+    ["?renderer", "renderer-renderer-helen", "renderer-renderer-renderer-helen"],
+  ]) {
+    const old = pageLoad(search, stored, ["join", { ack: wire }, "join"]);
+    check(`${search || "a person"} stored as ${stored} keeps that name across a rejoin`,
+      old.name === stored && old.stored === stored && old.joins.length === 2 && old.joins.every((j) => j === wire), JSON.stringify(old));
+  }
+
+  // past the server's id limit, the server echoes the wire id cut to fit
+  // (server.ts cuts every join's id to LIMITS.ID_LEN); the client stores that
+  // cut, which is the name the world already shows, and it holds from then on
+  const long = "renderer-".repeat(6) + "helen", cut = `renderer-${long}`.slice(0, LIMITS.ID_LEN);
+  const capped = pageLoad("?renderer", long, ["join", { ack: cut }, "join", { ack: cut }, "join"]);
+  check(`a renderer name past the ${LIMITS.ID_LEN}-character id limit is stored as the server cut it, then holds`,
+    capped.stored === cut.slice("renderer-".length) && capped.name === capped.stored
+      && capped.joins.length === 3 && capped.joins[0] === `renderer-${long}` && capped.joins[1] === cut && capped.joins[2] === cut,
+    JSON.stringify(capped));
+
+  // the rename a poisoned name's owner can make: ?name= replaces the stored name
+  const renamed = pageLoad("?renderer&name=helen", "renderer-renderer-helen", ["join"]);
+  check("?name= replaces a poisoned stored name, for every later load", renamed.stored === "helen" && renamed.joins[0] === "renderer-helen",
+    JSON.stringify(renamed));
 
   // and the exemption reaches the call: a verified identity is taken whole
   const ver = pageLoad("?spectate", "x", ["join", { ack: "retina-helen", sub: "agent:retina-helen@guest" }]);

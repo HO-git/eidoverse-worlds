@@ -20,6 +20,7 @@ import { attribute, mix, smoothstep, vec3, float, positionGeometry, uniform, sin
 import { OCEAN, RIVER, STILL, waveClock, cyc, surfaceOffset } from '../../shared/waves.js';
 import { setWaterField } from './terrain.js';
 import { onWorldChange } from './state.js';
+import { dryAt } from './watervolumes.js';   // the dry boxes' mask (a cycle, used only at build time)
 import { waterParams } from '../../shared/terrainshape.js';
 import { analyzeWater, waterGridSeg } from '../../shared/waterkind.js';
 
@@ -212,7 +213,8 @@ export function applyWater(args, heightAt) {
   // water drew at all. The colour stays a vec3, as upstream's always was.
   const front = faceDirection.mul(0.5).add(0.5);
   mat.colorNode = mix(belowCol, aboveCol, front);
-  mat.opacityNode = mix(belowOpacity, aboveOpacity, front);
+  // no water across the mouth of a dry shaft or room that reaches up through the surface
+  mat.opacityNode = mix(belowOpacity, aboveOpacity, front).mul(float(1).sub(dryAt(positionWorld)));
 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.name = 'water';

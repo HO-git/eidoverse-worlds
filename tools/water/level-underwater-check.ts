@@ -85,6 +85,7 @@ try {
       // looking up at 50°: Snell's window (inside ~41.4° elevation and up) fills the top of the frame, the
       // darker water outside it the bottom
       const camY = surf - Math.min(1.2, best.depth * 0.5);
+      out.dayAtUp = (await import('/lib/core.js')).sun.intensity;
       out.up = await frame([best.x, camY, best.z], [best.x + 10, camY + 10 * Math.tan(50 * Math.PI / 180), best.z]);
       out.backend = renderer.backend?.isWebGLBackend ? 'webgl' : 'webgpu';
       // the full sky's weather system wets every material: vec4(colorNode) → rgb × k, alpha kept. The sheet's colour
@@ -99,6 +100,11 @@ try {
       st0.foldLive({ seq: ++s0, ts: Date.now(), actor: 'test', verb: 'spawn', args: { id: 'shaft', lib: 'x.glb', pos: [best.x, camY - 1, best.z] } });
       st0.foldLive({ seq: ++s0, ts: Date.now(), actor: 'test', verb: 'comp', args: { id: 'shaft', type: 'air', data: { boxes: [{ center: [0, 6, 0], size: [3, 14, 3] }] } } });
       wv.updateWater(); wv.updateWaterView(); out.inShaft = wv.waterDebug();
+      // per direction from inside the shaft: straight up leaves it above the surface (sky), sideways into water
+      const lum = async (look: number[]) => { const f = await frame([best.x, camY, best.z], look); const img = new Image(); img.src = f.url; await img.decode();
+        const cv = new OffscreenCanvas(img.width, img.height), g = cv.getContext('2d')!; g.drawImage(img, 0, 0);
+        const px = g.getImageData(img.width >> 1, img.height >> 2, 1, 1).data; return { rgb: [px[0], px[1], px[2]], sum: px[0] + px[1] + px[2] }; };
+      out.shaftUp = await lum([best.x + 0.01, camY + 20, best.z]); out.shaftSide = await lum([best.x + 20, camY, best.z]);
       st0.foldLive({ seq: ++s0, ts: Date.now(), actor: 'test', verb: 'remove', args: { id: 'shaft' } });
       wv.updateWater(); wv.updateWaterView(); out.afterShaft = wv.waterDebug();
       // four authored volumes AND the level: every one keeps a fog slot (the level has its own)
@@ -128,7 +134,7 @@ try {
       return { mean: m.map((v) => Math.round(v)), spread: Math.round(Math.sqrt(Math.max(0, q / n - lum * lum))), centre: Math.round(centre), corners: Math.round(corners), top: Math.round(top), bottom: Math.round(bottom) };
     })), [r.above.url, r.below.url, r.up.url]);
     if (shots) for (const [k, v] of Object.entries({ above: r.above.url, below: r.below.url, up: r.up.url })) writeFileSync(`${shots}/${backend}-${k}.png`, Buffer.from((v as string).split(',')[1], 'base64'));
-    console.log(backend, JSON.stringify({ ran: r.backend, spot: r.best, under: [r.above.under, r.below.under, r.up.under], stats, fourVolumes: r.fourVolumes, afterReset: r.afterReset }));
+    console.log(backend, JSON.stringify({ sunAtUp: r.dayAtUp, upStats: stats[2], ran: r.backend, spot: r.best, under: [r.above.under, r.below.under, r.up.under], stats, fourVolumes: r.fourVolumes, afterReset: r.afterReset }));
     if (process.env.LVL_DEBUG) console.log(JSON.stringify(r.debug, null, 1));
     assert.equal(r.backend, backend, `asked for ${backend}, the renderer ran ${r.backend}`);
     assert.equal(r.above.under, false, 'above the surface is not underwater');
@@ -137,7 +143,8 @@ try {
     assert.ok(stats[1].spread < stats[0].spread * 0.5, 'under water the view is fogged (well under half the contrast above)');
     assert.ok(stats[2].top > stats[2].bottom * 1.3, `looking up, Snell's window (top) is brighter than the water outside it (bottom): ${stats[2].top} vs ${stats[2].bottom}`);
     assert.equal(r.backUnder, true, 'the checks below run under the surface');
-    assert.deepEqual([r.inShaft.under, r.inShaft.background, r.inShaft.enabled], [true, false, true], 'in a dry shaft below the level: fog on, no far-water background');
+    assert.ok(r.inShaft.under && r.inShaft.enabled && r.inShaft.dryPocket >= 0, 'in a dry shaft below the level: fog on, the pocket found');
+    assert.ok(r.shaftUp.sum > r.shaftSide.sum * 1.25, `up the shaft is sky, sideways is water (${JSON.stringify(r.shaftUp)} vs ${JSON.stringify(r.shaftSide)})`);
     assert.deepEqual([r.afterShaft.under, r.afterShaft.background], [true, true], 'out of the shaft, under the water again');
     assert.equal(r.fourVolumes.waters, 4); assert.equal(r.fourVolumes.slots, 5, 'four volumes and the level: five fog slots');
     assert.equal(r.fourVolumes.under, true, 'the four-volume check runs under the level');

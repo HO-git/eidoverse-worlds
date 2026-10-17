@@ -561,6 +561,10 @@ function levelDiveWater(me) {
     // only from a swim (deep enough to float), and only when asked: C / Ctrl, or a headset heading down
     const wantDive = levelDiveKeys() || (xrIntent.active && xrIntent.fwd * Math.sin(xrIntent.pitchDown) > .3);
     if (!wantDive || !(w.depth > 1.3 * stature)) return null;
+    // only from IN the water (review #254): falling over a lake with C held must not start a swim in mid-air —
+    // the body is at least half under the surface (afloat sits 1.1·stature under it)
+    const top = wl + surfaceOffset(w, myState.pos.x, myState.pos.z, waveTime());
+    if (!(myState.pos.y < top - 0.6 * stature)) return null;
     levelDiving = true; swimVelocity = [0, -0.6, 0];
   }
   return { level: true, top: wl + surfaceOffset(w, myState.pos.x, myState.pos.z, waveTime()), waves: [],

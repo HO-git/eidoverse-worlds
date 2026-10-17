@@ -31,10 +31,14 @@ try {
     const { applyTerrainState } = await import('/lib/world.js'), lw = await import('/lib/water.js'), c = await import('/lib/controller.js');
     applyTerrainState({ seed: 7, size: 120, amplitude: 0, features: [{ type: 'hill', x: 0, z: 30, radius: 18, height: -8 }], water: { level: 0 } });
     for (let i = 0; i < 300 && lw.waterLevel() !== 0; i++) await sleep(50);
-    // afloat at the lake's centre
+    // falling over the lake with C held, before the body has ever floated: no swim starts in mid-air (review #254)
+    c.myState.pos.set(0, 8, 30); c.keys.add('KeyC'); await sleep(200);
+    const fallingWithC = { diving: c.isLevelDiving(), y: +c.myState.pos.y.toFixed(2) }; c.keys.delete('KeyC'); await sleep(2500);
+    // afloat at the lake's centre (after the fall's dunk has bobbed back up: the float owns the body meanwhile)
+    for (let i = 0; i < 160 && Math.abs(c.myState.pos.y + 1.1) > 0.25; i++) await sleep(50);
     c.myState.pos.set(0, -1.1, 30); await sleep(1500);
     const y = () => +c.myState.pos.y.toFixed(2);
-    const out: any = { floating: { y: y(), diving: c.isLevelDiving() } };
+    const out: any = { fallingWithC, floating: { y: y(), diving: c.isLevelDiving() } };
     // the clip while afloat must hold steady (tread idle, swim moving) — not flip frame to frame
     const clips = async (ms: number) => { const seen: string[] = []; const t0 = performance.now();
       while (performance.now() - t0 < ms) { seen.push(c.myState.clip); await new Promise((r) => requestAnimationFrame(() => r(null))); }
@@ -50,6 +54,7 @@ try {
   }, !!engine);
   console.log(JSON.stringify(r));
   assert.equal(r.floating.diving, false, 'afloat at the surface is not diving');
+  assert.equal(r.fallingWithC.diving, false, 'falling over the water with C held does not start a swim in the air');
   assert.equal(r.diving.diving, true, 'holding C in deep level water dives');
   assert.ok(r.diving.y < r.floating.y - 1, `the body goes down while diving (${r.floating.y} → ${r.diving.y})`);
   assert.equal(r.diving.medium, 'water');

@@ -15,12 +15,14 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { VERB_RATE, OPT_DIR } from "./config.ts";
 import { isAdminId, rightsOf, worldHasOwner, VERB_NEEDS, lockRefusal, guardRefusal, captionDeedRefusal } from "./rights.ts";
+import { settleAccess, resolveName, principalOf, canEnter, whoOf, SUB_RE, type AccessWorld, type Expel } from "./access.ts";
+import { entryRestrictedIn } from "../shared/rightsfold.js";
 import { normalizeCaptionArgs, captionRefusal } from "../shared/captions.js";
 import { lintMotion, lintParticles } from "./lint.ts";
 import { reactToUse } from "./reactions.ts";
 import { behaviorLimits } from "./behaviors.ts";
 import { lightArgsError } from "./verb-shapes.ts";
-import { ROLE_RANK, type LogEntry, type WorldState } from "../shared/fold.js";
+import { ROLE_RANK, foldEntry, type LogEntry, type WorldState } from "../shared/fold.js";
 import { SIM_ID } from "../shared/sim.js";
 import { boxOf, worldLibs } from "./boxes.ts";
 
@@ -66,7 +68,7 @@ export type VerbCtx = {
   w: VerbWorld;
   c: VerbClient;
   now: number;
-  expel(w: VerbWorld, target: VerbClient, why: string): void;
+  expel(w: VerbWorld, target: VerbClient, why: string, code?: number): void;
 };
 
 // ---- the table -------------------------------------------------------------
@@ -95,10 +97,25 @@ export type VerbRow = {
 
 // ---- validators (moved verbatim from server.ts's case "verb") --------------
 
+// A grant's end, as typed: "30m", "2h", "1d", "1w" (also "90 min", "3 days").
+const DURATION_RE = /^(\d{1,4})\s*(m|mins?|minutes?|h|hrs?|hours?|d|days?|w|weeks?)$/i;
+const DURATION_UNIT: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
+/** The longest a timed grant may run — beyond a year, say "no end" instead. */
+const MAX_GRANT_MS = 366 * 86_400_000;
+export function parseGrantDuration(s: string): number | null {
+  const m = DURATION_RE.exec(s.trim());
+  if (!m) return null;
+  const ms = Number(m[1]) * DURATION_UNIT[m[2]!.toLowerCase()[0]!]!;
+  return ms > 0 && ms <= MAX_GRANT_MS ? ms : null;
+}
+
 function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
   const { w } = ctx;
-  // shape-check before it becomes history: {id, role?, gen?, fly?}
-  const id = String(args.id ?? "").slice(0, 64);
+  const now = Date.now();
+  // shape-check before it becomes history: {id, role?, gen?, fly?, until?|for?, revoke?}
+  // A durable subject string may be longer than a display name.
+  const rawId = String(args.id ?? "");
+  let id = rawId.slice(0, SUB_RE.test(rawId) ? 128 : 64);
   const role = args.role != null ? String(args.role) : undefined;
   const gen = args.gen != null ? Boolean(args.gen) : undefined;
   // The flight capability, orthogonal to the ladder exactly like gen, and
@@ -118,28 +135,125 @@ function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
     if (!target || !ent) return { error: `grant caption wants the id of an entity that exists here (got ${JSON.stringify(args.caption)})` };
     caption = { id: target, ...(ent.born != null ? { born: ent.born } : {}) };
   }
-  if (!id || (role == null && gen == null && fly == null && caption === undefined) || (role != null && ROLE_RANK[role] == null)) {
-    return { error: "grant wants {id, role: owner|builder|visitor} and/or {gen: true|false} and/or {fly: true|false} and/or {caption: \"<entityId>\"|null}" };
+  // TIME: `for: "2h"` (a duration, resolved HERE to an absolute instant so
+  // the log is deterministic), or `until: <epoch ms>`, or `until: null` to
+  // clear an end. Absent keeps whatever end the record had.
+  let until: number | null | undefined;
+  if (args.for != null && args.until !== undefined) return { error: "grant takes for (a duration) or until (an instant), not both" };
+  if (args.for != null) {
+    const ms = parseGrantDuration(String(args.for));
+    if (ms == null) return { error: `grant for wants a duration like "30m", "2h", "1d" or "1w", up to a year (got ${JSON.stringify(args.for)})` };
+    until = now + ms;
+  } else if (args.until === null) until = null;
+  else if (args.until !== undefined) {
+    const n = Number(args.until);
+    if (!Number.isFinite(n) || n <= now) return { error: "grant until wants a moment in the future, in epoch milliseconds" };
+    if (n - now > MAX_GRANT_MS) return { error: "grant until is more than a year away — leave the end off instead" };
+    until = Math.round(n);
   }
-  if (id === "*" && caption) return { error: "the caption deed is granted to one captioner, not to everyone" };
-  if (id === "*" && role === "owner") {
-    return { error: "everyone cannot own a world" };
+  // REVOKE: the record goes; its holder falls back to the world's default.
+  const revoke = args.revoke === true;
+  if (revoke && (role != null || gen != null || fly != null || caption !== undefined || until !== undefined)) {
+    return { error: "revoke stands alone: grant {id, revoke: true}" };
   }
-  // resolve-at-grant: if the subject is PRESENT with a durable sub,
-  // bind the grant to it — authority follows the person, not the nick
-  const subject = [...w.clients].find((o) => o.id === id && o.sub);
+  if (!id || (!revoke && role == null && gen == null && fly == null && caption === undefined && until === undefined) || (role != null && ROLE_RANK[role] == null)) {
+    return { error: "grant wants {id, role: owner|builder|visitor|spectator|none} and/or {gen: true|false} and/or {fly: true|false} and/or {caption: \"<entityId>\"|null}, optionally {for: \"2h\"} or {until: <ms>|null}; or {id, revoke: true}" };
+  }
+  const roles = (w.state.roles ?? {}) as Record<string, { role?: string; sub?: string; until?: number } | undefined>;
+  if (id === "*") {
+    if (caption) return { error: "the caption deed is granted to one captioner, not to everyone" };
+    if (role === "owner") {
+      return { error: "everyone cannot own a world" };
+    }
+    if (until != null) return { error: "the wildcard can't expire — a closed world would quietly open when it did; give individuals a time instead" };
+    if (role != null && ROLE_RANK[role]! < ROLE_RANK.visitor && !worldHasOwner(w.state)) {
+      return { error: "a world with no owner is open to everyone — it needs an owner before it can be closed" };
+    }
+  }
+  // WHO: the durable subject this grant is about.
+  //   · A record already filed under this exact name KNOWS its person: its
+  //     own sub, whatever any directory says (review: a directory lookup
+  //     here once returned a different person's sub, and the fold — which
+  //     touches every record carrying the sub — deleted THEIR record, an
+  //     owner's included). A name-keyed record (no sub) is bound to the
+  //     person standing here under that name, if one is: authority follows
+  //     the person, not the nick.
+  //   · No record under the name: the person present, else a subject string
+  //     typed directly, else the directory of identities this instance has
+  //     seen (one match binds; several are refused; none stays by name).
+  let sub: string | undefined;
+  const rec = id !== "*" ? roles[id] : undefined;
+  const present = id !== "*" ? [...w.clients].find((o) => o.id === id && o.sub) : undefined;
+  if (id === "*") sub = undefined;
+  else if (rec) {
+    // …unless someone ELSE stands here under that name: the owner may mean
+    // the person in front of them or the one the record names, so neither
+    // is guessed — refused, and the refusal says whose record it is.
+    if (rec.sub && present?.sub && present.sub !== rec.sub) {
+      return { error: `"${id}" already carries a grant bound to another subject (${rec.sub}) — revoke or move that record before granting ${id} anew` };
+    }
+    sub = rec.sub ?? present?.sub;
+  }
+  else if (present?.sub) sub = present.sub;
+  else if (SUB_RE.test(id)) {
+    sub = id;
+    const p = principalOf(id);
+    if (p) id = p.name.slice(0, 64);
+  } else {
+    const known = resolveName(id);
+    if (known.length === 1) sub = known[0]!.sub;
+    else if (known.length > 1) {
+      return { error: `more than one "${id}" has been here (${known.map((k) => k.sub).join(", ")}) — grant by subject instead: grant {id: "<subject>", …}` };
+    }
+  }
   // …and never over another subject's record: the fold would relabel that
   // principal's authority as this one's, so it fails closed there and the
   // door says why here (shared/fold.js grant)
-  if (subject?.sub) {
-    const occupant = (w.state.roles as Record<string, { sub?: string } | undefined> | undefined)?.[id];
-    if (occupant?.sub && occupant.sub !== subject.sub) {
+  if (sub && !revoke) {
+    const occupant = roles[id];
+    if (occupant?.sub && occupant.sub !== sub) {
       return { error: `"${id}" already carries a grant bound to another subject (${occupant.sub}) — revoke or move that record before granting ${id} anew` };
     }
   }
-  return { args: { id, ...(role != null ? { role } : {}), ...(gen != null ? { gen } : {}),
-    ...(fly != null ? { fly } : {}), ...(caption !== undefined ? { caption } : {}),
-    ...(subject?.sub ? { sub: subject.sub } : {}) } };
+  // The record this grant touches: filed under the name, or (for a subject
+  // found by the directory) under an older name of the same subject.
+  const key = roles[id] ? id : sub ? Object.keys(roles).find((k) => roles[k]?.sub === sub) : undefined;
+  const target = key ? roles[key] : undefined;
+  if (until != null && (role === "owner" || (role == null && target?.role === "owner"))) {
+    return { error: "ownership doesn't expire — grant builder for a time, or revoke ownership later" };
+  }
+  if (revoke && !target) {
+    return { error: `"${id}" has no grant here to revoke — they already have this world's default` };
+  }
+  const out: Record<string, unknown> = revoke
+    ? { id: key ?? id, revoke: true, ...(target?.sub ? { sub: target.sub } : {}) }
+    : { id, ...(role != null ? { role } : {}), ...(gen != null ? { gen } : {}),
+        ...(fly != null ? { fly } : {}), ...(caption !== undefined ? { caption } : {}),
+        ...(sub ? { sub } : {}), ...(until !== undefined ? { until } : {}) };
+  // THE RESULT, CHECKED: fold this grant into a copy and look at the world it
+  // would leave. Checking only the one record named let a grant whose sub
+  // merged away another record slip past (review), so the guards read the
+  // outcome, not the request.
+  const before = w.state as unknown as Record<string, unknown>;
+  const after = { ...before, roles: structuredClone(w.state.roles ?? {}) } as unknown as WorldState;
+  foldEntry(after, { seq: -1, ts: now, actor: ctx.c.id, verb: "grant", args: out } as LogEntry);
+  const starAfter = ROLE_RANK[String((after.roles as Record<string, { role?: string }>)?.["*"]?.role ?? "builder")] ?? 0;
+  const closed = entryRestrictedIn(before as any) || starAfter < ROLE_RANK.visitor;
+  //  · a closed world keeps an owner — with none it would read as ownerless,
+  //    and an ownerless world is open to everyone
+  if (closed && worldHasOwner(w.state) && !worldHasOwner(after)) {
+    return { error: `that would leave "${w.name}" with no owner while it's closed to others — and a world with no owner is open to everyone; grant another owner first, or open the world` };
+  }
+  //  · nobody shuts themselves out by accident (an operator cannot be shut out)
+  const me = whoOf(ctx.c as unknown as { id: string; sub?: string; nameReserved?: boolean });
+  if (!isAdminId(me.id, me.sub) && !canEnter({ name: w.name, state: after }, me, "embody", now).ok) {
+    const mine = roles[ctx.c.id];
+    const hint = !me.sub && !me.nameReserved
+      ? " — sign in first: a typed name can't hold a closed world's door"
+      : mine && !mine.sub ? ` — your own grant here is filed by name only; grant {id: "${ctx.c.id}", role: "owner"} first binds it to you` : "";
+    return { error: `that would shut you out of "${w.name}"${hint}` };
+  }
+  return { args: out };
 }
 
 /** After a grant folds, send each present participant the server's effective
@@ -148,14 +262,34 @@ function vGrant(ctx: VerbCtx, args: Record<string, unknown>) {
  * cannot represent. The log entry remains the durable cause; this is its
  * personalized live projection. */
 function afterGrant(ctx: VerbCtx, entry: LogEntry) {
-  const { w } = ctx;
-  for (const other of w.clients) {
-    const rights = { ...rightsOf(w.state, other.id, other.sub), open: !worldHasOwner(w.state) };
-    try {
-      other.ws.send(JSON.stringify({ type: "your-rights", rights, causeSeq: entry.seq }));
-    } catch (err) {
-      w.debug("rights-delivery-error", { who: other.id, seq: entry.seq, error: String(err) });
+  // …and the same pass removes whoever may no longer be here (a world just
+  // closed, a member revoked). One implementation with the expiry sweep:
+  // access.ts settleAccess.
+  settleAccess(ctx.w as unknown as AccessWorld, ctx.expel as unknown as Expel, Date.now(),
+    { seq: entry.seq, by: `by ${ctx.c.id}` });
+  // Tell the GRANTER what the grant actually did — whom it bound to. A name
+  // is not a person, and an owner granting "bob" deserves to see which bob
+  // (review: otherwise a squatted display name is bound silently).
+  const a = entry.args as { id?: string; sub?: string; role?: string; revoke?: boolean };
+  const w = ctx.w;
+  const lines: string[] = [];
+  const closed = entryRestrictedIn(w.state as any);
+  if (a.id && a.id !== "*" && a.revoke) {
+    lines.push(`revoked ${a.id}'s grant${a.sub ? ` (${a.sub})` : " (filed by name)"} — they now have this world's default`);
+  } else if (a.id && a.id !== "*") {
+    if (a.sub) {
+      const p = principalOf(a.sub);
+      lines.push(`${a.id}'s grant is bound to ${a.sub}${p ? ` (${p.kind}, last here as "${p.name}")` : ""}`);
+    } else if (closed) {
+      lines.push(`${a.id} is listed by name only: that lets in an agent called ${a.id}, but not a person — nobody called ${a.id} has signed in here yet. Once they have, revoke and grant again (it then binds to them), or grant by their subject`);
     }
+  }
+  if (a.id === "*" && closed) {
+    const byName = Object.entries(w.state.roles ?? {}).filter(([k, r]) => k !== "*" && r && !r.sub).map(([k]) => k);
+    if (byName.length) lines.push(`listed by name only, so these get in only if they're agents with that name: ${byName.join(", ")} — for a person, revoke and grant again once they've signed in, or grant by subject`);
+  }
+  if (lines.length) {
+    try { ctx.c.ws.send(JSON.stringify({ type: "mod", text: lines.join("\n") })); } catch { /* the grant stands regardless */ }
   }
 }
 

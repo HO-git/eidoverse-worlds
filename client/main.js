@@ -1,6 +1,6 @@
 import { setTraversalObjects } from './lib/traversal.js';
 import { updateVehicle, piloting } from './lib/vehicles.js';
-import { updateWater, setWaterObjects, setWaterClock, environmentSettings, waterDebug } from './lib/watervolumes.js';
+import { updateWater, setWaterObjects, setWaterClock, environmentSettings, waterDebug, applyEnvLight } from './lib/watervolumes.js';
 // eidoverse-worlds browser client.
 //
 // Two planes: the world log (verbs, ordered, replayed on join) and presence
@@ -563,7 +563,7 @@ const readyPoll = setInterval(() => {
 
 registerSystem('autos', (dt, t) => updateAutoSystems(t));       // grass wind, particles
 registerSystem('motion', () => tickMotion());                   // the world's moving parts
-registerSystem('sky', (dt, t, now) => updateSky(now, t));
+registerSystem('sky', (dt, t, now) => { updateSky(now, t); applyEnvLight(); });   // an authored environment's sun wins, before the rig fits shadows
 registerSystem('materials', (dt, t, now) => updateMaterials(now)); // weather → uniforms
 registerSystem('rig', (dt, t, now) => updateRig(now));          // light slots follow requests
 registerSystem('sounds', () => tickSounds(), { every: 2 });      // panners follow entities, the listener the camera

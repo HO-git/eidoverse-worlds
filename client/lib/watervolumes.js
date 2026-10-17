@@ -98,14 +98,15 @@ function updateEnvironmentSky(settings) {
   skyDome.userData.skyExempt=true;skyDome.userData.noWet=true;skyDome.userData.noCloudShadow=true;skyDome.renderOrder=-100;
   scene.add(skyDome);
   // The environment owns the sun and ambient while it is authored: the world sky (sky.js) rewrites them every
-  // frame, and this module's update runs after it, so applyEnvLight re-asserts them each frame.
+  // frame, so main.js's sky system calls applyEnvLight right after it — before materials and the shadow rig
+  // read sun.position, so the shadow camera is fitted to the direction that actually renders.
   envLight={color:new THREE.Color(sky.sunColor??'#fff4df'),intensity:Number.isFinite(sky.sunIntensity)?Math.max(0,sky.sunIntensity):3,
     position:new THREE.Vector3().fromArray(vector(sky.sunDirection,[.4,.8,.2])).normalize().multiplyScalar(60),   // a direction at the sky's 60 m (shadow fit, lightrig.js)
     ambient:Number.isFinite(sky.ambient)?Math.max(0,sky.ambient):1.5};
   applyEnvLight();
 }
 let envLight=null;
-function applyEnvLight(){if(!envLight)return;sun.color.copy(envLight.color);sun.intensity=envLight.intensity;sun.position.copy(envLight.position);hemi.intensity=envLight.ambient;}
+export function applyEnvLight(){if(!envLight)return;sun.color.copy(envLight.color);sun.intensity=envLight.intensity;sun.position.copy(envLight.position);hemi.intensity=envLight.ambient;}
 const _p = new THREE.Vector3(), _q = new THREE.Quaternion();
 const entries = () => Object.entries(state.st.entities).sort(([a],[b])=>a.localeCompare(b));
 export function environmentSettings() {
@@ -189,7 +190,6 @@ export function updateWater() {
   if(waters.length&&!installed){previousFog=scene.fogNode;scene.fogNode=fogNode;installed=true;}
   if(!waters.length&&installed){scene.fogNode=previousFog;installed=false;}
   if(rebuild){const env=environmentSettings();setEnvironmentFloor(Number.isFinite(env?.floor)?env.floor:null);updateEnvironmentSky(env);makeParticles(env?.particles);}
-  applyEnvLight();
   if(skyDome)skyDome.position.copy(camera.position);
 }
 // Rebuild surfaces/particles/sky only when water or environment data can have changed: a reset, a water or

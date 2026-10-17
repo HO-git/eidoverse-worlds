@@ -139,17 +139,19 @@ let trimmedThrough = -1;            // highest seq the MAX_LINES trim has remove
 const MAX_SKIP_PAGES = 25;          // pages of already-shown lines walked per scroll
 
 /** Keep the log to MAX_LINES rows, dropping from the top. A trimmed row is
- *  history again, not "already shown": its seq leaves renderedSeqs so paging
- *  brings it back, and if the backward walk had already passed it, the walk
- *  starts over from the present (skipping what is still on screen) instead of
- *  stepping over the new hole. */
+ *  history again, not "already shown": every seq it shows leaves renderedSeqs
+ *  so paging brings it back, and if the backward walk had already passed it,
+ *  the walk starts over from the present (skipping what is still on screen)
+ *  instead of stepping over the new hole. A walk that ended at the present,
+ *  its first page empty, has passed everything. */
 function trimLog() {
   while (logEl.children.length > MAX_LINES) {
     const row = logEl.firstElementChild;
     for (const seq of seqsOf(row)) {
       renderedSeqs.delete(seq);
       if (seq > trimmedThrough) trimmedThrough = seq;
-      if (pageCursor !== null && seq >= pageCursor) { pageCursor = null; noMoreHistory = false; }
+      const passed = pageCursor === null ? noMoreHistory : seq >= pageCursor;
+      if (passed) { pageCursor = null; noMoreHistory = false; }
     }
     row.remove();
   }
@@ -221,11 +223,13 @@ function insertPage(entries) {
 }
 
 /** A reconnect hands over a NEW arrival window, trimmed the same fair way —
- *  so what was said while the socket was down can be missing from it, and it
- *  is newer than anything the backward walk will ever page. net.js calls this
- *  as a re-join's snapshot lands, with the last seq the old socket delivered;
- *  everything said after it is fetched and slotted in. A first join (nothing
- *  on screen yet) has no hole to fill. */
+ *  so what was said while the socket was down can be missing from it, near
+ *  the bottom of the log, where a backward walk would reach it last. net.js
+ *  calls this as a re-join's snapshot lands, with the last seq the old socket
+ *  delivered; what was said after it is fetched, newest first, up to
+ *  MAX_SKIP_PAGES pages of 40, and slotted in. Anything older than that comes
+ *  back by scrolling up. A first join (nothing on screen yet) has no hole to
+ *  fill. */
 export async function resyncChatAfter(seq) {
   if (!logEl || !renderedSeqs.size || typeof seq !== 'number' || seq < 0) return;
   let before = null;
@@ -285,7 +289,6 @@ async function loadOlder() {
         if (entries.length) pageCursor = typeof r.oldestSeq === 'number' ? r.oldestSeq : entries[0].seq;
         if (!entries.length || !r.hasMore) noMoreHistory = true;
       }
-      if (!entries.length) continue;
       marker.remove();               // out before pinView measures, or it could be the anchor
       added = insertPage(entries);
       if (!added && !noMoreHistory) logEl.prepend(marker);

@@ -16,7 +16,9 @@
 // (its second review) a row that merged a spoken utterance's says gives every
 // one of them back when it's trimmed, and a page that lands after a trim has
 // restarted the walk neither moves the cursor past the new hole nor ends the
-// walk.
+// walk. And (its third) a trim of a merged row that the walk's cursor sits
+// inside restarts the walk, and a walk that ended at the present opens again
+// once a trim makes history.
 //
 // Each scenario gets a FRESH chat.js (cache-busted specifier): the paging
 // cursor is module state, and one scenario's walk must not leak into another.
@@ -340,24 +342,84 @@ const voices = ["cairn", "mythos", "apricot"];
 
 console.log("a row that merged a spoken utterance gives back all of it when trimmed");
 {
-  // one utterance aired as two says, #501 and #502 under the same utt, which
-  // logChat merges into one row. 403 later says trim that row off the top,
-  // and both of its says are history again.
+  // one utterance aired as three says, #501–#503 under the same utt, which
+  // logChat merges into one row, and an aside with no seq merges after them.
+  // 400 later says trim that row, and only it, off the top: all three of its
+  // says are history again, and a live replay of the last one isn't appended
+  // under the newer talk.
   const { logChat, logEl } = await freshChat();
   const t0 = Date.now() - 1_000_000;
-  const log = Array.from({ length: 905 }, (_, i) => say(i + 1, i + 1 === 501 || i + 1 === 502 ? "ava" : voices[(i + 1) % 3], t0 + (i + 1) * 1000));
+  const ava = (s: number) => s >= 501 && s <= 503;
+  const log = Array.from({ length: 903 }, (_, i) => say(i + 1, ava(i + 1) ? "ava" : voices[(i + 1) % 3], t0 + (i + 1) * 1000));
   setLog(log);
-  for (const s of [501, 502]) logChat("ava", `#${s}`, "agent", { seq: s, ts: log[s - 1].ts, spoken: true, utt: 7 });
-  check("precondition: the two says share one row",
-    rowsOf(logEl).length === 1 && shownIn(logEl)[0] === "#501 #502", shownIn(logEl).join(" | "));
-  for (const e of log.slice(502)) logChat(e.actor, e.args.text, "", { seq: e.seq, ts: e.ts });
-  check("precondition: the merged row was trimmed off the top",
-    !shownIn(logEl).some((t) => t.includes("#501")) && rowsOf(logEl).length === 400, shownIn(logEl)[0]);
+  for (const s of [501, 502, 503]) logChat("ava", `#${s}`, "agent", { seq: s, ts: log[s - 1].ts, spoken: true, utt: 7 });
+  logChat("ava", "(aside)", "agent", { spoken: true, utt: 7 });
+  check("precondition: the three says and the aside share one row",
+    rowsOf(logEl).length === 1 && shownIn(logEl)[0] === "#501 #502 #503 (aside)", shownIn(logEl).join(" | "));
+  check("the row keeps the three says' seqs, and the seq-less aside adds none",
+    rowsOf(logEl)[0].dataset.seqs === "501,502,503", String(rowsOf(logEl)[0].dataset.seqs));
+  for (const e of log.slice(503)) logChat(e.actor, e.args.text, "", { seq: e.seq, ts: e.ts });
+  check("precondition: the merged row, and only it, was trimmed off the top",
+    shownIn(logEl)[0] === "#504" && rowsOf(logEl).length === 400, `${shownIn(logEl)[0]}, ${rowsOf(logEl).length} rows`);
+  logChat("ava", "#503", "agent", { seq: 503, ts: log[502].ts, spoken: true, utt: 7 });
+  check("a live replay of the row's last say isn't appended under the newer talk",
+    shownIn(logEl).at(-1) === "#903" && rowsOf(logEl).length === 400, `${shownIn(logEl).at(-1)}, ${rowsOf(logEl).length} rows`);
   await scrollUp(logEl);
   const back = shownIn(logEl);
-  check("paging brings back both of the trimmed row's says", back.includes("#501") && back.includes("#502"),
+  check("paging brings back all three of the trimmed row's says", ["#501", "#502", "#503"].every((s) => back.includes(s)),
     back.slice(0, 8).join(" "));
   check("…in world order", isSorted(back), back.slice(0, 8).join(" "));
+}
+
+console.log("a trim of a merged row that the walk's cursor sits inside restarts the walk");
+{
+  // #500 and #501 are one utterance, merged into one row at the top of the
+  // log, and #502–#506 are missing below it. One scroll-up walks down from the
+  // present to the page that ends at #501 and slots #502–#506 in, so the
+  // walk's cursor is #501, inside the merged row. A live line then trims that
+  // row alone. #501 is at the cursor, a seq the walk has passed, so the walk
+  // starts over, or #501 would never be paged back.
+  const { logChat, logEl } = await freshChat();
+  const t0 = Date.now() - 1_000_000;
+  const log = Array.from({ length: 901 }, (_, i) => say(i + 1, i + 1 === 500 || i + 1 === 501 ? "ava" : voices[(i + 1) % 3], t0 + (i + 1) * 1000));
+  setLog(log.slice(0, 900));
+  for (const s of [500, 501]) logChat("ava", `#${s}`, "agent", { seq: s, ts: log[s - 1].ts, spoken: true, utt: 9 });
+  for (const e of log.slice(506, 900)) logChat(e.actor, e.args.text, "", { seq: e.seq, ts: e.ts });
+  await scrollUp(logEl);
+  check("precondition: one scroll-up slotted #502–#506 in below the merged row",
+    shownIn(logEl)[0] === "#500 #501" && shownIn(logEl)[1] === "#502" && rowsOf(logEl).length === 400,
+    `${shownIn(logEl).slice(0, 3).join(" | ")}, ${rowsOf(logEl).length} rows`);
+  setLog(log);
+  logChat(log[900].actor, "#901", "", { seq: 901, ts: log[900].ts });
+  check("precondition: the live line trimmed the merged row alone",
+    shownIn(logEl)[0] === "#502" && rowsOf(logEl).length === 400, `${shownIn(logEl)[0]}, ${rowsOf(logEl).length} rows`);
+  await scrollToTop(logEl);
+  const final = shownIn(logEl);
+  check("scrolling up brings both of its says back: every say once, in order",
+    final.length === 901 && isSorted(final) && final.includes("#500") && final.includes("#501"),
+    `${final.length}, first ${final.slice(0, 3).join(" ")}`);
+}
+
+console.log("a walk that ended at the present opens again once a trim makes history");
+{
+  // the reader scrolls up before anyone has said anything, so the walk's
+  // first page is empty and it ends at the present. 401 says later, a live
+  // line has trimmed #1 off the top: that is history now, and scrolling up
+  // must bring it back.
+  const { logChat, logEl } = await freshChat();
+  const t0 = Date.now() - 500_000;
+  const log = Array.from({ length: 401 }, (_, i) => say(i + 1, voices[(i + 1) % 3], t0 + (i + 1) * 1000));
+  setLog([]);
+  await scrollUp(logEl);
+  check("precondition: the empty world's first page ended the walk", logEl.textContent!.includes("beginning of this world"));
+  setLog(log);
+  for (const e of log) logChat(e.actor, e.args.text, "", { seq: e.seq, ts: e.ts });
+  check("precondition: the trim took #1 off the top", shownIn(logEl)[0] === "#2" && rowsOf(logEl).length === 400,
+    `${shownIn(logEl)[0]}, ${rowsOf(logEl).length} rows`);
+  await scrollUp(logEl);
+  const shown = shownIn(logEl);
+  check("scrolling up brings #1 back: every say once, in order",
+    shown[0] === "#1" && shown.length === 401 && isSorted(shown), `${shown[0]}, ${shown.length}`);
 }
 
 console.log("a trim while a page is in flight does not send the walk past the new hole");

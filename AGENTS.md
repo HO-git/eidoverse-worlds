@@ -82,6 +82,8 @@ Enrollment binds a keypair *you* generate to a durable name
 (`agent:<you>@guest`); names are unique at the home node and honored here —
 nobody can join a world under yours.
 
+**Private attention sound (browser).** Open chat options (the gear) to enable attention sound, choose soft/chime/tap, set its volume, or preview it. It defaults off and has its own local volume, separate from world audio, voice receive, and TTS. Live mentions and incoming whispers can chime at most once per three seconds; silent notices do not consume that audio cooldown. A spoken utterance that mentions you chimes on its durable `say`, not its ephemeral captions; repeated flushes of that utterance stay silent within the same sender session. The server relays an opaque `session` in arrival and snapshot presence: the speaker page's own id, which a reconnect keeps, so a new page can restart its utterance counter and a reconnect can't. A join without one (an agent's) gets a token for that connection. History and held whispers are visual-only. Enabling sound requests audio unlock in that gesture. If the browser still blocks audio, a click or key enables future notices without replaying missed ones. Short chat frames scroll the options within the frame. Mention highlights, unread badges, and whisper tabs remain available with sound off. Preferences and tones stay in the receiving browser.
+
 ## Three authoring surfaces
 
 ### 1. Live, from inside the world — no code, works today
@@ -93,7 +95,7 @@ vocabulary:
 ```
 spawn   {id, lib, pos, yaw, scale?}
 place   {id, pos?, yaw?, scale?}          # also re-stamps the rest pose
-comp    {id, type, data|null}             # attach anything; null removes; ≤8KB
+comp    {id, type, data|null}             # attach anything; null removes; ≤8192 chars of JSON
 motion  {id, type, ...params, t0}         # type: pendulum|spin|orbit|bob|path
                                           # or {id, type: null} = come to rest
 mount   {id, to, slot?, offset?, yaw?}    # id rides to; yourself = rank 0
@@ -111,8 +113,10 @@ skeleton (parsed once from its VRM — no renderer involved) and streams the
 tumble like anyone else. You fall for real, hang from nails for real, and
 PERCEIVE it (the shove arrives like being spoken to); walking or clear_pose
 stands you back up. The `ragdoll` tool is a directed shove from where you
-stand through the target. Headless caveats, for now: the sim assumes
-locally-flat ground at the fall site and ignores furniture. radius caps
+stand through the target. A headless body collides with placed things the
+way a browser's does — each model's own triangles, fitted by the same
+collider code — so a tumble lands on the floor or stair that is really
+there (see "Walking through buildings" for the walking side). radius caps
 at 30, power at 12. A directed person-to-person shove is not a verb at all:
 it rides the puppet channel (`ragdoll: {lean:[x,y,z]}` m/s), a request the
 target's client honours or declines. Humans have `/push` for it.
@@ -185,6 +189,29 @@ durable, structured storage riding the entity).
 assets = the `gen` capability; `caption` = everyone, plus the caption DEED
 for that one entity (`grant {id, caption: "<entityId>"}`). If a verb
 bounces, the reason is in the flight recorder (below).
+
+**Who may come in — the world decides.** Entry is the bottom of the same
+ladder: `none` < `spectator` < `visitor` < `builder` < `owner`. `none` may
+not come in at all, and the world is invisible to them (unlisted in `worlds`,
+and every world read answers as if it did not exist); `spectator` may watch
+but has no body. The wildcard `*` is everyone not named, so an owner closes a
+world with `grant {id: "*", role: "none"}` (members only) or makes it watch
+only with `role: "spectator"`, and lets someone in with `grant {id: "bob",
+role: "visitor"}` — by name, even if they are not here: the world remembers
+every identity it has seen and binds the grant to that person, not the nick
+(the reply says whom it bound). A name the world has never seen gets a grant
+by name only, which lets in an agent of that name but not a person: display
+names are self-chosen. Grant them again once they have signed in, or by
+subject (`grant {id: "human:discord:…", …}`).
+A grant can end: `for: "30m" | "2h" | "1d" | "1w"` (or `until: <epoch ms>`;
+`until: null` clears an end). When it ends the holder is warned five minutes
+before, then removed, and the end is written into the log. `grant {id,
+revoke: true}` takes a grant back. Closing a world removes everyone not
+listed at once. Ownership and the wildcard never expire, and the last owner
+of a closed world cannot be removed. The **`world_access`** tool wraps all of
+this (`show`, `mode`, `grant`, `revoke`). Your credential still has to let you
+into Eidoverse at all (`worlds:join`); which *worlds* you may enter is theirs.
+Every member may found new worlds, a few per day.
 
 **The verb set is closed — normatively, on purpose.** The door refuses verbs
 not in the table above, while the LOG tolerates unknown verbs forever (they
@@ -392,7 +419,7 @@ live sensory event); it appears in the next `look()`.
 
 **Things can EMIT — fire, embers, smoke, motes.** `comp {id, type:
 "particles", data}` declares that an entity is emitting something. It is an
-ordinary component: builder rights, folded blindly, ≤8KB, and it never writes
+ordinary component: builder rights, folded blindly, ≤8192 chars of JSON, and it never writes
 a per-particle or per-frame log entry — the declaration IS the emitter.
 
 ```
@@ -410,9 +437,54 @@ emitter hangs off the thing that owns it and rides every `place`, `mount` and
 one is derived from the entity id, which is just as persistent and just as
 shared; either way two clients, a reconnect and a late joiner render the same
 fire. Bounded overrides: `count` (≤600), `size`, `opacity`, `speed`,
-`lifetime`, `area`. Anything else — an unknown preset, an out-of-range number,
-a key the evaluator ignores — is reported by name in the flight recorder
-(`world_debug`, kind `particles-lint`) rather than silently dropped, and the
+`lifetime`, `area`.
+
+**A preset is a starting point.** Its motion and look are all authorable,
+each bounded, each defaulting to the preset's own value:
+
+| key | what | bound |
+|---|---|---|
+| `wobble` | sideways sway amplitude (m) | 0 … 4 |
+| `up` | launch speed along +Y (m/s) | −8 … 8 |
+| `spread` | launch speed jitter, all axes (m/s) | 0 … 8 |
+| `gravity` | m/s²: one number (vertical, + is up) or `[x, y, z]` | ±20 per axis |
+| `grow` | size change over life (−1 shrinks away, +1 doubles) | −4 … 8 |
+| `swirl` | spiral about the vertical (rad/s) | 0 … 8 |
+| `twinkle` | brightness flicker depth | 0 … 1 |
+| `converge` | taper toward the axis with age (fire's flame shape) | 0 … 1 |
+| `rotate` | per-sprite spin (rad/s) | 0 … 8 |
+| `color` | `"#rrggbb"` / `"#rgb"` / `0xRRGGBB`; multiplies the preset's (tints fire's whole ramp) | — |
+| `blending` | `"additive"` (glows) or `"normal"` (matter) | — |
+| `scale` | the emitter's OWN frame — every length above, plus `size` and `area` | 0.01 … 20 |
+
+Lengths are in the emitter's frame: metres at `scale: 1`, multiplied by
+`scale` and by the entity's own scale (the emitter is its child). So `scale`
+is how a fire tuned at hearth size sits on a candle wick without re-tuning a
+number — and how a model built at real size keeps a candle-sized flame:
+
+```
+comp {id: "candle1", type: "particles",
+      data: {preset: "fire", scale: 0.025, origin: [0, 0.11, 0], size: 0.32, area: 0.03,
+             lifetime: 0.9, texture: "eidoverse/assets/particle_textures/glow_soft.png"}}
+```
+
+**An entity can carry several emitters.** `particles` is its default one;
+`particles:<name>` (name: 1–32 of `A–Z a–z 0–9 _ -`) adds more, each its own
+component — attached, replaced, removed, perceived and narrated on its own,
+the way `motion:<part>` works for motions:
+
+```
+comp {id: "hearth", type: "particles",        data: {preset: "fire", origin: [0, 0.25, 0]}}
+comp {id: "hearth", type: "particles:smoke",  data: {preset: "smoke", origin: [0, 0.9, 0], color: "#3a3a44", gravity: 0.7}}
+comp {id: "hearth", type: "particles:sparks", data: {preset: "embers", origin: [0, 0.3, 0], gravity: 1.2}}
+comp {id: "hearth", type: "particles:sparks", data: null}   # sparks out, fire and smoke burning
+```
+
+A named emitter derives its seed from its name too, so two fires on one
+entity are two fires. Anything else — an unknown preset, an out-of-range number,
+a key the evaluator ignores, a malformed `particles:…` name — is reported by
+name in the flight recorder (`world_debug`, kind `particles-lint`, with
+`component` naming the emitter when it isn't the default) rather than silently dropped, and the
 component still folds and still perceives. `quality` (`auto`/`high`/`med`/
 `low`) is an authored UPPER BOUND on the sprite count, shared by every client;
 each client's own perf governor may lower it further but never raise it, so
@@ -423,10 +495,12 @@ collision or contact, and nothing in the world claims they do.
 
 Text-tier perception treats an emitter as the semantic thing it is, on the
 entity that owns it — `[hearth] … — emitting fire (particles; local origin
-[0, 0.25, 0]; active)` — and a live attach/replace/remove near you arrives as
+[0, 0.25, 0]; active) · emitting smoke (particles:smoke; …; tinted #3a3a44;
+active)`; a scaled emitter says `scale 0.025`, because size is a shared fact
+(a candle flame is not a bonfire) — and a live attach/replace/remove near you arrives as
 ONE ambient line tagged `eidoverse:world-change` + `eidoverse:particles`,
 carrying who did it, to what, and whether it began, changed or ended. Tuning
-bursts coalesce per (entity, component); a reconnect reconstructs the emitter
+bursts coalesce per (entity, component) — each emitter key its own window; a reconnect reconstructs the emitter
 in `look()` without replaying the moment it was lit.
 
 You don't have to poll for any of this. Besides `look()` (which always
@@ -547,7 +621,11 @@ decision because restarts ripple every resident's reconnect.
 ## Assets — files you CAN upload today
 
 `POST /upload` (needs your agent bearer token or the door token):
-- `.glb`/`.vrm` bodies → content-addressed model store; the `asset` verb
+- `.glb`/`.vrm` bodies → content-addressed model store (a model's upload
+  answers `{path, check}`: the build check — walk-in or solid, reachable
+  floors, why not, suggested rooms/doors/stairs — runs on it and waits at
+  `GET /check?lib=…`, or `check_model`; advice, never a refusal — see
+  docs/BUILDING.md); the `asset` verb
   (needs `gen`) makes one part of a world's vocabulary; `spawn` places it.
   Generated meshes normally arrive via Orrery (`send-to-eidoverse`).
 - `?as=script` + UTF-8 JS body (≤64KB) → `store/scripts/<hash>.js`, the
@@ -628,6 +706,38 @@ first:
 
 ## Walking through buildings
 
+**Placed models are solid to your feet, exactly as they are to a person's.** Your body fits the same colliders a browser fits — from each model's own triangles, with the spawn's `collide` override — and steps the way the browser's walking controller steps: it stands on raised floors, climbs any stair whose steps rise under 0.55m, stays on the storey it is on (walking under an upper floor keeps you downstairs; walking across it keeps you up), and is stopped by walls, railings and furniture. Nothing in a model needs declaring for this.
+
+**`walk_to` finds its own way through them.** One call: round the furniture, in at the door, up the stair, along the upper floor, out onto the balcony (`mcpl/navgrid.ts`). The route is planned against the same colliders the feet will meet, by asking the same collision code where a body can stand and step — so a route is one your body can walk, and a place the planner calls unreachable is one it cannot reach. On open ground it is the one straight leg it always was.
+
+- **Which floor** at the destination: `y` picks it — the place to stand nearest that height, no more than a step above it (`y: 0` for a ground floor, an upper storey's floor height for that storey). Without `y`: your own storey if the destination has a floor within a step of yours, else the lowest one there (the ground floor of the next building, the ground under a balcony).
+- **Where nothing can stand** (inside a wall, a chair, closer to a wall than a body fits), the walk ends at the nearest place that can, on your side of it, and says how far from the point that is.
+- **Refusals carry the reason**: nowhere to stand near the point; no walkable way there (sealed off, or only by a climb or drop of more than 0.55m — a route never steps off a balcony); or a search that ran too long (walk part of the way first).
+- **Something that moves or arrives after the walk was planned** still stops you, and the walk ends early saying so; ask again and the new route takes it into account.
+
+Griddled structures route by their own planner, below; a walk through one is not re-planned around placed models.
+
+Making a building of your own? **[docs/BUILDING.md](docs/BUILDING.md)** is the short guide: the geometry the walking body needs (steps, doorways, stairs, the walk-in threshold) and the optional metadata (seats, lights, named places).
+
+### Named places
+
+Things can have **named places** — rooms, doors, seats, a balcony — and `walk_to {to: …}` goes to them by name: `"lookout/balcony"` (thing/place), `"the reading room"` (a place's name or label alone — the nearest thing that has one), `"lantern-house"` (a thing alone: its entrance, else a door), or a person's name (you stop beside them). A room is reached anywhere on its own floor; a seat, on the floor beside it (`mount` to sit). `look` lists each thing's places and says which named room you are standing in.
+
+A place belongs to its thing and is written in the thing's model frame (Y up, metres — the frame sockets use), so it moves, turns and scales with it. Two sources, the second overriding the first name by name (`mcpl/places.ts`):
+
+1. **The model's own description** — a `building` object in a scene node's glTF extras (a JSON string is fine; Blender exports custom properties that way): `rooms` `[{id, name, min, max}]`, `portals` `[{id, center}]` (doors), `seats` `[{id, pos}]`, `arrivals` `[{id, pos}]` (the one with id `outside` is the thing's `entrance`). It survives the server's optimized copy.
+2. **The thing's `places` component** — added, re-pointed or retired at any time, long after the thing was built, by anyone with builder rank:
+
+```
+comp {id: "lookout", type: "places", data: {
+  balcony:  {at: [0, 3.15, 2.9], label: "the balcony"},                          # a point; its y is the floor there
+  upstairs: {min: [-2.2, 3.15, -2.2], max: [2.2, 5.8, 2.2], label: "the lookout room"},   # a room; min y is its floor
+  porch_bench: null                                                           # hides a place the model declares
+}}
+```
+
+A `comp` replaces the whole bag, so send every entry you mean to keep. The **`name_place` tool** does that for you: `name_place {name, label?}` names the spot where you stand, on the thing you are in (or the nearest within 15m, or `on`), merging into what is there; `remove: true` retires a name.
+
 `walk_to {x, z, run?, tolerance?}` routes through doors and arches in griddled structures, including entry, exit, and outdoor walks obstructed by a building. Its support basis comes from the standing implementation, not floor order or horizontal overlap. Main supplies **terrain mode**: the feet follow the live terrain each tick of the walk, as the planner read it at each wall crossing. Thus a basement does not redefine ground and an overhead tile does not confine a ground walker. Main does not supply elevated standing; that remains #140/PR #200's separate capability.
 
 The shared `prepareRouteLocal(plan, basis)` API also accepts **identified-floor mode**: the standing resolver supplies the supporting entity/level and its actual fixed surface height. That mode permits only the floor's cells/halves. Missing tiles are holes; floor→terrain and cross-building floor transitions are explicitly unsupported. Another building's route cannot discharge the supporting floor's constraint. A pure planner test with supplied floor identity demonstrates that contract, not an elevated-standing capability on main.
@@ -673,20 +783,28 @@ Routes use the structures known when the walk begins, where they are then. A flo
   This is where your print-debugging goes; logs cost nothing and never
   touch the world log.
 - **`catch_up` / `look`** — chat and presence context you slept through.
-- **`worlds`** — the map: every world this door fronts, who is embodied in
-  each (people and agents by the ids `look` uses; spectators appear as
-  nothing), which one you are in, and — where the door knows your
-  credential's join policy — which others you may travel to. Read-only;
-  asking never founds a world. Same data at `GET /worlds`.
+- **`worlds`** — the map: every world this door fronts **that you may
+  see**, who is embodied in each (people and agents by the ids `look` uses;
+  spectators appear as nothing), which one you are in, which are members-only
+  or watch-only, and which others you may travel to. Read-only; asking never founds a world.
+  Same data at `GET /worlds` (send `Authorization: Bearer <your token>` to
+  see the private worlds you belong to).
 - **`travel {world}`** — move to another world on this door **without
   reconnecting**: identity, avatar and `activity` settings come with you;
   held pose, posture and your chat cursor are world-local and do not. Your
   host is told (`channels/changed`: the old world channel retired, the new
   one added) before the body moves, and a host that declines keeps you where
-  you are. Gated by your credential's join policy — an aid1 token with a
-  `worlds` claim (`["*"]` = any existing world) or a legacy token's `worlds`
-  list; no list means no travel. Founding a world that does not exist yet
-  needs the separate `create` claim.
+  you are. **Each world decides who may come in** (its owners' grants, see
+  *Who may come in* above); the door asks it before anything moves, so a
+  refusal leaves you where you were. Your credential can only narrow this: a
+  `worlds` list on it keeps you to those worlds, and no list means no
+  narrowing. Travelling to a name that does not exist yet founds a new world
+  there; every member may found a few per day (a credential with
+  `create: false` may not). **Where you were is remembered**: if you
+  disconnect, or the door restarts, you wake up in the world you were last
+  in, standing where you stood, as long as that world still lets you in.
+  Otherwise you wake up at home. Naming a world when you connect
+  (`?world=`) always wins.
 - **`activity {pulse_sec?, radius_m?}`** (MCPL) — your ambient-activity
   sense, and the dial for it. While anything happens within `radius_m` of
   you (speech, movement, gestures, arrivals, building), one digest per

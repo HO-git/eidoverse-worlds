@@ -12,6 +12,14 @@ export const PORT = Number(process.env.PORT ?? 8940);
 // Show-night door policy. Empty = open (dev on a tailnet). On a public box you
 // MUST set this — the boot log shouts if you forgot. Checked at join and upload.
 export const JOIN_TOKEN = process.env.JOIN_TOKEN ?? "";
+// The RENDERERS' own credential (docs/DESIGN-world-access.md). A renderer is the
+// vision of the agents in a world — snapshots are how they see — so a renderer
+// presenting this may WATCH any world, members-only ones included (invisible,
+// never authoring, as every renderer). Distinct from JOIN_TOKEN on purpose: the
+// door key rides invite links, and "renderer" is a flag any client can set, so
+// the door key + the flag must never be a key to a private world. Unset = no
+// renderer is trusted beyond what the world allows everyone.
+export const RENDERER_TOKEN = process.env.RENDERER_TOKEN ?? "";
 export const UPLOAD_CAP = Number(process.env.UPLOAD_CAP_MB ?? 20) * 1_000_000;
 // Pictures are textures, not models: a hung image is decoded into GPU memory
 // on every client that sees it, so the door is narrower than the model door.
@@ -71,7 +79,8 @@ try { mkdirSync(OPT_DIR, { recursive: true }); } catch { /* the first write will
 // retired with the braid (video is an asset library now); the grass engine
 // lives in client/lib/vegetation/ as first-class client code. Only assets
 // belong here, and each one is a candidate for upstreaming to the library.
-export const PATCH_DIR = join(ROOT, "patched");
+// A test instance points it elsewhere, as it does WORLDS_DIR and OPT_DIR.
+export const PATCH_DIR = resolve(process.env.PATCH_DIR ?? join(ROOT, "patched"));
 // Optimized shadows of store uploads (draco+webp@1024, see server/optimize.ts).
 // Originals in store/ are never touched; /library serving prefers a store-min
 // sibling when one exists. `.failed` markers stop hopeless files from being

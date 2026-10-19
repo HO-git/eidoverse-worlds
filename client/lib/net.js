@@ -1,7 +1,7 @@
 // net — the wire. One socket carrying two planes: the world log (ordered,
 // persisted, replayed on join) and presence (batched, lossy, never persisted).
 
-import { CONFIG, report, bus } from './base.js';
+import { CONFIG, report, bus, nameFromJoinAck } from './base.js';
 // The world as data (TEL0S_NOTES §11.2): every snapshot and live entry
 // folds here — synchronously, through the same shared/fold.js the
 // sequencer runs — and the realizers project it into the scene.
@@ -17,7 +17,7 @@ import { pending, P } from './scheduler.js';
 import { wingFoldPresence } from '../../shared/wingpresence.js';
 import { presenceWire, voiceWire, bodyWire } from '../../shared/presencewire.js';
 import { presence } from './presence.js';
-import { logChat, logWhisper, noteTyping, noteHistoryContext } from './chat.js';
+import { logChat, logWhisper, noteTyping, noteHistoryContext, resyncChatAfter } from './chat.js';
 import { markPhase } from './boot.js';
 // ui.js is the desktop shell and reaches the engine through its panels (videopanel,
 // profile). The wire only ever wanted to SAY something to the user, so it takes a
@@ -196,6 +196,13 @@ export function sendDrag(id, pos, yaw) {
   }
 }
 
+/** This page's presence session: one id for as long as the page lives, sent
+ *  with every join, so listeners can tell a reconnect (the same page, whose
+ *  utterance counter goes on) from a new page (whose counter starts again).
+ *  index.html's early socket sends the first join, with the same id. */
+const PAGE_SESSION = (globalThis.__ewPageSession ??= globalThis.crypto?.randomUUID?.()
+  ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`);
+
 export function sendJoin() {
   const id = CONFIG.renderer ? `renderer-${CONFIG.name}`
     : CONFIG.spectate ? `retina-${CONFIG.name}` : CONFIG.name;
@@ -204,7 +211,9 @@ export function sendJoin() {
     avatar: hooks.myAvatarPath(),
     spectate: CONFIG.spectate || CONFIG.renderer,
     renderer: CONFIG.renderer,
+    ...(CONFIG.roam ? { roam: true } : {}),
     token: CONFIG.token,
+    session: PAGE_SESSION,
   }));
 }
 
@@ -250,6 +259,8 @@ export function sendPose(now) {
     pose.clipRate = avatar.current.paused ? 0 : avatar.current.timeScale ?? 1;
   }
   if (ov?.xr) pose.xr = ov.xr;   // C18: tracked head/hands, facing-relative (xrbody.js) — presence, never the log
+  if (s.q) pose.q = s.q;
+  if (s.locomotion) pose.locomotion = s.locomotion;
   if (s.emote) { pose.emote = s.emote; s.emote = null; } // one-shot: send once
   // A held custom pose rides the presence packet (and therefore lastPose, so
   // late joiners see it) — but never the log. `null` explicitly clears it.
@@ -435,6 +446,17 @@ function wireSocket(ws) {
       toast('you were removed from this world — reload if you believe you may return', 'warn', 60000);
       return;
     }
+    // 4010 = this world is not open to you: refused at the door (members
+    // only, watch only), or your access just ended or was changed. The server
+    // said why in an error toast just before closing. No retry — the door
+    // will not open on its own; coming back is a deliberate reload (or
+    // ?spectate, when the toast says you may watch).
+    if (ev.code === 4010) {
+      net.status = 'rejected';
+      bus.emit('net', net);
+      toast(`you're not in "${CONFIG.world}" — reload if your access changes`, 'warn', 60000);
+      return;
+    }
     // 4005 = the world name itself is malformed (a mangled link). No retry —
     // the name can never exist, so reconnecting is just hammering the door.
     if (ev.code === 4005) {
@@ -545,6 +567,7 @@ async function handle(msg) {
       // present — and ensureRemote resets the mesh's transient expressions
       // before transplanting it into a fresh record.
       if (remotes.has(msg.id)) bus.emit('participant-teardown', msg.id);
+      bus.emit('participant-session', { id: msg.id, session: msg.session });
       ensureRemote(msg.id, msg.avatar, { agent: msg.agent, authority: true });
       logChat('*', `${msg.id} arrived`);
       bus.emit('roster');
@@ -685,6 +708,14 @@ async function handle(msg) {
       }
       break;
 
+    case 'renderer-travel':
+      // a roaming renderer is wanted elsewhere (server/snapshots.ts summon): go there — the same in-page re-join a
+      // person's travel uses. Only a roaming renderer obeys; anyone else ignores it.
+      if (CONFIG.renderer && CONFIG.roam && typeof msg.world === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(msg.world) && msg.world !== CONFIG.world) {
+        CONFIG.world = msg.world; rejoin();
+      }
+      return;
+
     case 'snap':
       // The reply is the snapshot's to produce and the wire's to send, so a client
       // without a renderer answers with an error instead of going quiet on an id
@@ -746,6 +777,20 @@ async function handle(msg) {
       for (const line of String(msg.text ?? '').split('\n')) logChat('*', line);
       break;
 
+    case 'access-state':        // the world panel's 🔒 access tab (accesspanel.js)
+    case 'access-directory':
+      bus.emit(msg.type, msg);
+      break;
+
+    case 'notice':
+      // The world telling YOU something that is not a refusal — today, that
+      // your access here ends soon. Toast (it matters now) and chat (so it is
+      // still there when you look). Not an `error`: that would also tell every
+      // optimistic preview its verb was refused.
+      toast(String(msg.text ?? ''), 'warn', 20000);
+      logChat('*', String(msg.text ?? ''));
+      break;
+
     case 'error':
       // the world tells us it has no voice relay only when we try to use one —
       // remember it, so the mic glyph can say WHY it stays off (R, 09-04)
@@ -777,13 +822,25 @@ async function onSnapshot(msg) {
   // The server's `you` is authoritative (verified identity, or a suffixed name
   // when two people share a nick). If it differs from what this client thinks,
   // adopt it — and say so, a silently different nameplate is confusing.
-  if (msg.you && msg.you !== CONFIG.name) {
-    CONFIG.name = msg.you;
-    localStorage.setItem('ew-name', msg.you);
+  // Renderer/spectator clients join under a transport prefix ("renderer-" /
+  // "retina-", see sendJoin) that is part of the wire id, not the name. Strip
+  // it before comparing and storing, or ew-name grows one prefix per reload
+  // (renderer-renderer-…) — unless the ack is a verified identity, which the
+  // server named itself (base.js nameFromJoinAck).
+  const you = nameFromJoinAck(msg.you, { renderer: CONFIG.renderer, spectate: CONFIG.spectate, verified: !!msg.yourSub });
+  if (you && you !== CONFIG.name) {
+    CONFIG.name = you;
+    localStorage.setItem('ew-name', you);
     toast(`you're appearing as “${msg.you}”`, 'info', 8000);
   }
+  // a RE-join: lastSeq is still the last entry the old socket delivered, and
+  // what was said after it may be trimmed out of this snapshot's chat window
+  // (fair, not contiguous — shared/fold.js trimRecentChat). Fetch it before
+  // lastSeq moves on. A first join has rendered nothing and is a no-op.
+  if (lastSeq >= 0) void resyncChatAfter(lastSeq);
   if (typeof msg.throughSeq === 'number' && msg.throughSeq > lastSeq) lastSeq = msg.throughSeq;
   bus.emit('net', net);
+  bus.emit('participant-sessions', msg.present ?? []);
   // #57 matrix 7: who has which aux legs live NOW (surface-transition keeps it
   // current after this). Consumers key hold-then-fallback TTS on it.
   bus.emit('surfaces', [...(msg.present ?? []),

@@ -558,6 +558,12 @@ function emitCompBag(id) {
 function onComp(id, type) {
   syncComps(id);
   const data = comps.get(id)?.[type] ?? null;
+  if (type === 'collision') {
+    const obj=entities.get(id),ent=state.st.entities[id];
+    if (collisionOwnedElsewhere(ent,obj?.userData.mountedTo)) removeCollider(id);
+    // the same rules as promotion: lod tiers own no collider, and the entity's scale picks the shape
+    else if(obj && !isPlaceholder(obj) && obj.userData.tier !== 'lod') fitCollider(id,obj,{collide:ent?.collide,scale:ent?.scale || 1,localFrame:true});
+  }
   if (type === 'motion' && data == null) restAtBase(id);
   // a sockets change re-seats everything riding this carrier — a mount that
   // landed BEFORE its socket was authored glued to the origin, and the
@@ -884,7 +890,11 @@ export function reconcileModels() {
 }
 
 function onEntry(entry) {
-  const { verb, args = {} } = entry;
+  const { verb, args: rawArgs = {} } = entry;
+  // The fold keys entities by the id's text (an object key), so a history
+  // light of {id: 5} and a later update authored as "5" are one entity.
+  // Key the realizer the same way, or that update realizes a second light.
+  const args = rawArgs?.id == null ? rawArgs : { ...rawArgs, id: String(rawArgs.id) };
   try {
     // the fold has already written state — refresh the parent index BEFORE
     // any handler runs (retire's step-out reads the SCENE index; canDemote,

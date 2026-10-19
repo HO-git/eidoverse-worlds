@@ -240,9 +240,12 @@ stays down instead of reconnecting.
   and give it to the roaming renderers as their key. Until then roamers can
   serve open worlds only, and a snapshot asked in a members-only world says
   why.
-- **Pre-existing, not from this work:** `Bun.serve` has no `idleTimeout`, so a
-  `/snap` that waits more than 10 s for a roamer to arrive is reset. Roamers
-  may take up to 25 s (`travelMs`).
+- **Pre-existing, not from this work:** a `/snap` sends nothing while it waits
+  for a roamer to arrive (up to 25 s, `travelMs`) and then for its snapshot
+  (up to 40 s, `arrivalTimeoutMs`). `Bun.serve`'s `idleTimeout` of 255 s
+  outlasts that, but behind `deploy/nginx-show.conf`, whose `location /` sets
+  no `proxy_read_timeout`, nginx's 60 s default can still cut one that waits
+  past 60 s.
 
 ## Review (independent, 2026-10-17)
 

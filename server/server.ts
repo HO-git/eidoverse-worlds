@@ -806,8 +806,10 @@ const server = Bun.serve({
   // transcontinental link a big download (a VRM, an unoptimized library glb)
   // routinely stalls longer than that, so the transfer was cut short and the
   // client saw a truncated body. 255s is Bun's maximum: a stalled transfer
-  // rides it out, and a connection that stays silent is still closed after
-  // 255s (by this same timer; TCP alone would take far longer to notice).
+  // rides it out, and an HTTP connection that stays silent is still closed
+  // after 255s (by this same timer; TCP alone would take far longer to
+  // notice). A WebSocket has its own idle timer, websocket.idleTimeout, which
+  // the websocket block below leaves at Bun's default of 120s.
   idleTimeout: 255,
   async fetch(req, srv) {
     // The whole HTTP surface is routes.ts's table (§15, 7c) — one row per

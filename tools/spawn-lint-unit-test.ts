@@ -47,6 +47,12 @@ try {
   check("URL-normalized traversal out of /library is refused", resolveLibFile("%2e%2e/shared.glb") === null);
   check("a path that leaves /library is refused", resolveLibFile("../x/secret.glb") === null
     && libraryPath("../x/secret.glb", /\.glb$/i) === null && libraryPath("a/../../x.glb", /\.glb$/i) === null);
+  // A sibling whose name starts with the library's passes onLadder's string-
+  // prefix check, so only libraryRel's refusal of a decoded ".." stops this.
+  mkdirSync(join(root, "library-backup"));
+  writeFileSync(join(root, "library-backup", "secret.glb"), "sibling");
+  check("a decoded .. can't reach a sibling directory named like the library",
+    resolveLibFile("..%2flibrary-backup%2fsecret.glb") === null);
   writeFileSync(join(ladder[2], "robot..v2.glb"), "two dots, no traversal");
   check("a name with two dots is a name, served and resolved", resolveLibFile("robot..v2.glb") === join(ladder[2], "robot..v2.glb"));
   mkdirSync(join(ladder[2], "folder.glb"));

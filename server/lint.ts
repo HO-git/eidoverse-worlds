@@ -45,19 +45,28 @@ export const MOTION_TYPES: Record<string, Set<string>> = {
  *  libraryPath() passes the one the client's URL would carry, so the route
  *  and every resolver read a name the same way. A file whose name has a
  *  space ("Frosted Glass Window Seat.glb" → %20) or an accent lives on disk
- *  under its decoded name, so the path is decoded once, with three guards:
+ *  under its decoded name, so each run of escapes in the path is decoded on
+ *  its own, with three guards:
  *  - a raw path that already names an entry on ANY rung of the ladder wins
  *    (a model literally called "box%41.glb" must not turn into "boxA.glb");
- *  - a malformed sequence or a decoded NUL keeps the raw path;
+ *  - a run that's malformed, or decodes to a NUL, keeps its own characters,
+ *    and a bare "%", which a URL leaves as it is, stays, so the rest of the
+ *    name still decodes: "50% off.glb" arrives as "50%%20off.glb" and loads;
  *  - a ".." segment after decoding is refused outright. This, not the
  *    normalize()+startsWith(base) check in onLadder() and the route, is what
  *    stops "..%2f": that check is a string prefix, so "..%2flibrary-backup%2fx"
  *    would pass it and reach a SIBLING directory whose name starts with the
- *    base's. */
+ *    base's.
+ *  So a literal %xx name loads as itself when nothing else in it is encoded.
+ *  A name with both a space and a literal "%41" decodes whole, "A" included:
+ *  its request encodes the space and leaves the "%41", and nothing tells
+ *  that "%41" from one a client encoded. */
 export function libraryRel(encoded: string): string | null {
   let rel = encoded;
   if (rel.includes("%") && !LADDER.some(base => entryAt(join(base, rel)) !== null)) {
-    try { const d = decodeURIComponent(rel); if (!d.includes("\0")) rel = d; } catch { /* keep raw */ }
+    rel = rel.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+      try { const d = decodeURIComponent(run); return d.includes("\0") ? run : d; } catch { return run; }
+    });
   }
   return rel.split(/[\/\\]/).includes("..") ? null : rel;
 }
